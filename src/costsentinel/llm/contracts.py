@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from costsentinel.domain.analysis import FactorKind
 from costsentinel.domain.recommendations import ActionType
 
 
@@ -55,6 +56,62 @@ class RemediationPlan(Untrusted):
     def for_signal(self, signal_id: str) -> PlannedRemediation | None:
         """The proposal for one signal, or ``None`` if the model omitted it."""
         return next((item for item in self.items if item.signal_id == signal_id), None)
+
+
+class RootCauseFactor(Untrusted):
+    """One contributing factor a model offers for a waste signal.
+
+    ``evidence_name`` is the constraint that makes this groundable: the model must
+    name an observation the detector actually attached to the signal. The node
+    rejects a factor citing anything else, so an explanation cannot smuggle in a
+    fact nobody measured.
+    """
+
+    kind: FactorKind
+    statement: str = Field(min_length=1, max_length=500)
+    evidence_name: str = Field(min_length=1, max_length=120)
+
+
+class RootCauseExplanation(Untrusted):
+    """A model's diagnosis of one waste signal."""
+
+    signal_id: str = Field(min_length=1)
+    narrative: str = Field(min_length=1, max_length=2000)
+    factors: tuple[RootCauseFactor, ...] = Field(default=(), max_length=10)
+
+
+class RootCauseAnalysis(Untrusted):
+    """The Root-Cause Analyst requested response: one explanation per signal."""
+
+    explanations: tuple[RootCauseExplanation, ...] = Field(max_length=500)
+
+    def for_signal(self, signal_id: str) -> RootCauseExplanation | None:
+        """The explanation for one signal, or ``None`` if the model omitted it."""
+        return next((e for e in self.explanations if e.signal_id == signal_id), None)
+
+
+class RankingNote(Untrusted):
+    """A model's explanation of why one recommendation ranks where it does.
+
+    Explanation only. The rank itself is computed from savings, risk and confidence
+    before this is ever requested, so the wording can change and the order cannot.
+    """
+
+    recommendation_id: str = Field(min_length=1)
+    rationale: str = Field(min_length=1, max_length=800)
+
+
+class RankingRationale(Untrusted):
+    """The requested ranking commentary: one note per recommendation."""
+
+    notes: tuple[RankingNote, ...] = Field(default=(), max_length=500)
+
+    def note_for(self, recommendation_id: str) -> str:
+        """Commentary for one recommendation, or an empty string."""
+        return next(
+            (n.rationale for n in self.notes if n.recommendation_id == recommendation_id),
+            "",
+        )
 
 
 class FindingNote(Untrusted):

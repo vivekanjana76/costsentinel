@@ -20,10 +20,16 @@ from costsentinel.llm.base import (
 from costsentinel.llm.contracts import (
     FindingNote,
     PlannedRemediation,
+    RankingNote,
+    RankingRationale,
     RemediationPlan,
     ReportNarrative,
+    RootCauseAnalysis,
+    RootCauseExplanation,
+    RootCauseFactor,
 )
 from costsentinel.llm.fake import (
+    LABEL_RANKED,
     LABEL_RECOMMENDATION,
     LABEL_TOTALS,
     LABEL_WASTE_SIGNAL,
@@ -43,6 +49,7 @@ from costsentinel.llm.routing import (
 
 __all__ = [
     "ALL_TASKS",
+    "LABEL_RANKED",
     "LABEL_RECOMMENDATION",
     "LABEL_TOTALS",
     "LABEL_WASTE_SIGNAL",
@@ -64,8 +71,13 @@ __all__ = [
     "ModelRoute",
     "PlannedRemediation",
     "Prompt",
+    "RankingNote",
+    "RankingRationale",
     "RemediationPlan",
     "ReportNarrative",
+    "RootCauseAnalysis",
+    "RootCauseExplanation",
+    "RootCauseFactor",
     "get_llm",
     "resolve_route",
     "tier_for",
