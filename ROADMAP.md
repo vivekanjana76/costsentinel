@@ -59,29 +59,30 @@ stays offline.
 
 Milestone: *Phase 2 - Full specialist graph, observability and model routing*.
 
-- [ ] Root-Cause Analyst node, LLM-assisted over Scout evidence only (#3)
-- [ ] Savings Estimator as its own node, arithmetic only, no LLM import (#4)
-- [ ] Expand the deterministic detector set: stale snapshot, idle SQL database,
+- [x] Root-Cause Analyst node, LLM-assisted over Scout evidence only (#3)
+- [x] Savings Estimator as its own node, arithmetic only, no LLM import (#4)
+- [x] Expand the deterministic detector set: stale snapshot, idle SQL database,
       oversized App Service plan, unused reservation (#5)
-- [ ] Rank recommendations by savings, risk and confidence, with an LLM-authored
+- [x] Rank recommendations by savings, risk and confidence, with an LLM-authored
       ranking rationale (#6)
-- [ ] Supervisor node and the conditional routing seam: retry, escalate,
+- [x] Supervisor node and the conditional routing seam: retry, escalate,
       require-approval, short-circuit (#7)
-- [ ] Richer `ClientReport`: root causes, ranking inputs, per-waste-kind breakdown,
+- [x] Richer `ClientReport`: root causes, ranking inputs, per-waste-kind breakdown,
       deterministic per-client totals, approval queue (#8)
-- [ ] Langfuse tracing around the run and every LLM call, a no-op if unconfigured and
+- [x] Langfuse tracing around the run and every LLM call, a no-op if unconfigured and
       never a hard dependency; per-run token, cost and latency metrics (#9)
-- [ ] Observable model-routing seam: light tasks to a small model, heavier reasoning
+- [x] Observable model-routing seam: light tasks to a small model, heavier reasoning
       to a larger one, with the choice recorded in the trace (#10)
-- [ ] `scripts/refresh_prices.py` pulling the public Azure Retail Prices API into the
+- [x] `scripts/refresh_prices.py` pulling the public Azure Retail Prices API into the
       committed snapshot; run manually, never in CI (#11)
-- [ ] ARCHITECTURE.md decision log and graph diagram updated; ROADMAP progress ticked
+- [x] ARCHITECTURE.md decision log and graph diagram updated; ROADMAP progress ticked
       (#12)
 
-**Exit criteria:** the six-specialist graph runs end to end on the mock estate with
-zero credentials; detection and every monetary figure remain deterministic; a trace
-and a `RunMetrics` record are produced per run; coverage holds at the CLAUDE.md
-targets.
+**Exit criteria (met):** the six-specialist graph runs end to end on the mock estate
+with zero credentials; detection and every monetary figure remain deterministic; a
+trace span and a `RunMetrics` record are produced per run; 390 tests pass at 99%
+coverage, with `domain`, `graph` and `guardrails` at 98-100%; `ruff`, `ruff format`
+and `pyright` (strict on `src`) all clean.
 
 **Deliberately *not* in this phase:** the approval-gate adapters and the durable
 interrupt (Phase 7), real LLM backends (Phase 3), and statistical cost-anomaly

@@ -56,82 +56,70 @@ and checkpoint deterministically.
 
 ### 2.1 Diagram
 
-```
-                          +---------------------+
-                          |    scan request     |
-                          | (CLI / API / cron)  |
-                          +----------+----------+
-                                     |
-                                     v
-                          +---------------------+
-                          |     SUPERVISOR      |<-------------------+
-                          |  routes + retries   |                    |
-                          +----------+----------+                    |
-                                     |                               |
-                                     v                               |
-                          +---------------------+                    |
-                          |    ANOMALY SCOUT    |  reads provider:   |
-                          |  waste + anomalies  |  cost, usage,      |
-                          +----------+----------+  inventory         |
-                                     |                               |
-                     signals? -------+------- none --> REPORT AUTHOR |
-                                     |                               |
-                                     v                               |
-                          +---------------------+                    |
-                          | ROOT-CAUSE ANALYST  |                    |
-                          |    why it exists    |                    |
-                          +----------+----------+                    |
-                                     |                               |
-                                     v                               |
-                          +---------------------+                    |
-                          | OPTIMIZATION PLANNER|                    |
-                          | ranked remediations |                    |
-                          +----------+----------+                    |
-                                     |                               |
-                                     v                               |
-                          +---------------------+                    |
-                          |  SAVINGS ESTIMATOR  |  provider data +   |
-                          |  monthly / annual   |  pricing only      |
-                          +----------+----------+                    |
-                                     |                               |
-                                     v                               |
-                          +---------------------+                    |
-                          |    POLICY GUARD     |                    |
-                          | allow/review/block  |                    |
-                          +----+-----------+----+                    |
-                               |           |                         |
-                       allow   |           | review / block          |
-                               |           v                         |
-                               |   +---------------+                 |
-                               |   | APPROVAL GATE |  halt; await    |
-                               |   |  (interrupt)  |  ApprovalDecision
-                               |   +-------+-------+                 |
-                               |           |                         |
-                               |   approved / rejected               |
-                               |           |                         |
-                               +-----+-----+                         |
-                                     |                               |
-                    needs more evidence? ---------- retry -----------+
-                                     |
-                                     v
-                          +---------------------+
-                          |    REPORT AUTHOR    |
-                          |  client-ready docs  |
-                          +----------+----------+
-                                     |
-                                     v
-                          +---------------------+
-                          |   EPISODIC MEMORY   |
-                          |   record outcomes   |
-                          +----------+----------+
-                                     |
-                                     v
-                                +---------+
-                                |  DONE   |
-                                +---------+
+The graph is a star: every specialist returns to the supervisor, which re-reads the
+state and decides what happens next. That shape is what makes retry, escalation,
+short-circuit and the approval seam one mechanism instead of four.
 
- Cross-cutting (every node): AuditEvent emission | Langfuse span | checkpoint write
 ```
+                        +---------------------+
+                        |    scan request     |
+                        | (CLI / API / cron)  |
+                        +----------+----------+
+                                   |
+                                   v
+    +-------------------->+---------------------+
+    |                     |     SUPERVISOR      |
+    |   every specialist  |  the only node that |
+    |   returns here      |  decides what next  |
+    |                     +----------+----------+
+    |                                |
+    |      +-------------------------+-------------------------+
+    |      |  proceed / retry / escalate / short-circuit       |
+    |      +-------------------------+-------------------------+
+    |                                |
+    |   +------------+-----------+---+-------+-----------+
+    |   |            |           |           |           |
+    |   v            v           v           v           v
+    | +-------+ +----------+ +---------+ +---------+ +----------+
+    | |ANOMALY| |ROOT-CAUSE| | SAVINGS | |OPTIMIS. |  | POLICY  |
+    | | SCOUT | | ANALYST  | |ESTIMATOR| | PLANNER |  | GUARD   |
+    | |       | |          | |         | |         |  |         |
+    | | reads | | why it   | | prices  | | chooses |  | allow / |
+    | | the   | | exists,  | | EVERY   | | + ranks |  | review /|
+    | | estate| | grounded | | option  | | (det.)  |  | block   |
+    | +---+---+ +----+-----+ +----+----+ +----+----+ +----+-----+
+    |     |          |            |           |           |
+    +-----+----------+------------+-----------+-----------+
+                                                          |
+                                     review / block ------+
+                                              |
+                                              v
+                                     +-----------------+
+                                     |  APPROVAL SEAM  |  Phase 7: halt,
+                                     |   (interrupt)   |  persist, resume on
+                                     +--------+--------+  a recorded decision
+                                              |
+                                              v
+                                     +-----------------+
+                                     |  REPORT AUTHOR  |
+                                     |  client-ready   |
+                                     +--------+--------+
+                                              |
+                                              v
+                                          +-------+
+                                          |  END  |
+                                          +-------+
+
+  Cross-cutting (every node): AuditEvent | trace span | checkpoint write
+  Cross-cutting (every LLM call): routing decision | tokens | cost | latency
+```
+
+**Ordering note.** The Savings Estimator runs *before* the Optimization Planner, and
+prices every candidate action the policy store permits rather than one chosen action.
+Two reasons: the planner then chooses knowing what each option is worth, as a human
+would; and every monetary figure in the system is produced inside one node, so the
+no-invented-numbers guarantee has a single place to hold. Ranking then happens in the
+planner, because it is arithmetic over those prices.
 
 ### 2.2 Specialist responsibilities
 
@@ -149,15 +137,18 @@ inventory, metrics, change history and tags. LLM-assisted: it synthesises a
 narrative from evidence the Scout already gathered. It may not introduce new
 quantities; it only reads evidence already attached to the signal.
 
-**Optimization Planner.** Converts signals into ranked `Recommendation` objects.
-Each carries an `action`, a `risk_class`, a `rationale`, and explicit
-`preconditions` that must hold before execution. LLM-assisted for rationale and
-ranking; the action vocabulary is a closed enum so the model cannot invent an
-operation.
+**Savings Estimator.** Prices every candidate action for every signal,
+arithmetically, from provider cost data and the committed price catalogue. **Never
+LLM-derived** -- the module imports no language model at all, which a test asserts. If
+an input is missing the estimate is marked unknown rather than guessed.
 
-**Savings Estimator.** Attaches a `SavingsEstimate` to each recommendation,
-computed arithmetically from provider cost data and pricing. **Never LLM-derived.**
-If an input is missing, the estimate is marked unknown rather than guessed.
+**Optimization Planner.** Chooses one of those priced options per signal and ranks the
+set. Each `Recommendation` carries an `action`, a `risk_class`, a `rationale`, and
+explicit `preconditions`. The model selects within the closed candidate set and writes
+the rationale; the *ordering* is a deterministic weighted composite of savings, safety
+and detector confidence, and the model is then asked only to narrate a ranking it has
+already been given. A hostile model can change a report's wording and cannot change
+what a client is told to do first.
 
 **Policy Guard.** Classifies every proposed action against the policy store into
 `allow`, `review` or `block`, and routes to the approval gate when the class
@@ -170,9 +161,12 @@ approval" section. LLM-assisted for prose; every number is interpolated from
 validated model fields, never generated as text.
 
 **Supervisor.** Owns conditional routing: short-circuit when there are no signals,
-retry a node whose output failed schema validation, escalate when confidence is too
-low, and pause for approval. Keeping routing in one place means the specialists stay
-independently testable.
+retry a node that produced nothing usable, escalate when retries are exhausted, and
+route gated actions to the approval seam. Every decision is a recorded
+`SupervisorDecision` in state with a mandatory reason, so a sweep can be explained
+afterwards rather than inferred from control flow. Keeping routing in one place means
+the specialists stay independently testable -- the routing tests build a state and
+assert a decision without running a graph at all.
 
 ---
 
@@ -653,3 +647,123 @@ test or pull Phase 6 forward.
 mock sweep takes milliseconds. Phase 2 makes it a background job once real Azure
 calls make it long-running; the durable checkpointer that makes that safe is already
 wired, so the change is additive.
+
+### Phase 2 decisions
+
+**D34. The specialist graph was built before the MCP Azure tool server, swapping the
+original Phase 2 and Phase 3.** *Alternatives:* keep the original order. *Why:* the
+graph work is entirely mock-runnable and carries the product's visible value with no
+cloud dependency, whereas the MCP server is the first thing that needs real
+credentials and network access. Building the graph first keeps the zero-credential
+invariant in place longer, and means that when the MCP boundary lands there is a
+complete six-specialist graph to serve rather than a four-node slice.
+
+**D35. The Savings Estimator prices every candidate action, and runs before the
+planner.** *Alternatives:* planner chooses first, estimator prices the chosen action
+(the Phase 1 order). *Why:* a planner choosing without knowing what each option is
+worth is choosing blind, and a human would not. It also concentrates every monetary
+figure in one node, so "no invented numbers" has a single place to hold rather than
+being spread across the proposal and costing steps. The cost is pricing options that
+are then discarded, which is cheap arithmetic over at most three candidates.
+
+**D36. Ranking is a deterministic weighted composite; the model only narrates it.**
+*Alternatives:* rank by savings alone (Phase 1); let the model rank. *Why:* savings
+alone tells a client their best first move is the biggest number, which is wrong when
+that number is risky and uncertain. The weights (0.60 savings, 0.25 safety, 0.15
+confidence) are explicit policy constants reported on every finding, so a client sees
+the trade-off rather than trusting an order. Letting the model rank would make the
+most consequential output of the system unverifiable; a test asserts that swapping in
+a hostile model changes the wording and not one rank.
+
+**D37. Safety weighting does not guarantee a `block` action can never lead.**
+*Context:* an earlier draft of the ranking module claimed it did. It does not, and the
+claim was corrected rather than the behaviour. With the current weights an
+`allow`-class finding at roughly 55% of the largest saving overtakes a `block`-class
+finding holding the largest saving. *Why that is right:* if the single biggest
+opportunity in an estate is something CostSentinel will not touch, a client should
+still hear about it first -- they can do it by hand. The test pins the crossover
+rather than a single data point.
+
+**D38. A reservation is its own domain type, not a `Resource`.** *Alternatives:* model
+it as a resource with a `RESERVATION` kind, which would have flowed through the
+existing pipeline unchanged. *Why:* a reservation has a term, a quantity, an expiry
+and a utilisation against a commitment, none of which a resource has, and the real
+Azure Reservations API is a different surface from Resource Graph. The cost is a
+`SavingsTarget` indirection so the savings functions do not care which they are
+looking at -- a better boundary than either special-casing reservations or distorting
+`Resource`.
+
+**D39. Reservation waste is framed as loss already being incurred, not savings
+available.** *Why:* the money is committed. Recovering any of it requires exchanging
+or re-scoping the reservation under whatever terms the agreement allows, so the figure
+is marked `is_estimated` and its basis says so. Reporting it as a straightforward
+saving would overstate what a client can actually recover this month.
+
+**D40. Every price comes from a committed catalogue snapshot, refreshed by hand.**
+*Alternatives:* fetch from the Azure Retail Prices API at runtime -- the API is public
+and unauthenticated, so it would not breach the no-secrets rule. *Why:* it would
+breach the no-network rule for CI, and worse, it would make savings vary between runs
+for reasons unrelated to the estate. `scripts/refresh_prices.py` pulls the real API on
+demand and writes the snapshot, so a price change is a reviewable commit. The shipped
+snapshot carries `is_real_api_pull: false` and its provenance is `UNVERIFIED`, because
+those figures are plausible curated values that have *not* been fetched from Azure --
+a cost tool must not imply otherwise.
+
+**D41. Catalogue provenance is dated from the snapshot, not from load time.**
+*Context:* dating it to load time broke the mock provider's determinism, which is how
+it was found. *Why it is also more correct:* a price was retrieved when it was fetched
+from Azure, not when a process happened to read the file.
+
+**D42. `langfuse` is an optional extra, imported lazily, and the adapter is tested
+with an injected double.** *Alternatives:* a core dependency; or no adapter tests.
+*Why:* "never a hard dependency" is taken literally -- an absent or unconfigured
+package degrades to `NoOpTracer` with a log line, CI does not install it, and the
+suite passes without it. That would normally leave the adapter untested, so
+`LangfuseTracer` accepts an injected client and the tests drive it with a fake. Every
+tracer method also swallows backend exceptions: observability must be an aid, not a
+liability.
+
+**D43. `TracedLLM` wraps any backend to make routing observable.** *Alternatives:*
+record routing inside each node, or inside each backend. *Why:* a wrapper satisfying
+the same `LLM` protocol is transparent to the nodes and uniform across backends, so
+routing, token usage, latency and computed cost are recorded in one place. The fake
+backend ignores which model it was routed to, as it should -- but the decision is
+still recorded, which is what makes the routing seam real rather than decorative.
+
+**D44. Per-run cost goes through `MoneyAmount`, like any other figure.** *Why:* a
+run's token cost is a cost. It is computed from a committed per-million-token rate
+table, so it carries `CALCULATION` provenance and cannot be model-derived either. A
+zero from the fake backend is a *measured* zero rather than an unknown, which is the
+one place in the system where zero is a legitimate answer.
+
+**D45. Run metrics travel alongside the reports, not inside them.** *Alternatives:*
+put `RunMetrics` on `ClientReport`. *Why:* a client report is a deliverable about
+their estate. What our model calls cost is our operational concern, and putting it in
+a client-facing document would be both irrelevant to them and mildly embarrassing.
+`ScanResult` carries both, keyed by run id.
+
+**D46. The approval seam routes but does not yet halt.** *Why:* Phase 2 delivers the
+routing decision and the `ApprovalRequest` records that Phase 7's durable interrupt
+will act on. Classifying and routing without halting is safe because there is still no
+execution path at all, so nothing can be mutated by a decision that has not been made.
+The supervisor already treats an undecided gated action as the terminal state for that
+action, which is the behaviour the interrupt will formalise.
+
+**D47. Two new structured-output contracts, both without numeric fields.**
+`RootCauseAnalysis` and `RankingRationale` join the existing two. Every contract in
+the system remains free of monetary fields, so the "a model cannot produce a number"
+property holds by construction at the seam rather than by inspection at the call site.
+The root-cause contract adds a stronger constraint: each contributing factor must name
+an observation the detector actually recorded, and the node drops any factor that
+cites anything else. That is what makes groundedness a checkable property rather than
+a hope -- a model asserting "the owner left the company" cannot get it into a report,
+because there is no observation by that name to cite.
+
+**D48. Four new actions were added to the closed vocabulary.**
+`SCALE_DOWN_SQL_DATABASE`, `SCALE_DOWN_APP_SERVICE_PLAN`, `EXCHANGE_UNUSED_RESERVATION`
+and `DELETE_STALE_SNAPSHOT`. *Why flagged:* the vocabulary being closed is a safety
+property (D18), so growing it is a deliberate act rather than a detail. Each new
+detector needed a remediation that could carry a real saving -- a waste kind whose only
+option is "tell someone" produces an unknown figure and is of little use to a client.
+Each new action has a floor, a full set of preconditions, and inherits the
+production-tightening rule where it is a deletion.
