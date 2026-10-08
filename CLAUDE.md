@@ -170,3 +170,37 @@ Every externally derived fact carries provenance (where it came from) and a veri
 ## 13. Roadmap
 
 See ROADMAP.md for the phased plan. The current phase is set at the top of that file. Do not jump ahead of it.
+
+## 14. Git and GitHub workflow
+
+Follow this for the current phase and every future phase.
+
+**Issue-driven.** One GitHub milestone per phase. One issue per task, each with a
+short description, explicit acceptance criteria, and labels (for example `phase-2`,
+`agents`, `observability`, `tests`, `docs`). Create the milestone and its issues
+before starting the work, not after.
+
+**One feature branch per phase**, named for the phase and its theme, for example
+`phase-2-specialist-graph`. Branch from the default branch (`master`).
+
+**Atomic Conventional Commits.** One logical change per commit, using `feat`, `fix`,
+`test`, `docs`, `refactor` or `chore`, with a scope and a reference to the issue it
+advances:
+
+```
+feat(agents): add Root-Cause Analyst node (#12)
+test(agents): cover root-cause grounding (#12)
+docs(architecture): record the savings-estimator split (#13)
+```
+
+Commit as each small unit completes. Do not accumulate a phase into one dump.
+
+**Pull request at the end of the phase**, with a summary of what changed and a
+`Closes #NN` line for every issue it completes. CI must pass before merge. After
+merging, tag a semver release (for example `v0.2.0`) and update `CHANGELOG.md`.
+
+**History must reflect real work only.** Never fabricate commits, never backdate
+activity, and never open an issue or a PR describing work that did not happen. If
+work predates this process -- as the Phase 1 scaffold does -- land it as its own
+honest commit series dated when it was actually landed, and say so in the PR rather
+than inventing a history for it.
