@@ -20,6 +20,7 @@ from collections.abc import Callable, Sequence
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from costsentinel.config import Settings, get_settings
+from costsentinel.domain.observability import RunMetrics
 from costsentinel.domain.report import ClientReport, ScanResult
 from costsentinel.domain.state import ScanState
 from costsentinel.graph.build import build_graph
@@ -27,7 +28,9 @@ from costsentinel.graph.checkpointer import checkpointer_for
 from costsentinel.guardrails.policy import PolicyStore
 from costsentinel.llm import get_llm
 from costsentinel.llm.base import LLM
+from costsentinel.llm.traced import TracedLLM
 from costsentinel.observability.logging import configure_logging, get_logger
+from costsentinel.observability.tracing import NoOpTracer, Tracer, get_tracer, timed
 from costsentinel.providers import get_provider
 from costsentinel.providers.base import AzureProvider
 
@@ -68,8 +71,16 @@ def run_client_scan(
     policy: PolicyStore | None = None,
     run_id: str | None = None,
     requested_by: str = "system",
-) -> ClientReport:
+    tracer: Tracer | None = None,
+) -> tuple[ClientReport, RunMetrics]:
     """Run one client's scan to completion and return its report.
+
+    The model is wrapped in :class:`~costsentinel.llm.traced.TracedLLM` here rather
+    than by the caller, so every entry point gets per-call routing, token, cost and
+    latency records without having to remember to ask for them.
+
+    Returns:
+        The client's report and the run's token, cost and latency metrics.
 
     Raises:
         ScanFailedError: If the graph finished without a report, which means a node
@@ -77,9 +88,12 @@ def run_client_scan(
             with zero findings is a perfectly good result.
     """
     thread_id = run_id or new_run_id()
+    active_tracer = tracer or NoOpTracer()
+    traced = TracedLLM(llm, tracer=active_tracer, settings=settings)
+
     graph = build_graph(
         provider=provider,
-        llm=llm,
+        llm=traced,
         settings=settings,
         policy=policy,
         checkpointer=checkpointer,
@@ -95,11 +109,51 @@ def run_client_scan(
             "llm_backend": settings.llm_backend.value,
             "provider": provider.name,
             "model": llm.name,
+            "tracer": active_tracer.name,
         },
     )
 
-    final = graph.invoke(initial, config={"configurable": {"thread_id": thread_id}})
-    state = ScanState.model_validate(final)
+    active_tracer.start_run(
+        run_id=thread_id,
+        client=client,
+        metadata={
+            "mode": settings.mode.value,
+            "llm_backend": settings.llm_backend.value,
+            "provider": provider.name,
+            "requested_by": requested_by,
+        },
+    )
+    try:
+        with timed(active_tracer, "costsentinel.scan", kind="run") as timer:
+            final = graph.invoke(initial, config={"configurable": {"thread_id": thread_id}})
+        state = ScanState.model_validate(final)
+
+        metrics = RunMetrics(
+            run_id=thread_id,
+            client=client,
+            calls=traced.collected(),
+            total_latency_ms=timer.elapsed_ms,
+        )
+        _log.info(
+            "run metrics",
+            extra={
+                "run_id": thread_id,
+                "client": client,
+                "llm_calls": metrics.call_count,
+                "prompt_tokens": metrics.total_usage.prompt_tokens,
+                "completion_tokens": metrics.total_usage.completion_tokens,
+                "total_tokens": metrics.total_usage.total_tokens,
+                "llm_cost": metrics.total_cost.display(),
+                "model_latency_ms": metrics.model_latency_ms,
+                "total_latency_ms": metrics.total_latency_ms,
+                "routing": metrics.tier_counts(),
+            },
+        )
+    finally:
+        active_tracer.end_run(
+            run_id=thread_id,
+            metadata={"llm_calls": str(len(traced.collected()))},
+        )
 
     if state.report is None:
         msg = (
@@ -108,7 +162,7 @@ def run_client_scan(
         )
         raise ScanFailedError(msg)
 
-    return state.report
+    return state.report, metrics
 
 
 def run_scan(
@@ -120,6 +174,7 @@ def run_scan(
     policy: PolicyStore | None = None,
     requested_by: str = "system",
     run_id_factory: Callable[[], str] = new_run_id,
+    tracer: Tracer | None = None,
 ) -> ScanResult:
     """Run a sweep and return one report per client in scope.
 
@@ -135,39 +190,47 @@ def run_scan(
         policy: The policy store. Defaults to the built-in one.
         requested_by: Recorded on state and in the audit trail.
         run_id_factory: Supplies each run's id. Injectable so a test can pin it.
+        tracer: Where traces go. Defaults to the configured tracer, which is a no-op
+            unless Langfuse is set up.
     """
     resolved = settings or get_settings()
     configure_logging(resolved)
     active_provider = provider or get_provider(resolved)
     active_llm = llm or get_llm(resolved)
+    active_tracer = tracer or get_tracer(resolved)
 
     targets = clients_in_scope(active_provider, client)
     reports: list[ClientReport] = []
+    metrics: list[RunMetrics] = []
 
     with checkpointer_for(resolved) as checkpointer:
         for target in targets:
-            reports.append(
-                run_client_scan(
-                    client=target,
-                    provider=active_provider,
-                    llm=active_llm,
-                    settings=resolved,
-                    checkpointer=checkpointer,
-                    policy=policy,
-                    run_id=run_id_factory(),
-                    requested_by=requested_by,
-                )
+            report, run_metrics = run_client_scan(
+                client=target,
+                provider=active_provider,
+                llm=active_llm,
+                settings=resolved,
+                checkpointer=checkpointer,
+                policy=policy,
+                run_id=run_id_factory(),
+                requested_by=requested_by,
+                tracer=active_tracer,
             )
+            reports.append(report)
+            metrics.append(run_metrics)
 
     _log.info(
         "sweep complete",
         extra={
             "clients": len(reports),
             "findings": sum(r.totals.findings_count for r in reports),
+            "llm_calls": sum(m.call_count for m in metrics),
+            "total_tokens": sum(m.total_usage.total_tokens for m in metrics),
             "mode": resolved.mode.value,
+            "tracer": active_tracer.name,
         },
     )
-    return ScanResult(reports=tuple(reports))
+    return ScanResult(reports=tuple(reports), metrics=tuple(metrics))
 
 
 def load_checkpointed_state(

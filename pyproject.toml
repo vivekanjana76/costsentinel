@@ -18,6 +18,11 @@ dependencies = [
     "uvicorn>=0.32",
 ]
 
+# Optional, never required. Tracing imports langfuse lazily and degrades to a no-op
+# when it is absent, so CI does not install this and the suite passes without it.
+[project.optional-dependencies]
+tracing = ["langfuse>=2.50"]
+
 [project.scripts]
 costsentinel = "costsentinel.cli:main"
 
@@ -89,13 +94,20 @@ ignore = [
     "SLF001",  # a test may reach into the private helper it specifically covers
 ]
 "src/costsentinel/cli.py" = ["T201"] # the CLI is allowed to write to stdout
+"scripts/**" = ["T201"]             # operator scripts report progress to the terminal
 
 [tool.ruff.lint.pylint]
 # Nodes, detectors and the sweep runner take their dependencies as keyword-only
 # arguments, which is the injection seam that keeps them testable. PLR0913 guards
 # against unreadable positional call sites, a concern keyword-only params already
 # address, so the limit is raised rather than suppressed per site.
-max-args = 8
+max-args = 9
+# Two functions are dispatch tables: the savings calculator maps an action to its
+# arithmetic, and the supervisor maps a state to its next route. A flat series of
+# guarded returns is the clearest possible form for both -- collapsing them into
+# nested conditionals to satisfy a counter would make the routing logic harder to
+# audit, which is the opposite of what it is for.
+max-returns = 12
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
