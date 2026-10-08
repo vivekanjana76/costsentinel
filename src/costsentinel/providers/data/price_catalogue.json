@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "is_real_api_pull": false,
+  "retrieved_at": "2026-10-08T00:00:00+00:00",
+  "source": "curated representative values, NOT a live pull",
+  "provenance_note": "These figures are plausible synthetic prices committed so that tests and CI run offline against a fixed catalogue. They have NOT been fetched from Azure. Run `uv run python scripts/refresh_prices.py` to replace this file with a real Azure Retail Prices API pull, which sets is_real_api_pull to true. Savings assertions in tests are baselined against the values below and will need re-baselining after a refresh.",
+  "api_endpoint": "https://prices.azure.com/api/retail/prices",
+  "api_version": "2023-01-01-preview",
+  "currency": "USD",
+  "hours_per_month": 730,
+  "base_region": "eastus",
+  "regions": {
+    "eastus": {
+      "multiplier": "1.00",
+      "basis": "base region; SKU prices below are quoted for this region directly"
+    },
+    "qatarcentral": {
+      "multiplier": "1.12",
+      "basis": "modelled uplift over the base region, not a fetched price; pass --region qatarcentral to refresh_prices.py to fetch it directly"
+    }
+  },
+  "skus": [
+    {"sku": "Standard_D2s_v5", "applies_to": "virtual_machine", "family": "Dsv5", "vcpu": 2, "memory_gb": "8", "monthly_cost": "70.08"},
+    {"sku": "Standard_D4s_v5", "applies_to": "virtual_machine", "family": "Dsv5", "vcpu": 4, "memory_gb": "16", "monthly_cost": "140.16"},
+    {"sku": "Standard_D8s_v5", "applies_to": "virtual_machine", "family": "Dsv5", "vcpu": 8, "memory_gb": "32", "monthly_cost": "280.32"},
+    {"sku": "Standard_D16s_v5", "applies_to": "virtual_machine", "family": "Dsv5", "vcpu": 16, "memory_gb": "64", "monthly_cost": "560.64"},
+    {"sku": "Standard_D32s_v5", "applies_to": "virtual_machine", "family": "Dsv5", "vcpu": 32, "memory_gb": "128", "monthly_cost": "1121.28"},
+    {"sku": "Standard_E2s_v5", "applies_to": "virtual_machine", "family": "Esv5", "vcpu": 2, "memory_gb": "16", "monthly_cost": "91.98"},
+    {"sku": "Standard_E4s_v5", "applies_to": "virtual_machine", "family": "Esv5", "vcpu": 4, "memory_gb": "32", "monthly_cost": "183.96"},
+    {"sku": "Standard_E8s_v5", "applies_to": "virtual_machine", "family": "Esv5", "vcpu": 8, "memory_gb": "64", "monthly_cost": "367.92"},
+    {"sku": "Standard_E16s_v5", "applies_to": "virtual_machine", "family": "Esv5", "vcpu": 16, "memory_gb": "128", "monthly_cost": "735.84"},
+    {"sku": "Standard_E32s_v5", "applies_to": "virtual_machine", "family": "Esv5", "vcpu": 32, "memory_gb": "256", "monthly_cost": "1471.68"},
+
+    {"sku": "Premium_LRS_P10", "applies_to": "managed_disk", "family": "PremiumSSD", "monthly_cost": "19.71"},
+    {"sku": "Premium_LRS_P15", "applies_to": "managed_disk", "family": "PremiumSSD", "monthly_cost": "38.42"},
+    {"sku": "Premium_LRS_P20", "applies_to": "managed_disk", "family": "PremiumSSD", "monthly_cost": "76.84"},
+    {"sku": "Premium_LRS_P30", "applies_to": "managed_disk", "family": "PremiumSSD", "monthly_cost": "153.68"},
+
+    {"sku": "Standard_LRS_Snapshot_128", "applies_to": "snapshot", "family": "SnapshotStandardLRS", "monthly_cost": "6.14"},
+    {"sku": "Standard_LRS_Snapshot_512", "applies_to": "snapshot", "family": "SnapshotStandardLRS", "monthly_cost": "24.58"},
+
+    {"sku": "Standard_Static", "applies_to": "public_ip", "family": "PublicIPStandard", "monthly_cost": "3.65"},
+
+    {"sku": "Standard_GRS_Cool", "applies_to": "storage_account", "family": "StorageGRS", "monthly_cost": "48.20"},
+    {"sku": "Standard_LRS_Hot", "applies_to": "storage_account", "family": "StorageLRS", "monthly_cost": "11.40"},
+
+    {"sku": "GP_Gen5_2", "applies_to": "sql_database", "family": "SqlGpGen5", "vcpu": 2, "memory_gb": "10.4", "monthly_cost": "73.65"},
+    {"sku": "GP_Gen5_4", "applies_to": "sql_database", "family": "SqlGpGen5", "vcpu": 4, "memory_gb": "20.8", "monthly_cost": "147.30"},
+    {"sku": "GP_Gen5_8", "applies_to": "sql_database", "family": "SqlGpGen5", "vcpu": 8, "memory_gb": "41.6", "monthly_cost": "294.60"},
+
+    {"sku": "P0v3", "applies_to": "app_service_plan", "family": "AppServicePremiumV3", "vcpu": 1, "memory_gb": "4", "monthly_cost": "109.50"},
+    {"sku": "P1v3", "applies_to": "app_service_plan", "family": "AppServicePremiumV3", "vcpu": 2, "memory_gb": "8", "monthly_cost": "219.00"},
+    {"sku": "P2v3", "applies_to": "app_service_plan", "family": "AppServicePremiumV3", "vcpu": 4, "memory_gb": "16", "monthly_cost": "438.00"},
+    {"sku": "S1", "applies_to": "app_service_plan", "family": "AppServiceStandard", "vcpu": 1, "memory_gb": "1.75", "monthly_cost": "73.00"}
+  ]
+}
