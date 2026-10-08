@@ -16,6 +16,7 @@ from typing import Protocol, runtime_checkable
 
 from costsentinel.domain.estate import (
     CostSeries,
+    Reservation,
     Resource,
     ResourceMetrics,
     SkuPrice,
@@ -63,6 +64,16 @@ class AzureProvider(Protocol):
 
     def list_resources(self, subscription_id: str) -> Sequence[Resource]:
         """Every billable resource in one subscription."""
+        ...
+
+    def list_reservations(self, *, client: str | None = None) -> Sequence[Reservation]:
+        """Capacity commitments in scope, optionally narrowed to one client.
+
+        Separate from :meth:`list_resources` because a reservation is a commitment
+        rather than a resource, with a term, a quantity and a utilisation against
+        that commitment -- and because the real Azure Reservations API is a
+        different surface from Resource Graph.
+        """
         ...
 
     def get_cost_series(self, subscription_id: str, *, window_days: int = 30) -> CostSeries:

@@ -1,9 +1,9 @@
-"""Real Azure provider -- a declared seam, implemented in Phase 2.
+"""Real Azure provider -- a declared seam, implemented in Phase 3.
 
 It exists now so that ``MODE=real`` fails with one clear message at construction
 instead of an import error or a confusing failure halfway through a sweep.
 
-When Phase 2 implements this, it will sit behind the MCP tool server rather than
+When Phase 3 implements this, it will sit behind the MCP tool server rather than
 calling the Azure SDKs directly (ARCHITECTURE.md section 10), and it will stay
 read-only until Phase 10.
 """
@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from costsentinel.config import Settings
     from costsentinel.domain.estate import (
         CostSeries,
+        Reservation,
         Resource,
         ResourceMetrics,
         SkuPrice,
@@ -26,19 +27,19 @@ if TYPE_CHECKING:
     )
 
 _NOT_IMPLEMENTED = (
-    "The real Azure provider arrives in Phase 2. Set MODE=mock (the default) to run "
+    "The real Azure provider arrives in Phase 3. Set MODE=mock (the default) to run "
     "against the deterministic synthetic estate. See ROADMAP.md."
 )
 
 
 class AzureLiveProvider:
-    """Placeholder for the Phase 2 read-only Azure provider."""
+    """Placeholder for the Phase 3 read-only Azure provider."""
 
     def __init__(self, settings: Settings) -> None:
-        """Refuse construction until Phase 2 implements this provider.
+        """Refuse construction until Phase 3 implements this provider.
 
         Raises:
-            ProviderNotConfiguredError: Always, in Phase 1.
+            ProviderNotConfiguredError: Always, until Phase 3.
         """
         self._settings = settings
         raise ProviderNotConfiguredError(_NOT_IMPLEMENTED)
@@ -52,26 +53,31 @@ class AzureLiveProvider:
         return "azure-live"
 
     def list_subscriptions(self, *, client: str | None = None) -> Sequence[Subscription]:
-        """Not implemented in Phase 1."""
+        """Not implemented until Phase 3."""
         _ = client
         self._unavailable()
 
     def list_resources(self, subscription_id: str) -> Sequence[Resource]:
-        """Not implemented in Phase 1."""
+        """Not implemented until Phase 3."""
         _ = subscription_id
         self._unavailable()
 
+    def list_reservations(self, *, client: str | None = None) -> Sequence[Reservation]:
+        """Not implemented until Phase 3."""
+        _ = client
+        self._unavailable()
+
     def get_cost_series(self, subscription_id: str, *, window_days: int = 30) -> CostSeries:
-        """Not implemented in Phase 1."""
+        """Not implemented until Phase 3."""
         _ = (subscription_id, window_days)
         self._unavailable()
 
     def get_resource_metrics(self, resource_id: str) -> ResourceMetrics | None:
-        """Not implemented in Phase 1."""
+        """Not implemented until Phase 3."""
         _ = resource_id
         self._unavailable()
 
     def list_sku_prices(self, region: str) -> Sequence[SkuPrice]:
-        """Not implemented in Phase 1."""
+        """Not implemented until Phase 3."""
         _ = region
         self._unavailable()
