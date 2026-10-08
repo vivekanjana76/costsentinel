@@ -17,6 +17,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from costsentinel.domain.analysis import RankingScore, RootCause
 from costsentinel.domain.common import utc_now
 from costsentinel.domain.estate import Estate
 from costsentinel.domain.governance import (
@@ -24,8 +25,10 @@ from costsentinel.domain.governance import (
     ApprovalDecision,
     ApprovalRequest,
     AuditEvent,
+    SupervisorDecision,
 )
-from costsentinel.domain.recommendations import Recommendation
+from costsentinel.domain.observability import RunMetrics
+from costsentinel.domain.recommendations import ActionType, PricedOption, Recommendation
 from costsentinel.domain.report import ClientReport
 from costsentinel.domain.signals import CostAnomaly, WasteSignal
 
@@ -52,8 +55,15 @@ class ScanState(BaseModel):
     signals: tuple[WasteSignal, ...] = ()
     anomalies: tuple[CostAnomaly, ...] = ()
 
+    # --- diagnosis -------------------------------------------------------
+    root_causes: tuple[RootCause, ...] = ()
+
+    # --- costing ---------------------------------------------------------
+    priced_options: tuple[PricedOption, ...] = ()
+
     # --- proposal --------------------------------------------------------
     recommendations: tuple[Recommendation, ...] = ()
+    ranking: tuple[RankingScore, ...] = ()
 
     # --- governance ------------------------------------------------------
     classifications: tuple[ActionClassification, ...] = ()
@@ -63,12 +73,20 @@ class ScanState(BaseModel):
     # --- output ----------------------------------------------------------
     report: ClientReport | None = None
 
+    # --- routing ---------------------------------------------------------
+    supervisor_decisions: tuple[SupervisorDecision, ...] = ()
+    escalations: tuple[str, ...] = Field(
+        default=(),
+        description="Reasons a run was escalated for human attention rather than retried.",
+    )
+
     # --- cross-cutting ---------------------------------------------------
     audit: tuple[AuditEvent, ...] = ()
     errors: tuple[str, ...] = ()
+    run_metrics: RunMetrics | None = None
     retries: Mapping[str, int] = Field(
         default_factory=dict,
-        description="Per-node retry counters, consumed by the supervisor in Phase 3.",
+        description="Per-node retry counters, consumed by the supervisor.",
     )
 
     def classification_for(self, recommendation_id: str) -> ActionClassification | None:
@@ -88,3 +106,26 @@ class ScanState(BaseModel):
     def signal(self, signal_id: str) -> WasteSignal | None:
         """One signal by id, or ``None``."""
         return next((s for s in self.signals if s.signal_id == signal_id), None)
+
+    def options_for(self, signal_id: str) -> tuple[PricedOption, ...]:
+        """Every priced remediation option for one signal."""
+        return tuple(o for o in self.priced_options if o.signal_id == signal_id)
+
+    def option(self, signal_id: str, action: ActionType) -> PricedOption | None:
+        """One priced option by signal and action, or ``None``."""
+        return next(
+            (o for o in self.priced_options if o.signal_id == signal_id and o.action is action),
+            None,
+        )
+
+    def root_cause_for(self, signal_id: str) -> RootCause | None:
+        """The diagnosis for one signal, or ``None`` if none was produced."""
+        return next((r for r in self.root_causes if r.signal_id == signal_id), None)
+
+    def ranking_for(self, recommendation_id: str) -> RankingScore | None:
+        """The computed ranking breakdown for one recommendation, or ``None``."""
+        return next((r for r in self.ranking if r.recommendation_id == recommendation_id), None)
+
+    def attempts(self, node: str) -> int:
+        """How many times a node has already been attempted."""
+        return self.retries.get(node, 0)

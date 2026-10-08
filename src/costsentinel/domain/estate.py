@@ -48,6 +48,7 @@ class ResourceKind(StrEnum):
     STORAGE_ACCOUNT = "storage_account"
     SQL_DATABASE = "sql_database"
     APP_SERVICE_PLAN = "app_service_plan"
+    SNAPSHOT = "snapshot"
 
 
 class ResourceState(StrEnum):
@@ -150,6 +151,21 @@ class ResourceMetrics(Frozen):
     cpu_avg_pct: Percentage | None = None
     cpu_max_pct: Percentage | None = None
     network_in_gb: Decimal | None = Field(default=None, ge=Decimal(0))
+    connection_count: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Distinct client connections observed over the window. Zero is a "
+            "measured fact and means idle; None means not measured."
+        ),
+    )
+    utilisation_pct: Percentage | None = Field(
+        default=None,
+        description=(
+            "Generic utilisation for resources whose waste is not CPU-shaped, such "
+            "as an App Service plan's instance utilisation."
+        ),
+    )
     provenance: Provenance
 
 
@@ -159,14 +175,68 @@ class SkuPrice(Frozen):
     Rightsizing needs two prices -- the current SKU and a candidate -- and both must
     come from here. Holding ``vcpu`` and ``memory_gb`` alongside the price is what
     lets the planner pick a candidate arithmetically instead of guessing a size.
+
+    ``applies_to`` keeps the search honest across resource kinds: without it a
+    rightsizing pass could offer a SQL tier as a candidate for a virtual machine,
+    because both are priced per vCPU.
+
+    ``vcpu`` and ``memory_gb`` are optional, because a disk, a snapshot or a public
+    IP has neither. Absent capacity simply means that SKU cannot participate in a
+    capacity-based rightsizing decision.
     """
 
     sku: str
+    applies_to: ResourceKind
     family: str
-    vcpu: int = Field(ge=1)
-    memory_gb: Decimal = Field(gt=Decimal(0))
     region: str
+    vcpu: int | None = Field(default=None, ge=1)
+    memory_gb: Decimal | None = Field(default=None, gt=Decimal(0))
     monthly_cost: MoneyAmount
+
+    @property
+    def has_capacity(self) -> bool:
+        """Whether this SKU can take part in capacity-based rightsizing."""
+        return self.vcpu is not None
+
+
+class Reservation(Frozen):
+    """A purchased capacity commitment.
+
+    Modelled separately from :class:`Resource` rather than squeezed into it, because
+    a reservation has structure a resource does not -- a term, a quantity, an expiry
+    and a utilisation against the commitment -- and because the real Azure
+    Reservations API is a different surface from Resource Graph.
+
+    The waste here is unlike other waste: the money is *already spent*. Low
+    utilisation means commitment that is being paid for and not consumed, which is
+    recoverable only by exchanging or re-scoping the reservation, never by deleting
+    something.
+    """
+
+    reservation_id: str
+    name: str
+    client: str
+    scope_subscription_id: str | None = Field(
+        default=None,
+        description="None for a shared-scope reservation spanning the enrolment.",
+    )
+    reserved_sku: str
+    reserved_kind: ResourceKind
+    region: str
+    term_months: int = Field(ge=1)
+    quantity: int = Field(ge=1)
+    monthly_amortised_cost: MoneyAmount
+    utilisation_pct: Percentage | None = Field(
+        default=None,
+        description="Observed utilisation of the commitment. None means not measured.",
+    )
+    expires_on: date | None = None
+    provenance: Provenance
+
+    @property
+    def is_measured(self) -> bool:
+        """Whether utilisation was reported, so a conclusion can be drawn."""
+        return self.utilisation_pct is not None
 
 
 class Estate(Frozen):
@@ -183,6 +253,7 @@ class Estate(Frozen):
     resources: tuple[Resource, ...]
     cost_series: tuple[CostSeries, ...] = ()
     metrics: tuple[ResourceMetrics, ...] = ()
+    reservations: tuple[Reservation, ...] = ()
 
     def resources_in(self, subscription_id: str) -> Sequence[Resource]:
         """Resources belonging to one subscription."""
@@ -195,6 +266,10 @@ class Estate(Frozen):
     def resource(self, resource_id: str) -> Resource | None:
         """One resource by id, or ``None``."""
         return next((r for r in self.resources if r.resource_id == resource_id), None)
+
+    def reservation(self, reservation_id: str) -> Reservation | None:
+        """One reservation by id, or ``None``."""
+        return next((r for r in self.reservations if r.reservation_id == reservation_id), None)
 
     def observed_spend(self) -> MoneyAmount:
         """Total actual spend across every in-scope subscription.

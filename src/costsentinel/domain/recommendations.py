@@ -38,6 +38,10 @@ class ActionType(StrEnum):
     SNAPSHOT_MANAGED_DISK = "snapshot_managed_disk"
     DEALLOCATE_VIRTUAL_MACHINE = "deallocate_virtual_machine"
     RESIZE_VIRTUAL_MACHINE = "resize_virtual_machine"
+    SCALE_DOWN_SQL_DATABASE = "scale_down_sql_database"
+    SCALE_DOWN_APP_SERVICE_PLAN = "scale_down_app_service_plan"
+    EXCHANGE_UNUSED_RESERVATION = "exchange_unused_reservation"
+    DELETE_STALE_SNAPSHOT = "delete_stale_snapshot"
     DELETE_ORPHANED_MANAGED_DISK = "delete_orphaned_managed_disk"
     DELETE_UNATTACHED_PUBLIC_IP = "delete_unattached_public_ip"
     DELETE_UNCONFIRMED_RESOURCE = "delete_unconfirmed_resource"
@@ -148,6 +152,25 @@ class SavingsEstimate(Frozen):
             basis=reason,
             is_estimated=False,
         )
+
+
+class PricedOption(Frozen):
+    """One candidate remediation for a signal, with its saving already computed.
+
+    The Savings Estimator prices every option the policy store permits, before the
+    planner chooses. That ordering is deliberate: it means the model picks a
+    remediation knowing what each one is worth, and it keeps every monetary figure
+    inside the arithmetic node rather than spread across the graph.
+    """
+
+    signal_id: str
+    action: ActionType
+    savings: SavingsEstimate
+
+    @property
+    def is_priced(self) -> bool:
+        """Whether this option has a determined saving."""
+        return self.savings.is_known
 
 
 class Recommendation(Frozen):
