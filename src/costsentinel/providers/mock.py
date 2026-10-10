@@ -5,14 +5,24 @@ This is not a stub (ARCHITECTURE.md D5). It is a faithful mirror of
 whole pipeline -- including the Phase 5 eval harness -- exercises real code paths
 with zero credentials.
 
+Every price comes from the committed catalogue snapshot
+(:mod:`costsentinel.providers.catalogue`), so a resource's reported cost and the
+catalogue price a rightsizing decision quotes can never drift apart.
+
 The estate deliberately contains clearly wasteful resources alongside healthy ones,
-so both recall *and* precision are testable:
+so both recall *and* precision are testable. Wasteful:
 
 * two orphaned (unattached) managed disks,
 * one idle, oversized virtual machine,
-* one unattached public IP,
 * one oversized-but-active virtual machine,
-* and eleven resources that are behaving correctly and must *not* be flagged.
+* one unattached public IP,
+* two stale snapshots,
+* one idle SQL database,
+* one oversized App Service plan,
+* one badly under-used reservation.
+
+Healthy counter-examples for each: attached disks and addresses, a busy VM, a recent
+snapshot, a well-used SQL database, and two well-utilised reservations.
 
 Determinism: identical output on every call and in every process. Timestamps derive
 from a fixed ``as_of`` rather than the wall clock, and the cost-series jitter is
@@ -39,6 +49,7 @@ from costsentinel.domain.estate import (
     CostPoint,
     CostSeries,
     Environment,
+    Reservation,
     Resource,
     ResourceKind,
     ResourceMetrics,
@@ -46,6 +57,7 @@ from costsentinel.domain.estate import (
     SkuPrice,
     Subscription,
 )
+from costsentinel.providers.catalogue import PriceCatalogue, default_catalogue
 
 #: Fixed observation anchor. The mock's contract is determinism, so it does not read
 #: the wall clock. Override via the ``as_of`` constructor argument.
@@ -56,48 +68,13 @@ DEFAULT_WINDOW_DAYS = 30
 
 _CENTS = Decimal("0.01")
 
+CLIENT_NORTHWIND = "northwind-energy"
+CLIENT_MINISTRY = "ministry-of-transport"
+
 
 def _money(value: Decimal) -> Decimal:
     """Round to whole cents, the way a billing system would."""
     return value.quantize(_CENTS, rounding=ROUND_HALF_UP)
-
-
-# ---------------------------------------------------------------------------
-# Price catalogue
-# ---------------------------------------------------------------------------
-
-
-class _SkuSpec(NamedTuple):
-    """A SKU and its base (``eastus``) monthly list price."""
-
-    sku: str
-    family: str
-    vcpu: int
-    memory_gb: str
-    base_monthly: str
-
-
-#: Synthetic but plausible pay-as-you-go Linux monthly list prices (730 hours).
-#: These are mock catalogue data: the point is that a savings figure traces to a
-#: catalogue lookup rather than to a guess.
-_SKU_CATALOGUE: tuple[_SkuSpec, ...] = (
-    _SkuSpec("Standard_D2s_v5", "Dsv5", 2, "8", "70.08"),
-    _SkuSpec("Standard_D4s_v5", "Dsv5", 4, "16", "140.16"),
-    _SkuSpec("Standard_D8s_v5", "Dsv5", 8, "32", "280.32"),
-    _SkuSpec("Standard_D16s_v5", "Dsv5", 16, "64", "560.64"),
-    _SkuSpec("Standard_D32s_v5", "Dsv5", 32, "128", "1121.28"),
-    _SkuSpec("Standard_E2s_v5", "Esv5", 2, "16", "91.98"),
-    _SkuSpec("Standard_E4s_v5", "Esv5", 4, "32", "183.96"),
-    _SkuSpec("Standard_E8s_v5", "Esv5", 8, "64", "367.92"),
-    _SkuSpec("Standard_E16s_v5", "Esv5", 16, "128", "735.84"),
-    _SkuSpec("Standard_E32s_v5", "Esv5", 32, "256", "1471.68"),
-)
-
-#: Regional price multipliers against the ``eastus`` base.
-_REGION_MULTIPLIER: dict[str, str] = {
-    "eastus": "1.00",
-    "qatarcentral": "1.12",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -118,10 +95,9 @@ class _SubSpec(NamedTuple):
 class _ResSpec(NamedTuple):
     """One synthetic resource.
 
-    ``base_monthly`` is the ``eastus`` list price; the regional multiplier is applied
-    when the resource is built. For a virtual machine it is ``None`` and the price
-    comes from the SKU catalogue instead, so a VM's cost and its catalogue price can
-    never drift apart.
+    There is no price field: the cost is looked up in the catalogue by ``(sku,
+    kind)`` and scaled by the region multiplier. A SKU absent from the catalogue
+    yields an explicitly unknown cost rather than a guess.
     """
 
     name: str
@@ -130,17 +106,32 @@ class _ResSpec(NamedTuple):
     resource_group: str
     state: ResourceState
     sku: str | None = None
-    base_monthly: str | None = None
     attached_to_name: str | None = None
+    attached_to_kind: ResourceKind = ResourceKind.VIRTUAL_MACHINE
     tags: tuple[tuple[str, str], ...] = ()
     age_days: int = 0
     cpu_avg_pct: str | None = None
     cpu_max_pct: str | None = None
     network_in_gb: str | None = None
+    connection_count: int | None = None
+    utilisation_pct: str | None = None
 
 
-CLIENT_NORTHWIND = "northwind-energy"
-CLIENT_MINISTRY = "ministry-of-transport"
+class _RsvSpec(NamedTuple):
+    """One synthetic reservation."""
+
+    reservation_id: str
+    name: str
+    client: str
+    subscription_index: int | None
+    reserved_sku: str
+    reserved_kind: ResourceKind
+    term_months: int
+    quantity: int
+    monthly_amortised: str
+    utilisation_pct: str | None
+    expires_in_days: int
+
 
 _SUBSCRIPTIONS: tuple[_SubSpec, ...] = (
     _SubSpec(
@@ -188,7 +179,6 @@ _RESOURCES: tuple[_ResSpec, ...] = (
         resource_group="rg-core-prod",
         state=ResourceState.ATTACHED,
         sku="Premium_LRS_P10",
-        base_monthly="19.71",
         attached_to_name="vm-web-01",
         tags=(("env", "prod"), ("cost-centre", "NW-1001")),
         age_days=612,
@@ -200,7 +190,6 @@ _RESOURCES: tuple[_ResSpec, ...] = (
         resource_group="rg-core-prod",
         state=ResourceState.ATTACHED,
         sku="Standard_Static",
-        base_monthly="3.65",
         attached_to_name="vm-web-01",
         tags=(("env", "prod"),),
         age_days=612,
@@ -212,7 +201,6 @@ _RESOURCES: tuple[_ResSpec, ...] = (
         resource_group="rg-core-prod",
         state=ResourceState.AVAILABLE,
         sku="Standard_GRS_Cool",
-        base_monthly="48.20",
         tags=(("env", "prod"), ("retention", "7y")),
         age_days=901,
     ),
@@ -237,21 +225,34 @@ _RESOURCES: tuple[_ResSpec, ...] = (
         resource_group="rg-core-prod",
         state=ResourceState.ATTACHED,
         sku="Premium_LRS_P10",
-        base_monthly="19.71",
         attached_to_name="vm-batch-02",
         tags=(("env", "prod"),),
         age_days=430,
     ),
     _ResSpec(
+        # Busy database: a well-used counter-example for the idle-SQL detector.
         name="sql-core-reporting",
         kind=ResourceKind.SQL_DATABASE,
         subscription_index=0,
         resource_group="rg-core-prod",
         state=ResourceState.AVAILABLE,
         sku="GP_Gen5_4",
-        base_monthly="147.30",
         tags=(("env", "prod"), ("cost-centre", "NW-1002")),
         age_days=548,
+        cpu_avg_pct="38.4",
+        cpu_max_pct="81.2",
+        connection_count=14820,
+    ),
+    _ResSpec(
+        # Stale snapshot in production: kept long past any restore window.
+        name="snap-web-01-pre-upgrade",
+        kind=ResourceKind.SNAPSHOT,
+        subscription_index=0,
+        resource_group="rg-core-prod",
+        state=ResourceState.AVAILABLE,
+        sku="Standard_LRS_Snapshot_512",
+        tags=(("env", "prod"), ("note", "taken before the 2025 platform upgrade")),
+        age_days=603,
     ),
     # --- NW-DEV-Sandbox ---------------------------------------------------
     _ResSpec(
@@ -276,7 +277,6 @@ _RESOURCES: tuple[_ResSpec, ...] = (
         resource_group="rg-analytics-dev",
         state=ResourceState.ATTACHED,
         sku="Premium_LRS_P10",
-        base_monthly="19.71",
         attached_to_name="vm-analytics-01",
         tags=(("env", "dev"),),
         age_days=287,
@@ -289,7 +289,6 @@ _RESOURCES: tuple[_ResSpec, ...] = (
         resource_group="rg-analytics-dev",
         state=ResourceState.UNATTACHED,
         sku="Premium_LRS_P15",
-        base_monthly="38.42",
         tags=(("env", "dev"), ("project", "churn-model-poc")),
         age_days=241,
     ),
@@ -301,7 +300,6 @@ _RESOURCES: tuple[_ResSpec, ...] = (
         resource_group="rg-analytics-dev",
         state=ResourceState.UNATTACHED,
         sku="Standard_Static",
-        base_monthly="3.65",
         tags=(("env", "dev"),),
         age_days=398,
     ),
@@ -312,9 +310,44 @@ _RESOURCES: tuple[_ResSpec, ...] = (
         resource_group="rg-analytics-dev",
         state=ResourceState.AVAILABLE,
         sku="Standard_LRS_Hot",
-        base_monthly="11.40",
         tags=(("env", "dev"),),
         age_days=287,
+    ),
+    _ResSpec(
+        # Stale snapshot in development.
+        name="snap-analytics-baseline",
+        kind=ResourceKind.SNAPSHOT,
+        subscription_index=1,
+        resource_group="rg-analytics-dev",
+        state=ResourceState.AVAILABLE,
+        sku="Standard_LRS_Snapshot_128",
+        tags=(("env", "dev"), ("project", "churn-model-poc")),
+        age_days=412,
+    ),
+    _ResSpec(
+        # Recent snapshot: must NOT be flagged. Precision counter-example.
+        name="snap-analytics-nightly",
+        kind=ResourceKind.SNAPSHOT,
+        subscription_index=1,
+        resource_group="rg-analytics-dev",
+        state=ResourceState.AVAILABLE,
+        sku="Standard_LRS_Snapshot_128",
+        tags=(("env", "dev"), ("schedule", "nightly")),
+        age_days=12,
+    ),
+    _ResSpec(
+        # Idle database: provisioned for a proof of concept, never connected to.
+        name="sql-dev-sandbox",
+        kind=ResourceKind.SQL_DATABASE,
+        subscription_index=1,
+        resource_group="rg-analytics-dev",
+        state=ResourceState.AVAILABLE,
+        sku="GP_Gen5_4",
+        tags=(("env", "dev"), ("project", "churn-model-poc")),
+        age_days=263,
+        cpu_avg_pct="0.4",
+        cpu_max_pct="2.1",
+        connection_count=0,
     ),
     # --- MOT-PROD-Gov -----------------------------------------------------
     _ResSpec(
@@ -337,7 +370,6 @@ _RESOURCES: tuple[_ResSpec, ...] = (
         resource_group="rg-portal-prod",
         state=ResourceState.ATTACHED,
         sku="Premium_LRS_P10",
-        base_monthly="19.71",
         attached_to_name="vm-portal-01",
         tags=(("env", "prod"),),
         age_days=734,
@@ -351,7 +383,6 @@ _RESOURCES: tuple[_ResSpec, ...] = (
         resource_group="rg-portal-prod",
         state=ResourceState.UNATTACHED,
         sku="Premium_LRS_P20",
-        base_monthly="76.84",
         tags=(("env", "prod"), ("note", "pre-migration copy")),
         age_days=516,
     ),
@@ -362,27 +393,74 @@ _RESOURCES: tuple[_ResSpec, ...] = (
         resource_group="rg-portal-prod",
         state=ResourceState.ATTACHED,
         sku="Standard_Static",
-        base_monthly="3.65",
         attached_to_name="vm-portal-01",
         tags=(("env", "prod"),),
         age_days=734,
     ),
     _ResSpec(
+        # Oversized plan: sized for a launch peak that never recurred.
         name="app-portal-plan",
         kind=ResourceKind.APP_SERVICE_PLAN,
         subscription_index=2,
         resource_group="rg-portal-prod",
         state=ResourceState.AVAILABLE,
         sku="P1v3",
-        base_monthly="219.00",
         tags=(("env", "prod"),),
         age_days=734,
+        cpu_avg_pct="8.2",
+        cpu_max_pct="19.6",
+        utilisation_pct="11.4",
+    ),
+)
+
+_RESERVATIONS: tuple[_RsvSpec, ...] = (
+    _RsvSpec(
+        # Badly under-used: bought for a workload that was later re-platformed.
+        reservation_id="rsv-00000000-0000-4000-8000-0000000000c1",
+        name="nw-compute-dsv5-3y",
+        client=CLIENT_NORTHWIND,
+        subscription_index=0,
+        reserved_sku="Standard_D4s_v5",
+        reserved_kind=ResourceKind.VIRTUAL_MACHINE,
+        term_months=36,
+        quantity=4,
+        monthly_amortised="420.48",
+        utilisation_pct="34.5",
+        expires_in_days=488,
+    ),
+    _RsvSpec(
+        # Well used: a precision counter-example.
+        reservation_id="rsv-00000000-0000-4000-8000-0000000000c2",
+        name="nw-sql-gen5-1y",
+        client=CLIENT_NORTHWIND,
+        subscription_index=0,
+        reserved_sku="GP_Gen5_4",
+        reserved_kind=ResourceKind.SQL_DATABASE,
+        term_months=12,
+        quantity=1,
+        monthly_amortised="110.48",
+        utilisation_pct="96.2",
+        expires_in_days=211,
+    ),
+    _RsvSpec(
+        reservation_id="rsv-00000000-0000-4000-8000-0000000000d1",
+        name="mot-compute-dsv5-1y",
+        client=CLIENT_MINISTRY,
+        subscription_index=2,
+        reserved_sku="Standard_D4s_v5",
+        reserved_kind=ResourceKind.VIRTUAL_MACHINE,
+        term_months=12,
+        quantity=2,
+        monthly_amortised="236.80",
+        utilisation_pct="88.0",
+        expires_in_days=96,
     ),
 )
 
 _ARM_PROVIDER_PATH: dict[ResourceKind, str] = {
     ResourceKind.VIRTUAL_MACHINE: "Microsoft.Compute/virtualMachines",
     ResourceKind.MANAGED_DISK: "Microsoft.Compute/disks",
+    ResourceKind.SNAPSHOT: "Microsoft.Compute/snapshots",
     ResourceKind.PUBLIC_IP: "Microsoft.Network/publicIPAddresses",
     ResourceKind.NETWORK_INTERFACE: "Microsoft.Network/networkInterfaces",
     ResourceKind.STORAGE_ACCOUNT: "Microsoft.Storage/storageAccounts",
@@ -403,24 +481,36 @@ def _arm_id(subscription_id: str, resource_group: str, kind: ResourceKind, name:
 class MockAzureProvider:
     """A deterministic synthetic estate satisfying :class:`AzureProvider`."""
 
-    def __init__(self, *, seed: int = 1337, as_of: datetime | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        seed: int = 1337,
+        as_of: datetime | None = None,
+        catalogue: PriceCatalogue | None = None,
+    ) -> None:
         """Build the whole estate up front, so every later call is a lookup.
 
         Args:
             seed: Drives the cost-series day-to-day variation. The same seed always
-                produces the same series. The estate topology is fixed in Phase 1
+                produces the same series. The estate topology is fixed
                 (ARCHITECTURE.md D25); Phase 5 varies it by seed for eval datasets.
             as_of: Observation anchor for every timestamp and cost-series date.
                 Defaults to :data:`MOCK_AS_OF` so output is identical across
                 processes.
+            catalogue: Price snapshot to price the estate from. Defaults to the
+                committed one, which is what makes the figures reproducible.
         """
         self._seed = seed
         self._as_of = as_of or MOCK_AS_OF
+        self._catalogue = catalogue or default_catalogue()
         self._subscriptions: tuple[Subscription, ...] = tuple(
             self._build_subscription(spec) for spec in _SUBSCRIPTIONS
         )
         self._resources: tuple[Resource, ...] = tuple(
             self._build_resource(spec) for spec in _RESOURCES
+        )
+        self._reservations: tuple[Reservation, ...] = tuple(
+            self._build_reservation(spec) for spec in _RESERVATIONS
         )
         self._metrics: dict[str, ResourceMetrics] = {
             metric.resource_id: metric
@@ -445,6 +535,11 @@ class MockAzureProvider:
         """The observation anchor for every timestamp this provider emits."""
         return self._as_of
 
+    @property
+    def catalogue(self) -> PriceCatalogue:
+        """The price snapshot this estate is priced from."""
+        return self._catalogue
+
     # --- provenance helpers ----------------------------------------------
 
     def _provenance(self, reference: str) -> Provenance:
@@ -467,34 +562,21 @@ class MockAzureProvider:
             provenance=self._provenance("mock:subscriptions.list"),
         )
 
-    def _region_multiplier(self, region: str) -> Decimal:
-        return Decimal(_REGION_MULTIPLIER.get(region, "1.00"))
-
-    def _sku_base_monthly(self, sku: str) -> Decimal | None:
-        spec = next((s for s in _SKU_CATALOGUE if s.sku == sku), None)
-        return Decimal(spec.base_monthly) if spec else None
-
     def _resource_monthly(self, spec: _ResSpec, region: str) -> MoneyAmount:
-        """Price a resource, preferring the SKU catalogue for compute.
+        """Price a resource from the catalogue.
 
-        A virtual machine with a SKU that is not in the catalogue is priced as
-        *unknown* rather than guessed -- the honest answer, and the behaviour the
-        downstream nodes are built to tolerate.
+        A SKU the catalogue does not price yields an explicitly unknown cost rather
+        than a guess -- the honest answer, and the behaviour downstream nodes are
+        built to tolerate.
         """
-        base = (
-            self._sku_base_monthly(spec.sku)
-            if spec.kind is ResourceKind.VIRTUAL_MACHINE and spec.sku
-            else (Decimal(spec.base_monthly) if spec.base_monthly else None)
-        )
-        if base is None:
+        if spec.sku is None:
+            return MoneyAmount.undetermined(f"{spec.name} has no SKU to price")
+        priced = self._catalogue.price_for(spec.sku, spec.kind, region)
+        if priced is None:
             return MoneyAmount.undetermined(
-                f"no catalogue price for sku {spec.sku!r} in region {region}"
+                f"no catalogue price for sku {spec.sku!r} as {spec.kind.value} in {region}"
             )
-        return MoneyAmount.of(
-            _money(base * self._region_multiplier(region)),
-            currency=Currency.USD,
-            provenance=self._provenance(f"mock:costmanagement.resourceMonthly/{spec.name}"),
-        )
+        return priced.monthly_cost
 
     def _build_resource(self, spec: _ResSpec) -> Resource:
         sub = _SUBSCRIPTIONS[spec.subscription_index]
@@ -502,7 +584,7 @@ class MockAzureProvider:
             _arm_id(
                 sub.subscription_id,
                 spec.resource_group,
-                ResourceKind.VIRTUAL_MACHINE,
+                spec.attached_to_kind,
                 spec.attached_to_name,
             )
             if spec.attached_to_name
@@ -524,8 +606,40 @@ class MockAzureProvider:
             provenance=self._provenance("mock:resourcegraph.resources"),
         )
 
+    def _build_reservation(self, spec: _RsvSpec) -> Reservation:
+        sub = (
+            _SUBSCRIPTIONS[spec.subscription_index] if spec.subscription_index is not None else None
+        )
+        return Reservation(
+            reservation_id=spec.reservation_id,
+            name=spec.name,
+            client=spec.client,
+            scope_subscription_id=sub.subscription_id if sub else None,
+            reserved_sku=spec.reserved_sku,
+            reserved_kind=spec.reserved_kind,
+            region=sub.region if sub else self._catalogue.base_region,
+            term_months=spec.term_months,
+            quantity=spec.quantity,
+            monthly_amortised_cost=MoneyAmount.of(
+                _money(Decimal(spec.monthly_amortised)),
+                currency=Currency.USD,
+                provenance=self._provenance(f"mock:reservations.detail/{spec.name}"),
+            ),
+            utilisation_pct=(
+                Decimal(spec.utilisation_pct) if spec.utilisation_pct is not None else None
+            ),
+            expires_on=(self._as_of + timedelta(days=spec.expires_in_days)).date(),
+            provenance=self._provenance("mock:reservations.list"),
+        )
+
     def _build_metrics(self, spec: _ResSpec) -> ResourceMetrics | None:
-        if spec.cpu_avg_pct is None and spec.cpu_max_pct is None:
+        measured = (
+            spec.cpu_avg_pct,
+            spec.cpu_max_pct,
+            spec.connection_count,
+            spec.utilisation_pct,
+        )
+        if all(value is None for value in measured):
             return None
         sub = _SUBSCRIPTIONS[spec.subscription_index]
         return ResourceMetrics(
@@ -534,6 +648,10 @@ class MockAzureProvider:
             cpu_avg_pct=Decimal(spec.cpu_avg_pct) if spec.cpu_avg_pct else None,
             cpu_max_pct=Decimal(spec.cpu_max_pct) if spec.cpu_max_pct else None,
             network_in_gb=Decimal(spec.network_in_gb) if spec.network_in_gb else None,
+            connection_count=spec.connection_count,
+            utilisation_pct=(
+                Decimal(spec.utilisation_pct) if spec.utilisation_pct is not None else None
+            ),
             provenance=self._provenance(f"mock:monitor.metrics/{spec.name}"),
         )
 
@@ -548,6 +666,12 @@ class MockAzureProvider:
     def list_resources(self, subscription_id: str) -> Sequence[Resource]:
         """Every billable resource in one subscription."""
         return tuple(r for r in self._resources if r.subscription_id == subscription_id)
+
+    def list_reservations(self, *, client: str | None = None) -> Sequence[Reservation]:
+        """Capacity commitments in scope, optionally narrowed to one client."""
+        if client is None:
+            return self._reservations
+        return tuple(r for r in self._reservations if r.client == client)
 
     def get_cost_series(
         self, subscription_id: str, *, window_days: int = DEFAULT_WINDOW_DAYS
@@ -591,19 +715,4 @@ class MockAzureProvider:
 
     def list_sku_prices(self, region: str) -> Sequence[SkuPrice]:
         """The priced SKU catalogue for one region."""
-        multiplier = self._region_multiplier(region)
-        return tuple(
-            SkuPrice(
-                sku=spec.sku,
-                family=spec.family,
-                vcpu=spec.vcpu,
-                memory_gb=Decimal(spec.memory_gb),
-                region=region,
-                monthly_cost=MoneyAmount.of(
-                    _money(Decimal(spec.base_monthly) * multiplier),
-                    currency=Currency.USD,
-                    provenance=self._provenance(f"mock:retailprices/{spec.sku}/{region}"),
-                ),
-            )
-            for spec in _SKU_CATALOGUE
-        )
+        return self._catalogue.for_region(region)

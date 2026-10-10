@@ -1,12 +1,21 @@
 # CostSentinel — Roadmap
 
-**Current phase: 1**
+**Current phase: 2**
 
 Phases are sequential. Do not start work in a later phase before the current phase
 is complete and its exit criteria are met. If an idea arrives mid-phase, record it
 under "Parked ideas" at the bottom and stay on the current slice.
 
 Legend: `[ ]` not started · `[~]` in progress · `[x]` done
+
+> **Phase order changed after Phase 1.** The specialist graph and observability were
+> originally Phase 3, and the MCP Azure tool server was Phase 2. They are swapped:
+> the graph work is entirely mock-runnable and delivers the product's visible value
+> with no cloud dependency, whereas the MCP server is the first thing that needs real
+> Azure credentials and network access. Building the graph first keeps the
+> zero-credential invariant in place for longer, and means that when the MCP boundary
+> does land there is a complete six-specialist graph to point at it rather than a
+> four-node slice. Recorded as ARCHITECTURE.md D34.
 
 ---
 
@@ -41,10 +50,57 @@ known wasteful resources plus the oversized VM; no credentials required anywhere
 
 ---
 
-## Phase 2 — MCP Azure tool server
+## Phase 2 — Full specialist graph, observability and model routing
+
+**Goal:** the complete six-specialist graph from CLAUDE.md section 5, with a
+supervisor owning conditional routing, tracing and per-run metrics, and an observable
+model-routing seam. Still mock- and fake-runnable end to end: no new secrets, CI
+stays offline.
+
+Milestone: *Phase 2 - Full specialist graph, observability and model routing*.
+
+- [x] Root-Cause Analyst node, LLM-assisted over Scout evidence only (#3)
+- [x] Savings Estimator as its own node, arithmetic only, no LLM import (#4)
+- [x] Expand the deterministic detector set: stale snapshot, idle SQL database,
+      oversized App Service plan, unused reservation (#5)
+- [x] Rank recommendations by savings, risk and confidence, with an LLM-authored
+      ranking rationale (#6)
+- [x] Supervisor node and the conditional routing seam: retry, escalate,
+      require-approval, short-circuit (#7)
+- [x] Richer `ClientReport`: root causes, ranking inputs, per-waste-kind breakdown,
+      deterministic per-client totals, approval queue (#8)
+- [x] Langfuse tracing around the run and every LLM call, a no-op if unconfigured and
+      never a hard dependency; per-run token, cost and latency metrics (#9)
+- [x] Observable model-routing seam: light tasks to a small model, heavier reasoning
+      to a larger one, with the choice recorded in the trace (#10)
+- [x] `scripts/refresh_prices.py` pulling the public Azure Retail Prices API into the
+      committed snapshot; run manually, never in CI (#11)
+- [x] ARCHITECTURE.md decision log and graph diagram updated; ROADMAP progress ticked
+      (#12)
+
+**Exit criteria (met):** the six-specialist graph runs end to end on the mock estate
+with zero credentials; detection and every monetary figure remain deterministic; a
+trace span and a `RunMetrics` record are produced per run; 390 tests pass at 99%
+coverage, with `domain`, `graph` and `guardrails` at 98-100%; `ruff`, `ruff format`
+and `pyright` (strict on `src`) all clean.
+
+**Deliberately *not* in this phase:** the approval-gate adapters and the durable
+interrupt (Phase 7), real LLM backends (Phase 3), and statistical cost-anomaly
+detection (Phase 3, where real cost history makes it calibratable).
+
+**New dependencies to flag:** `langfuse` as an *optional* extra only. It is imported
+lazily behind a `Tracer` protocol so that tracing is never a hard dependency, CI does
+not install it, and the suite passes without it.
+
+---
+
+## Phase 3 — MCP Azure tool server and real backends
 
 **Goal:** all cloud access moves behind a typed, read-only MCP tool boundary, with a
-real Azure implementation alongside the mock.
+real Azure implementation alongside the mock, and the real LLM backends behind the
+routing seam Phase 2 built.
+
+This is the first phase that needs credentials. Everything before it runs offline.
 
 - [ ] FastMCP server exposing Azure tools with typed schemas
 - [ ] Tool wrappers: Cost Management (actuals, forecast), Resource Graph (inventory),
@@ -58,9 +114,15 @@ real Azure implementation alongside the mock.
 - [ ] Credential handling via `DefaultAzureCredential`, env-configured, never in code
 - [ ] Integration tests against the MCP server using the mock backend
 - [ ] `MODE=real` smoke path, manually verified, excluded from CI
+- [ ] Real LLM adapters implemented behind the Phase 2 routing seam: Azure OpenAI
+      primary, Gemini fallback. Moved here from the original Phase 3 because they
+      need credentials and CI must stay offline.
+- [ ] Statistical cost-anomaly detection over the cost series, emitting
+      `CostAnomaly`. Moved here because real cost history is what makes the
+      thresholds calibratable.
 - [ ] `Dockerfile` and `docker-compose.yml` (CLAUDE.md section 4). Deliberately
       deferred from Phase 1: compose is specified as app + postgres-with-pgvector,
-      and Postgres has nothing to do until memory lands in Phase 4. Phase 2 adds
+      and Postgres has nothing to do until memory lands in Phase 4. This phase adds
       the app image; Phase 4 adds the Postgres service.
 
 **Exit criteria:** the Phase 1 graph runs unchanged against the MCP boundary in mock
@@ -68,34 +130,7 @@ mode; CI still needs no secrets; a real-mode read-only sweep works against one l
 subscription.
 
 **New dependencies to flag:** `fastmcp`, `azure-identity`, `azure-mgmt-*`,
-`azure-mgmt-costmanagement`, `azure-mgmt-resourcegraph`.
-
----
-
-## Phase 3 — Full specialist agents and the supervisor
-
-**Goal:** the complete agent graph from ARCHITECTURE.md section 2, with real
-conditional routing and a working approval gate.
-
-- [ ] Supervisor node owning all conditional routing (retry, escalate, approve, skip)
-- [ ] Root-Cause Analyst node, LLM-assisted over Scout evidence only
-- [ ] Savings Estimator as its own node, arithmetic only, no LLM import
-- [ ] Expand the detector set: stale dev/test resources, unused reservations,
-      egress anomalies, oversized App Service plans, idle SQL
-- [ ] Statistical cost-anomaly detection over the cost series
-- [ ] Policy store as data, with the built-in action-class floor enforced
-- [ ] Approval gate as a durable LangGraph interrupt
-- [ ] `LocalCLIGate`: prompt an operator, record and persist the `ApprovalDecision`
-- [ ] Resume-after-approval path, tested end to end
-- [ ] `AuditEvent` emission at every node, persisted and queryable
-- [ ] Langfuse tracing wired, a no-op when unconfigured
-- [ ] Real LLM adapters implemented: Azure OpenAI primary, Gemini fallback
-- [ ] Task-based model routing table
-
-**Exit criteria:** a destructive recommendation halts the graph, persists, and
-resumes correctly on a recorded decision after the process has exited and restarted.
-
-**New dependencies to flag:** `langfuse`, `openai` (Azure OpenAI),
+`azure-mgmt-costmanagement`, `azure-mgmt-resourcegraph`, `openai` (Azure OpenAI) and
 `google-genai`.
 
 ---
@@ -160,6 +195,13 @@ subset on every commit; an intentionally mis-classified destructive action fails
 - [ ] Groundedness assertion in tests: every number in the rendered report traces to
       a state field
 - [ ] CLI `costsentinel report` to render a stored run
+- [ ] **Portfolio roll-up:** a provider-level executive view totalling savings,
+      findings and approval backlog *across all clients*, as a deliberate
+      exception to the per-client reporting rule. It is for the managed-service
+      provider's own leadership, never shared with a client, so it must not reuse
+      `ClientReport`; it needs its own `PortfolioRollup` type, its own access
+      control, and a test asserting it is unreachable from any client-scoped path.
+      Totals are summed deterministically from per-client reports, never modelled.
 
 **Exit criteria:** a Markdown and a PDF report are produced from a stored run, and a
 test asserts no ungrounded number appears in either.
@@ -169,9 +211,18 @@ template engine (`jinja2`).
 
 ---
 
-## Phase 7 — Approval-gate adapters (Teams and Slack)
+## Phase 7 — The approval gate and its adapters
 
-**Goal:** approvals happen where the humans already are.
+**Goal:** a gated action halts the graph until a human decides, wherever that human
+already works.
+
+The durable interrupt and the local CLI gate moved here from the original Phase 3:
+Phase 2 delivers the routing seam that routes to the gate, and the gate
+implementations belong with the adapters that drive them.
+
+- [ ] Approval gate as a durable LangGraph interrupt at the Policy Guard boundary
+- [ ] `LocalCLIGate`: prompt an operator, record and persist the `ApprovalDecision`
+- [ ] Resume-after-approval path, tested end to end across a process restart
 
 - [ ] Teams adapter: adaptive card with the proposal, savings and risk class
 - [ ] Slack adapter: Block Kit message with approve and reject actions
@@ -181,8 +232,9 @@ template engine (`jinja2`).
 - [ ] Timeout and escalation policy (no decision never means approved)
 - [ ] Adapters tested against recorded payloads, with no live workspace in CI
 
-**Exit criteria:** a destructive recommendation is approved from Teams or Slack and
-the halted run resumes on that decision.
+**Exit criteria:** a destructive recommendation halts the graph and persists; the
+process exits; the run then resumes correctly on a decision recorded from the CLI,
+from Teams or from Slack.
 
 **New dependencies to flag:** `slack-sdk`, an HTTP client, and a signature
 verification library.

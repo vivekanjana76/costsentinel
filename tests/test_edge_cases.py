@@ -200,10 +200,12 @@ def test_real_azure_provider_methods_all_refuse() -> None:
     stub = AzureLiveProvider.__new__(AzureLiveProvider)
     assert stub.name == "azure-live"
 
-    with pytest.raises(ProviderNotConfiguredError, match="Phase 2"):
+    with pytest.raises(ProviderNotConfiguredError, match="Phase 3"):
         stub.list_subscriptions()
     with pytest.raises(ProviderNotConfiguredError):
         stub.list_resources("sub-1")
+    with pytest.raises(ProviderNotConfiguredError):
+        stub.list_reservations()
     with pytest.raises(ProviderNotConfiguredError):
         stub.get_cost_series("sub-1")
     with pytest.raises(ProviderNotConfiguredError):

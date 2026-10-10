@@ -27,13 +27,14 @@ from costsentinel.domain.common import (
 class WasteKind(StrEnum):
     """The categories of waste CostSentinel detects.
 
-    Phase 1 implements the first four. The remainder are declared here because the
+    Phase 2 implements eight of these. The remainder are declared here because the
     report, the policy store and the eval dataset schema all key off this enum, and
     adding a member later should not be a breaking change for them.
     """
 
     ORPHANED_MANAGED_DISK = "orphaned_managed_disk"
     UNATTACHED_PUBLIC_IP = "unattached_public_ip"
+    STALE_SNAPSHOT = "stale_snapshot"
     IDLE_VIRTUAL_MACHINE = "idle_virtual_machine"
     OVERSIZED_VIRTUAL_MACHINE = "oversized_virtual_machine"
     STALE_NON_PRODUCTION_RESOURCE = "stale_non_production_resource"

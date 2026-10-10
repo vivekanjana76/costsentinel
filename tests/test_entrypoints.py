@@ -144,7 +144,7 @@ def test_factory_passes_the_seed_through(tmp_path: Path) -> None:
 def test_real_mode_fails_fast_with_a_clear_message(settings: Settings) -> None:
     """Not implemented until Phase 2 -- and it says so rather than half-working."""
     real = settings.model_copy(update={"mode": RunMode.REAL})
-    with pytest.raises(ProviderNotConfiguredError, match="Phase 2"):
+    with pytest.raises(ProviderNotConfiguredError, match="Phase 3"):
         get_provider(real)
 
 
@@ -260,10 +260,14 @@ def test_scan_summary_names_the_wasteful_resources(
         "vm-analytics-01",
         "pip-legacy-api",
         "disk-portal-legacy-snapshot",
+        "snap-web-01-pre-upgrade",
+        "sql-dev-sandbox",
+        "nw-compute-dsv5-3y",
+        "app-portal-plan",
     ):
         assert name in out
     assert "Awaiting approval:" in out
-    assert "5 finding(s)" in out
+    assert "10 finding(s)" in out
 
 
 def test_config_command_reports_the_active_backends(
@@ -282,7 +286,7 @@ def test_cli_reports_a_backend_failure_as_exit_1(
     real = settings.model_copy(update={"mode": RunMode.REAL})
     monkeypatch.setattr("costsentinel.cli.get_settings", lambda: real)
     assert main(["scan"]) == 1
-    assert "Phase 2" in capsys.readouterr().err
+    assert "Phase 3" in capsys.readouterr().err
 
 
 def test_render_json_round_trips(settings: Settings) -> None:
@@ -297,7 +301,7 @@ def test_money_serialises_as_a_decimal_string(settings: Settings) -> None:
     payload = json.loads(render_json(result))
     amount = payload["reports"][0]["totals"]["projected_monthly_savings"]["amount"]
     assert isinstance(amount, str)
-    assert amount == "86.06"
+    assert amount == "208.70"
 
 
 def test_summarise_handles_an_empty_sweep() -> None:
@@ -344,12 +348,16 @@ def test_post_scan_narrowed_to_one_client(client: TestClient) -> None:
     assert len(body["reports"]) == 1
     report = body["reports"][0]
     assert report["client"] == CLIENT_NORTHWIND
-    assert report["totals"]["findings_count"] == 4
-    assert report["totals"]["projected_monthly_savings"]["amount"] == "970.63"
+    assert report["totals"]["findings_count"] == 8
+    assert report["totals"]["projected_monthly_savings"]["amount"] == "1350.41"
     assert {f["resource_name"] for f in report["findings"]} == {
         "vm-analytics-01",
         "vm-batch-02",
+        "nw-compute-dsv5-3y",
+        "sql-dev-sandbox",
         "disk-analytics-01-data",
+        "snap-web-01-pre-upgrade",
+        "snap-analytics-baseline",
         "pip-legacy-api",
     }
 
@@ -378,10 +386,28 @@ def test_post_scan_returns_503_when_a_backend_is_unavailable(settings: Settings)
     with TestClient(app) as test_client:
         response = test_client.post("/scan", json={})
     assert response.status_code == 503
-    assert "Phase 2" in response.json()["detail"]
+    assert "Phase 3" in response.json()["detail"]
 
 
 def test_openapi_schema_is_served(client: TestClient) -> None:
     schema = client.get("/openapi.json").json()
     assert "/scan" in schema["paths"]
     assert "/health" in schema["paths"]
+
+
+def test_scan_result_json_carries_run_metrics(settings: Settings) -> None:
+    """Token, cost and latency travel with the sweep, not inside a client report."""
+    result = run_scan(client=CLIENT_MINISTRY, settings=settings)
+    payload = json.loads(render_json(result))
+    assert len(payload["metrics"]) == 1
+    metrics = payload["metrics"][0]
+    assert metrics["run_id"] == payload["reports"][0]["run_id"]
+    assert metrics["calls"]
+    assert all(call["routing"]["tier"] in {"small", "large"} for call in metrics["calls"])
+    # A client report is about their estate, not about what our model calls cost.
+    assert "metrics" not in payload["reports"][0]
+
+
+def test_health_reports_the_tracer(client: TestClient) -> None:
+    body = client.get("/health").json()
+    assert "disabled" in body["tracing"]

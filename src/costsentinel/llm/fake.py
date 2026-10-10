@@ -18,6 +18,8 @@ from decimal import Decimal, InvalidOperation
 
 from pydantic import BaseModel, ValidationError
 
+from costsentinel.domain.analysis import FactorKind
+from costsentinel.domain.observability import TokenUsage
 from costsentinel.domain.recommendations import ActionType
 from costsentinel.llm.base import (
     EvidenceBlock,
@@ -29,8 +31,13 @@ from costsentinel.llm.base import (
 from costsentinel.llm.contracts import (
     FindingNote,
     PlannedRemediation,
+    RankingNote,
+    RankingRationale,
     RemediationPlan,
     ReportNarrative,
+    RootCauseAnalysis,
+    RootCauseExplanation,
+    RootCauseFactor,
 )
 
 #: Evidence block labels the fake understands. The planner and report author
@@ -38,6 +45,27 @@ from costsentinel.llm.contracts import (
 LABEL_WASTE_SIGNAL = "waste_signal"
 LABEL_RECOMMENDATION = "recommendation"
 LABEL_TOTALS = "totals"
+LABEL_RANKED = "ranked_recommendation"
+
+#: Which observation names map to which contributing-factor category. The fake
+#: classifies factors from the evidence it was given rather than guessing, which
+#: keeps its output grounded in exactly the way the node then verifies.
+_FACTOR_BY_EVIDENCE: dict[str, FactorKind] = {
+    "age_days": FactorKind.LIFECYCLE,
+    "state": FactorKind.CONFIGURATION,
+    "attached_to": FactorKind.CONFIGURATION,
+    "associated_with": FactorKind.CONFIGURATION,
+    "sku": FactorKind.CONFIGURATION,
+    "cpu_avg_pct": FactorKind.UTILISATION,
+    "cpu_max_pct": FactorKind.UTILISATION,
+    "utilisation_pct": FactorKind.UTILISATION,
+    "connection_count": FactorKind.UTILISATION,
+    "network_in_gb": FactorKind.UTILISATION,
+    "term_months": FactorKind.PROCUREMENT,
+    "quantity": FactorKind.PROCUREMENT,
+    "reserved_sku": FactorKind.PROCUREMENT,
+    "expires_on": FactorKind.PROCUREMENT,
+}
 
 _UNRANKED = Decimal("-1")
 
@@ -178,12 +206,83 @@ def _build_report_narrative(prompt: Prompt) -> ReportNarrative:
     return ReportNarrative(executive_summary=summary, notes=notes)
 
 
+def _build_root_cause_analysis(prompt: Prompt) -> RootCauseAnalysis:
+    """Explain each signal strictly from the observations attached to it.
+
+    Every factor cites an ``observation.*`` field that was actually present in the
+    prompt, so the grounding check the node then runs passes by construction for the
+    fake and genuinely tests a real backend.
+    """
+    explanations: list[RootCauseExplanation] = []
+    for block in prompt.blocks(LABEL_WASTE_SIGNAL):
+        observations = [
+            (field.name.removeprefix("observation."), field.value)
+            for field in block.fields
+            if field.name.startswith("observation.")
+        ]
+        factors = tuple(
+            RootCauseFactor(
+                kind=_FACTOR_BY_EVIDENCE.get(name, FactorKind.UNKNOWN),
+                statement=f"{name.replace('_', ' ')} was observed as {value}",
+                evidence_name=name,
+            )
+            for name, value in observations
+        )
+        kind = (block.field("waste_kind") or "waste").replace("_", " ")
+        name = block.require("resource_name")
+        subscription = block.field("subscription_id") or "an unidentified subscription"
+        detail = (
+            "; ".join(f"{n.replace('_', ' ')} is {v}" for n, v in observations)
+            or "no observations were recorded"
+        )
+        explanations.append(
+            RootCauseExplanation(
+                signal_id=block.require("signal_id"),
+                narrative=(
+                    f"{name} in subscription {subscription} shows {kind} because "
+                    f"{detail}. Taken together these indicate the resource outlived "
+                    f"the workload it was provisioned for, and no change has been "
+                    f"made to it since."
+                ),
+                factors=factors,
+            )
+        )
+    return RootCauseAnalysis(explanations=tuple(explanations))
+
+
+def _build_ranking_rationale(prompt: Prompt) -> RankingRationale:
+    """Explain each computed rank, quoting the components verbatim."""
+    notes = tuple(
+        RankingNote(
+            recommendation_id=block.require("recommendation_id"),
+            rationale=(
+                f"Ranked {block.field('rank') or 'unranked'} of "
+                f"{block.field('rank_total') or 'several'}: "
+                f"{block.field('score_breakdown') or 'no breakdown supplied'}. "
+                f"Worth {block.field('monthly_saving') or 'an unknown amount'} per "
+                f"month at {block.field('action_class') or 'an unclassified'} risk, "
+                f"with detector confidence "
+                f"{block.field('confidence') or 'unknown'}."
+            ),
+        )
+        for block in prompt.blocks(LABEL_RANKED)
+    )
+    return RankingRationale(notes=notes)
+
+
 #: Which contracts the fake can satisfy. A request for anything else is a loud
 #: failure rather than an empty object, so a new node cannot quietly get a stub.
 _BUILDERS: dict[type[BaseModel], Callable[[Prompt], BaseModel]] = {
     RemediationPlan: _build_remediation_plan,
     ReportNarrative: _build_report_narrative,
+    RootCauseAnalysis: _build_root_cause_analysis,
+    RankingRationale: _build_ranking_rationale,
 }
+
+#: Deterministic token accounting. A real backend reports usage; the fake derives it
+#: from the size of what it was given and produced, so per-run metrics are
+#: assertable in a test without being fabricated out of nothing.
+CHARS_PER_TOKEN = 4
 
 
 class FakeLLM:
@@ -196,6 +295,7 @@ class FakeLLM:
     def __init__(self) -> None:
         """Start with an empty call log."""
         self.calls: list[tuple[str, Prompt]] = []
+        self.usages: list[TokenUsage] = []
 
     @property
     def name(self) -> str:
@@ -239,7 +339,27 @@ class FakeLLM:
             raise LLMValidationError(msg)
 
         try:
-            return schema.model_validate(builder(prompt).model_dump())
+            response = schema.model_validate(builder(prompt).model_dump())
         except ValidationError as exc:
             msg = f"FakeLLM produced a response that failed {schema.__name__} validation: {exc}"
             raise LLMValidationError(msg) from exc
+
+        self.usages.append(self.usage_for(prompt, response))
+        return response
+
+    def usage_for(self, prompt: Prompt, response: BaseModel) -> TokenUsage:
+        """Deterministic token usage for one call.
+
+        Derived from the rendered prompt and response sizes at a fixed
+        characters-per-token ratio. It is an approximation, and it is labelled as
+        one -- but it is a *reproducible* approximation, which is what makes the
+        per-run metrics testable without a real backend.
+        """
+        return TokenUsage(
+            prompt_tokens=len(prompt.render()) // CHARS_PER_TOKEN,
+            completion_tokens=len(response.model_dump_json()) // CHARS_PER_TOKEN,
+        )
+
+    def last_usage(self) -> TokenUsage | None:
+        """Usage from the most recent call, or ``None`` if there has been none."""
+        return self.usages[-1] if self.usages else None

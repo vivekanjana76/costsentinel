@@ -5,6 +5,10 @@ reasons over the single :class:`~costsentinel.domain.estate.Estate` snapshot it 
 in state, so the whole sweep sees one consistent view of the world rather than
 re-querying and racing against changes.
 
+Reservations are fetched alongside resources and run through their own detector,
+because a commitment is not a resource and its waste is money already spent rather
+than a charge that can simply be stopped.
+
 Phase 3 adds statistical cost-anomaly detection over the cost series this node
 already retrieves.
 """
@@ -14,12 +18,13 @@ from __future__ import annotations
 from datetime import datetime
 
 from costsentinel.agents.base import Node, NodeUpdate, audit, with_audit
-from costsentinel.agents.detectors import run_detectors
+from costsentinel.agents.detectors import run_detectors, run_reservation_detectors
 from costsentinel.config import Settings
 from costsentinel.domain.common import utc_now
 from costsentinel.domain.estate import (
     CostSeries,
     Estate,
+    Reservation,
     Resource,
     ResourceMetrics,
     Subscription,
@@ -58,6 +63,10 @@ def make_anomaly_scout(*, provider: AzureProvider, settings: Settings) -> Node:
         """Read one client's estate and emit the waste signals found in it."""
         subscriptions = tuple(provider.list_subscriptions(client=state.client))
 
+        reservations: tuple[Reservation, ...] = tuple(
+            provider.list_reservations(client=state.client)
+        )
+
         resources: list[Resource] = []
         cost_series: list[CostSeries] = []
         metrics: list[ResourceMetrics] = []
@@ -80,6 +89,7 @@ def make_anomaly_scout(*, provider: AzureProvider, settings: Settings) -> Node:
             resources=tuple(resources),
             cost_series=tuple(cost_series),
             metrics=tuple(metrics),
+            reservations=reservations,
         )
 
         signals: list[WasteSignal] = []
@@ -92,6 +102,12 @@ def make_anomaly_scout(*, provider: AzureProvider, settings: Settings) -> Node:
                     as_of=estate.retrieved_at,
                 )
             )
+
+        signals.extend(
+            run_reservation_detectors(
+                estate.reservations, client=state.client, as_of=estate.retrieved_at
+            )
+        )
 
         # Deterministic ordering, so a checkpoint resume and a re-run agree.
         signals.sort(key=lambda s: (s.subscription_id, s.resource_id, s.kind.value))
@@ -108,6 +124,7 @@ def make_anomaly_scout(*, provider: AzureProvider, settings: Settings) -> Node:
                     "resources": str(len(resources)),
                     "cost_series": str(len(cost_series)),
                     "metrics": str(len(metrics)),
+                    "reservations": str(len(reservations)),
                     "window_days": str(WINDOW_DAYS),
                 },
             )
@@ -140,6 +157,7 @@ def make_anomaly_scout(*, provider: AzureProvider, settings: Settings) -> Node:
                 "provider": provider.name,
                 "subscriptions": len(subscriptions),
                 "resources": len(resources),
+                "reservations": len(reservations),
                 "signals": len(signals),
             },
         )

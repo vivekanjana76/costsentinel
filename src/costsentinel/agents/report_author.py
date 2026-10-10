@@ -4,8 +4,13 @@ The split that matters: the model writes *prose*, the node assembles *figures*.
 Every monetary value on the report is a
 :class:`~costsentinel.domain.common.MoneyAmount` carried through from state --
 which, because that type refuses LLM provenance, means no number on a client report
-can have come from a model. The executive summary is model-derived and says so
-through its own :class:`~costsentinel.domain.common.Provenance`.
+can have come from a model. Per-client totals are summed from the findings, so the
+headline and the detail cannot disagree. The executive summary is model-derived and
+says so through its own :class:`~costsentinel.domain.common.Provenance`.
+
+The report also carries the things a client needs in order to *disagree* with it:
+the root cause behind each finding, the computed ranking components, the evidence,
+and the preconditions that would be re-checked before anything changed.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ from costsentinel.domain.report import (
     ReportPeriod,
     ReportSeverity,
     ReportTotals,
+    WasteKindSummary,
 )
 from costsentinel.domain.signals import WasteKind
 from costsentinel.domain.state import ScanState
@@ -106,16 +112,74 @@ def _period(state: ScanState) -> ReportPeriod:
     )
 
 
-def _recommendation_block(
-    state: ScanState,
-    recommendation: Recommendation,
-) -> EvidenceBlock:
+def _waste_breakdown(findings: tuple[ReportFinding, ...]) -> tuple[WasteKindSummary, ...]:
+    """Group findings by waste kind, summing each group deterministically.
+
+    Ordered by monthly saving so the biggest category leads. A group whose savings
+    are all unknown is still reported, with unknown totals, rather than dropped.
+    """
+    kinds: dict[WasteKind, list[ReportFinding]] = {}
+    for finding in findings:
+        kinds.setdefault(finding.waste_kind, []).append(finding)
+
+    summaries: list[WasteKindSummary] = []
+    for kind, group in kinds.items():
+        monthly_amounts = [
+            f.monthly_saving.amount for f in group if f.monthly_saving.amount is not None
+        ]
+        annual_amounts = [
+            f.annual_saving.amount for f in group if f.annual_saving.amount is not None
+        ]
+        if monthly_amounts:
+            currency = next(
+                f.monthly_saving.currency for f in group if f.monthly_saving.amount is not None
+            )
+            monthly = MoneyAmount.of(
+                sum(monthly_amounts, start=Decimal(0)),
+                currency=currency,
+                provenance=Provenance.calculated(
+                    f"sum of {len(monthly_amounts)} priced {kind.value} finding(s), monthly"
+                ),
+            )
+            annual = MoneyAmount.of(
+                sum(annual_amounts, start=Decimal(0)),
+                currency=currency,
+                provenance=Provenance.calculated(
+                    f"sum of {len(annual_amounts)} priced {kind.value} finding(s), annual"
+                ),
+            )
+        else:
+            reason = f"no {kind.value} finding could be priced"
+            monthly = MoneyAmount.undetermined(reason)
+            annual = MoneyAmount.undetermined(reason)
+        summaries.append(
+            WasteKindSummary(
+                waste_kind=kind,
+                findings_count=len(group),
+                monthly_saving=monthly,
+                annual_saving=annual,
+            )
+        )
+
+    return tuple(
+        sorted(
+            summaries,
+            key=lambda s: (
+                -(s.monthly_saving.amount or Decimal(-1)),
+                s.waste_kind.value,
+            ),
+        )
+    )
+
+
+def _recommendation_block(state: ScanState, recommendation: Recommendation) -> EvidenceBlock:
     classification = state.classification_for(recommendation.recommendation_id)
     requires_approval = (
         classification.requires_approval
         if classification
         else recommendation.risk_class.requires_approval
     )
+    cause = state.root_cause_for(recommendation.signal_id)
     return EvidenceBlock(
         label=LABEL_RECOMMENDATION,
         fields=(
@@ -129,6 +193,7 @@ def _recommendation_block(
             EvidenceField(name="monthly_saving", value=recommendation.savings.monthly.display()),
             EvidenceField(name="annual_saving", value=recommendation.savings.annual.display()),
             EvidenceField(name="rationale", value=recommendation.rationale),
+            EvidenceField(name="root_cause", value=cause.narrative if cause else ""),
         ),
     )
 
@@ -159,6 +224,12 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
             and c.is_automatable
             and not c.requires_approval
         )
+        blocked = sum(
+            1
+            for rec in state.recommendations
+            if (c := state.classification_for(rec.recommendation_id)) is not None
+            and not c.is_automatable
+        )
 
         period = _period(state)
         subscriptions = tuple(
@@ -176,20 +247,24 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
                 EvidenceField(name="projected_annual_savings", value=annual.display()),
                 EvidenceField(name="findings_count", value=str(len(state.recommendations))),
                 EvidenceField(name="awaiting_approval_count", value=str(len(gated))),
+                EvidenceField(name="blocked_count", value=str(blocked)),
                 EvidenceField(name="unpriced_findings_count", value=str(unpriced)),
                 EvidenceField(name="period_days", value=str(period.days)),
             ),
         )
 
-        prompt = Prompt(
-            instruction=_INSTRUCTION,
-            output_contract=_OUTPUT_CONTRACT,
-            evidence=(
-                totals_block,
-                *(_recommendation_block(state, rec) for rec in state.recommendations),
+        narrative = llm.structured(
+            task=TASK_REPORT_PROSE,
+            prompt=Prompt(
+                instruction=_INSTRUCTION,
+                output_contract=_OUTPUT_CONTRACT,
+                evidence=(
+                    totals_block,
+                    *(_recommendation_block(state, rec) for rec in state.recommendations),
+                ),
             ),
+            schema=ReportNarrative,
         )
-        narrative = llm.structured(task=TASK_REPORT_PROSE, prompt=prompt, schema=ReportNarrative)
 
         findings = tuple(
             _finding(state, rec, narrative.note_for(rec.recommendation_id))
@@ -208,18 +283,27 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
         )
 
         notes: list[str] = [
-            "Phase 1 is read-only: CostSentinel has no execution path, so nothing in "
-            "this report has been or can be applied automatically.",
+            "CostSentinel has no execution path in this phase, so nothing in this "
+            "report has been or can be applied automatically.",
+            "Findings are ranked by a weighted composite of savings, safety and "
+            "detector confidence, not by savings alone. Each finding shows its own "
+            "breakdown.",
         ]
         if unpriced:
             notes.append(
                 f"{unpriced} finding(s) could not be priced from provider data and are "
                 f"excluded from the projected savings rather than assumed to be zero."
             )
+        if blocked:
+            notes.append(
+                f"{blocked} finding(s) are classified as blocked: they are reported as "
+                f"advice for a person to carry out by hand, and CostSentinel will not "
+                f"perform them however they are approved."
+            )
         if state.errors:
             notes.append(
-                f"{len(state.errors)} processing note(s) were recorded during this sweep; "
-                f"see the run's audit trail."
+                f"{len(state.errors)} processing note(s) were recorded during this "
+                f"sweep; see the run's audit trail."
             )
 
         report = ClientReport(
@@ -243,9 +327,13 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
                 findings_count=len(findings),
                 awaiting_approval_count=len(gated),
                 automatable_count=automatable,
+                blocked_count=blocked,
+                unpriced_findings_count=unpriced,
             ),
             findings=findings,
+            waste_breakdown=_waste_breakdown(findings),
             approval_queue=queue,
+            incomplete_reasons=state.escalations,
             notes=tuple(notes),
         )
 
@@ -258,10 +346,14 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
                 detail={
                     "findings": str(len(findings)),
                     "awaiting_approval": str(len(gated)),
+                    "blocked": str(blocked),
+                    "unpriced": str(unpriced),
                     "projected_monthly_savings": monthly.display(),
                     "projected_annual_savings": annual.display(),
                     "observed_monthly_spend": spend.display(),
                     "severity": report.severity.value,
+                    "waste_kinds": str(len(report.waste_breakdown)),
+                    "complete": str(report.is_complete).lower(),
                     "model": llm.name,
                 },
             ),
@@ -282,7 +374,10 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
                 "client": state.client,
                 "findings": len(findings),
                 "awaiting_approval": len(gated),
+                "blocked": blocked,
+                "unpriced": unpriced,
                 "severity": report.severity.value,
+                "complete": report.is_complete,
             },
         )
 
@@ -292,7 +387,9 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
 
 
 def _resource_count(state: ScanState) -> int:
-    return len(state.estate.resources) if state.estate else 0
+    if state.estate is None:
+        return 0
+    return len(state.estate.resources) + len(state.estate.reservations)
 
 
 def _resource_name(state: ScanState, recommendation_id: str) -> str:
@@ -309,6 +406,8 @@ def _resource_name(state: ScanState, recommendation_id: str) -> str:
 def _finding(state: ScanState, recommendation: Recommendation, note: str) -> ReportFinding:
     signal = state.signal(recommendation.signal_id)
     classification = state.classification_for(recommendation.recommendation_id)
+    cause = state.root_cause_for(recommendation.signal_id)
+    score = state.ranking_for(recommendation.recommendation_id)
     current_cost = (
         signal.monthly_cost
         if signal
@@ -330,8 +429,14 @@ def _finding(state: ScanState, recommendation: Recommendation, note: str) -> Rep
             if classification
             else recommendation.risk_class.requires_approval
         ),
+        confidence=recommendation.confidence,
         rationale=recommendation.rationale,
         note=note,
+        root_cause=cause.narrative if cause else "",
+        root_cause_factors=tuple(f.statement for f in cause.factors) if cause else (),
+        ranking_rationale=score.rationale if score else "",
+        ranking_breakdown=score.explain() if score else "",
+        ranking_composite=score.composite if score else None,
         evidence=tuple(f"{obs.name}: {obs.value}" for obs in (signal.evidence if signal else ())),
         preconditions=recommendation.preconditions,
         monthly_saving=recommendation.savings.monthly,

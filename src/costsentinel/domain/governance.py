@@ -37,6 +37,37 @@ class ActionClassification(Frozen):
     provenance: Provenance
 
 
+class RouteAction(StrEnum):
+    """What the supervisor decided to do next.
+
+    A closed vocabulary so routing is auditable: every transition in a run is one of
+    these, with a recorded reason, rather than an implicit consequence of control
+    flow.
+    """
+
+    PROCEED = "proceed"
+    RETRY = "retry"
+    ESCALATE = "escalate"
+    REQUIRE_APPROVAL = "require_approval"
+    SHORT_CIRCUIT = "short_circuit"
+    COMPLETE = "complete"
+
+
+class SupervisorDecision(Frozen):
+    """One routing decision, recorded so a sweep can be explained afterwards.
+
+    ``reason`` is mandatory. A retry or an escalation that does not say why it
+    happened is indistinguishable from a bug.
+    """
+
+    from_node: str
+    action: RouteAction
+    to_node: str
+    reason: str = Field(min_length=1)
+    attempt: int = Field(default=1, ge=1)
+    decided_at: datetime = Field(default_factory=utc_now)
+
+
 class Decision(StrEnum):
     """The outcome of an approval request.
 

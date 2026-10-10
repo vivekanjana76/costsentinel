@@ -14,6 +14,13 @@ from costsentinel.providers.base import (
     ProviderError,
     ProviderNotConfiguredError,
 )
+from costsentinel.providers.catalogue import (
+    CATALOGUE_PATH,
+    CatalogueError,
+    PriceCatalogue,
+    default_catalogue,
+    load_catalogue,
+)
 from costsentinel.providers.mock import (
     CLIENT_MINISTRY,
     CLIENT_NORTHWIND,
@@ -22,15 +29,20 @@ from costsentinel.providers.mock import (
 )
 
 __all__ = [
+    "CATALOGUE_PATH",
     "CLIENT_MINISTRY",
     "CLIENT_NORTHWIND",
     "MOCK_AS_OF",
     "AzureLiveProvider",
     "AzureProvider",
+    "CatalogueError",
     "MockAzureProvider",
+    "PriceCatalogue",
     "ProviderError",
     "ProviderNotConfiguredError",
+    "default_catalogue",
     "get_provider",
+    "load_catalogue",
 ]
 
 
@@ -40,7 +52,7 @@ def get_provider(settings: Settings) -> AzureProvider:
     Args:
         settings: Resolved configuration. ``MODE=mock`` (the default) yields the
             deterministic synthetic estate; ``MODE=real`` yields the live Azure
-            provider, which is not implemented until Phase 2.
+            provider, which is not implemented until Phase 3.
 
     Returns:
         An object satisfying :class:`AzureProvider`.

@@ -20,7 +20,13 @@ from datetime import datetime
 from decimal import Decimal
 
 from costsentinel.domain.common import Provenance, ProvenanceSource, Verification
-from costsentinel.domain.estate import Resource, ResourceKind, ResourceMetrics, ResourceState
+from costsentinel.domain.estate import (
+    Reservation,
+    Resource,
+    ResourceKind,
+    ResourceMetrics,
+    ResourceState,
+)
 from costsentinel.domain.signals import Observation, WasteKind, WasteSignal
 
 # --- thresholds ------------------------------------------------------------
@@ -39,6 +45,21 @@ OVERSIZED_CPU_MAX_PCT = Decimal("40.0")
 #: Minimum observation window before a utilisation-based conclusion is drawn.
 MIN_OBSERVATION_DAYS = 7
 
+#: Beyond this age, a snapshot is past any plausible restore window and is treated
+#: as retained by neglect rather than by policy.
+STALE_SNAPSHOT_AGE_DAYS = 180
+
+#: A database with no connections at all over the window is idle. Zero is used
+#: rather than a small threshold because a single connection is evidence of a
+#: consumer, and the question this detector asks is whether anything uses it.
+IDLE_SQL_MAX_CONNECTIONS = 0
+
+#: At or below this utilisation, an App Service plan carries capacity it never uses.
+OVERSIZED_PLAN_UTILISATION_PCT = Decimal("25.0")
+
+#: Below this utilisation, a reservation pays for commitment nobody consumes.
+UNUSED_RESERVATION_UTILISATION_PCT = Decimal("60.0")
+
 # --- confidences -----------------------------------------------------------
 # An unattached disk is a near-certain orphan: the provider states the attachment
 # directly. A rightsizing conclusion depends on the observation window being
@@ -47,12 +68,25 @@ _CONFIDENCE_ORPHANED_DISK = Decimal("0.95")
 _CONFIDENCE_UNATTACHED_IP = Decimal("0.95")
 _CONFIDENCE_IDLE_VM = Decimal("0.90")
 _CONFIDENCE_OVERSIZED_VM = Decimal("0.75")
+#: A snapshot age is a provider fact, so detection is certain; what is less certain
+#: is whether anyone still wants it, which is what the preconditions cover.
+_CONFIDENCE_STALE_SNAPSHOT = Decimal("0.85")
+#: Zero connections is unambiguous, but a quarterly job could still need the
+#: database, so this is not scored as highly as a structural orphan.
+_CONFIDENCE_IDLE_SQL = Decimal("0.80")
+_CONFIDENCE_OVERSIZED_PLAN = Decimal("0.70")
+#: Reservation utilisation comes straight from the billing system.
+_CONFIDENCE_UNUSED_RESERVATION = Decimal("0.92")
 
 _KIND_SLUG: dict[WasteKind, str] = {
     WasteKind.ORPHANED_MANAGED_DISK: "orphdisk",
     WasteKind.UNATTACHED_PUBLIC_IP: "freepip",
     WasteKind.IDLE_VIRTUAL_MACHINE: "idlevm",
     WasteKind.OVERSIZED_VIRTUAL_MACHINE: "bigvm",
+    WasteKind.STALE_SNAPSHOT: "oldsnap",
+    WasteKind.IDLE_SQL_DATABASE: "idlesql",
+    WasteKind.OVERSIZED_APP_SERVICE_PLAN: "bigplan",
+    WasteKind.UNUSED_RESERVATION: "deadrsv",
 }
 
 
@@ -296,15 +330,207 @@ def detect_oversized_virtual_machine(
     )
 
 
+def detect_stale_snapshot(
+    resource: Resource,
+    metrics: ResourceMetrics | None,
+    *,
+    client: str,
+    as_of: datetime,
+) -> WasteSignal | None:
+    """A snapshot retained far past any plausible restore window.
+
+    Age is a provider fact, so the detection itself is certain. What is uncertain is
+    whether anyone still wants the snapshot, which is why the remediation carries
+    preconditions about images, restore points and backup policies rather than
+    treating age alone as permission to delete.
+
+    A snapshot with no creation time yields nothing: with no age there is no
+    conclusion to draw.
+    """
+    _ = metrics
+    if resource.kind is not ResourceKind.SNAPSHOT:
+        return None
+    age = _age_days(resource, as_of)
+    if age is None or age <= STALE_SNAPSHOT_AGE_DAYS:
+        return None
+
+    source = resource.provenance
+    evidence = [
+        _observation("age_days", str(age), source),
+        _observation("stale_threshold_days", str(STALE_SNAPSHOT_AGE_DAYS), source),
+        _observation("sku", resource.sku or "unknown", source),
+        _observation("monthly_cost", resource.monthly_cost.display(), source),
+    ]
+    return _signal(
+        kind=WasteKind.STALE_SNAPSHOT,
+        resource=resource,
+        client=client,
+        detector="stale_snapshot/v1",
+        confidence=_CONFIDENCE_STALE_SNAPSHOT,
+        evidence=evidence,
+    )
+
+
+def detect_idle_sql_database(
+    resource: Resource,
+    metrics: ResourceMetrics | None,
+    *,
+    client: str,
+    as_of: datetime,
+) -> WasteSignal | None:
+    """A database nothing connected to over the whole observation window.
+
+    Keyed on connection count rather than CPU, because a database can burn CPU on
+    internal maintenance while serving nobody, and can serve a trickle of vital
+    queries at near-zero CPU. Whether anything connected is the question that
+    matters.
+
+    A ``connection_count`` of ``None`` means connections were not measured, which
+    yields nothing -- not idle.
+    """
+    _ = as_of
+    if resource.kind is not ResourceKind.SQL_DATABASE:
+        return None
+    if metrics is None or metrics.connection_count is None:
+        return None
+    if metrics.observation_days < MIN_OBSERVATION_DAYS:
+        return None
+    if metrics.connection_count > IDLE_SQL_MAX_CONNECTIONS:
+        return None
+
+    source = metrics.provenance
+    evidence = [
+        _observation("connection_count", str(metrics.connection_count), source),
+        _observation("connection_threshold", str(IDLE_SQL_MAX_CONNECTIONS), source),
+        _observation("observation_days", str(metrics.observation_days), source),
+        _observation("sku", resource.sku or "unknown", resource.provenance),
+        _observation("monthly_cost", resource.monthly_cost.display(), resource.provenance),
+    ]
+    if metrics.cpu_avg_pct is not None:
+        evidence.append(_observation("cpu_avg_pct", str(metrics.cpu_avg_pct), source))
+    return _signal(
+        kind=WasteKind.IDLE_SQL_DATABASE,
+        resource=resource,
+        client=client,
+        detector="idle_sql_database/v1",
+        confidence=_CONFIDENCE_IDLE_SQL,
+        evidence=evidence,
+    )
+
+
+def detect_oversized_app_service_plan(
+    resource: Resource,
+    metrics: ResourceMetrics | None,
+    *,
+    client: str,
+    as_of: datetime,
+) -> WasteSignal | None:
+    """An App Service plan carrying capacity its apps never use."""
+    _ = as_of
+    if resource.kind is not ResourceKind.APP_SERVICE_PLAN:
+        return None
+    if metrics is None or metrics.utilisation_pct is None:
+        return None
+    if metrics.observation_days < MIN_OBSERVATION_DAYS:
+        return None
+    if metrics.utilisation_pct > OVERSIZED_PLAN_UTILISATION_PCT:
+        return None
+
+    source = metrics.provenance
+    evidence = [
+        _observation("utilisation_pct", str(metrics.utilisation_pct), source),
+        _observation("utilisation_threshold_pct", str(OVERSIZED_PLAN_UTILISATION_PCT), source),
+        _observation("observation_days", str(metrics.observation_days), source),
+        _observation("sku", resource.sku or "unknown", resource.provenance),
+        _observation("monthly_cost", resource.monthly_cost.display(), resource.provenance),
+    ]
+    if metrics.cpu_max_pct is not None:
+        evidence.append(_observation("cpu_max_pct", str(metrics.cpu_max_pct), source))
+    return _signal(
+        kind=WasteKind.OVERSIZED_APP_SERVICE_PLAN,
+        resource=resource,
+        client=client,
+        detector="oversized_app_service_plan/v1",
+        confidence=_CONFIDENCE_OVERSIZED_PLAN,
+        evidence=evidence,
+    )
+
+
+def detect_unused_reservation(
+    reservation: Reservation,
+    *,
+    client: str,
+    as_of: datetime,
+) -> WasteSignal | None:
+    """A capacity commitment being paid for and not consumed.
+
+    This waste is unlike the rest: the money is already committed, so the figure is
+    not a saving waiting to be taken but a loss already being incurred. Recovering
+    any of it means exchanging or re-scoping the reservation, never deleting
+    something -- which is why its only forceful action is an exchange.
+
+    Takes a :class:`Reservation` rather than a :class:`Resource`, so it has its own
+    signature and sits outside the per-resource detector sweep.
+    """
+    _ = as_of
+    if reservation.utilisation_pct is None:
+        return None
+    if reservation.utilisation_pct >= UNUSED_RESERVATION_UTILISATION_PCT:
+        return None
+
+    source = reservation.provenance
+    evidence = [
+        _observation("utilisation_pct", str(reservation.utilisation_pct), source),
+        _observation("utilisation_threshold_pct", str(UNUSED_RESERVATION_UTILISATION_PCT), source),
+        _observation("reserved_sku", reservation.reserved_sku, source),
+        _observation("quantity", str(reservation.quantity), source),
+        _observation("term_months", str(reservation.term_months), source),
+        _observation(
+            "monthly_amortised_cost", reservation.monthly_amortised_cost.display(), source
+        ),
+    ]
+    if reservation.expires_on is not None:
+        evidence.append(_observation("expires_on", reservation.expires_on.isoformat(), source))
+
+    detector = "unused_reservation/v1"
+    return WasteSignal(
+        signal_id=signal_id_for(WasteKind.UNUSED_RESERVATION, reservation.reservation_id),
+        kind=WasteKind.UNUSED_RESERVATION,
+        client=client,
+        subscription_id=reservation.scope_subscription_id or "shared-scope",
+        resource_id=reservation.reservation_id,
+        resource_name=reservation.name,
+        resource_kind="reservation",
+        evidence=tuple(evidence),
+        monthly_cost=reservation.monthly_amortised_cost,
+        confidence=_CONFIDENCE_UNUSED_RESERVATION,
+        detector=detector,
+        detected_at=reservation.provenance.retrieved_at,
+        provenance=Provenance(
+            source=ProvenanceSource.CALCULATION,
+            retrieved_at=reservation.provenance.retrieved_at,
+            reference=f"detector:{detector} over {reservation.provenance.source.value}",
+            verification=Verification.VERIFIED,
+        ),
+    )
+
+
 #: Signature every detector satisfies.
 Detector = Callable[..., "WasteSignal | None"]
 
-#: The active detector set. Phase 3 extends this; the Phase 5 evals score it.
+#: The per-resource detector set. The Phase 5 evals score it.
+#:
+#: Reservation detection is deliberately absent: a reservation is not a resource, so
+#: :func:`detect_unused_reservation` has its own signature and the Anomaly Scout runs
+#: it separately.
 DETECTORS: tuple[Detector, ...] = (
     detect_orphaned_managed_disk,
     detect_unattached_public_ip,
     detect_idle_virtual_machine,
     detect_oversized_virtual_machine,
+    detect_stale_snapshot,
+    detect_idle_sql_database,
+    detect_oversized_app_service_plan,
 )
 
 
@@ -315,6 +541,20 @@ def run_detectors(
     client: str,
     as_of: datetime,
 ) -> tuple[WasteSignal, ...]:
-    """Run every detector against one resource and collect what fired."""
+    """Run every per-resource detector and collect what fired."""
     found = (detector(resource, metrics, client=client, as_of=as_of) for detector in DETECTORS)
+    return tuple(signal for signal in found if signal is not None)
+
+
+def run_reservation_detectors(
+    reservations: Sequence[Reservation],
+    *,
+    client: str,
+    as_of: datetime,
+) -> tuple[WasteSignal, ...]:
+    """Run the reservation detectors over a client's commitments."""
+    found = (
+        detect_unused_reservation(reservation, client=client, as_of=as_of)
+        for reservation in reservations
+    )
     return tuple(signal for signal in found if signal is not None)
