@@ -301,7 +301,7 @@ def test_money_serialises_as_a_decimal_string(settings: Settings) -> None:
     payload = json.loads(render_json(result))
     amount = payload["reports"][0]["totals"]["projected_monthly_savings"]["amount"]
     assert isinstance(amount, str)
-    assert amount == "208.70"
+    assert amount == "149.58"
 
 
 def test_summarise_handles_an_empty_sweep() -> None:
@@ -349,7 +349,7 @@ def test_post_scan_narrowed_to_one_client(client: TestClient) -> None:
     report = body["reports"][0]
     assert report["client"] == CLIENT_NORTHWIND
     assert report["totals"]["findings_count"] == 8
-    assert report["totals"]["projected_monthly_savings"]["amount"] == "1350.41"
+    assert report["totals"]["projected_monthly_savings"]["amount"] == "1421.97"
     assert {f["resource_name"] for f in report["findings"]} == {
         "vm-analytics-01",
         "vm-batch-02",

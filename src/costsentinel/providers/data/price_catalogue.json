@@ -1,56 +1,794 @@
 {
-  "schema_version": 1,
-  "is_real_api_pull": false,
-  "retrieved_at": "2026-10-08T00:00:00+00:00",
-  "source": "curated representative values, NOT a live pull",
-  "provenance_note": "These figures are plausible synthetic prices committed so that tests and CI run offline against a fixed catalogue. They have NOT been fetched from Azure. Run `uv run python scripts/refresh_prices.py` to replace this file with a real Azure Retail Prices API pull, which sets is_real_api_pull to true. Savings assertions in tests are baselined against the values below and will need re-baselining after a refresh.",
+  "schema_version": 2,
+  "is_real_api_pull": true,
+  "retrieved_at": "2026-10-10T06:41:09.112543+00:00",
+  "source": "Azure Retail Prices API",
+  "provenance_note": "Fetched from the public Azure Retail Prices API by scripts/refresh_prices.py. Every price names the meter it came from, so any figure can be checked against Azure by hand. Pay-as-you-go Linux consumption rates only: Spot, Low Priority, Windows, DevTest and reservation meters are excluded. Hourly rates are multiplied by a 730-hour month. Per-GB rates are stored as rates, because turning one into a per-resource monthly price needs a capacity, and the capacity belongs to the resource rather than to the price.",
   "api_endpoint": "https://prices.azure.com/api/retail/prices",
   "api_version": "2023-01-01-preview",
   "currency": "USD",
   "hours_per_month": 730,
-  "base_region": "eastus",
-  "regions": {
-    "eastus": {
-      "multiplier": "1.00",
-      "basis": "base region; SKU prices below are quoted for this region directly"
-    },
-    "qatarcentral": {
-      "multiplier": "1.12",
-      "basis": "modelled uplift over the base region, not a fetched price; pass --region qatarcentral to refresh_prices.py to fetch it directly"
-    }
-  },
+  "regions": [
+    "eastus",
+    "qatarcentral"
+  ],
   "skus": [
-    {"sku": "Standard_D2s_v5", "applies_to": "virtual_machine", "family": "Dsv5", "vcpu": 2, "memory_gb": "8", "monthly_cost": "70.08"},
-    {"sku": "Standard_D4s_v5", "applies_to": "virtual_machine", "family": "Dsv5", "vcpu": 4, "memory_gb": "16", "monthly_cost": "140.16"},
-    {"sku": "Standard_D8s_v5", "applies_to": "virtual_machine", "family": "Dsv5", "vcpu": 8, "memory_gb": "32", "monthly_cost": "280.32"},
-    {"sku": "Standard_D16s_v5", "applies_to": "virtual_machine", "family": "Dsv5", "vcpu": 16, "memory_gb": "64", "monthly_cost": "560.64"},
-    {"sku": "Standard_D32s_v5", "applies_to": "virtual_machine", "family": "Dsv5", "vcpu": 32, "memory_gb": "128", "monthly_cost": "1121.28"},
-    {"sku": "Standard_E2s_v5", "applies_to": "virtual_machine", "family": "Esv5", "vcpu": 2, "memory_gb": "16", "monthly_cost": "91.98"},
-    {"sku": "Standard_E4s_v5", "applies_to": "virtual_machine", "family": "Esv5", "vcpu": 4, "memory_gb": "32", "monthly_cost": "183.96"},
-    {"sku": "Standard_E8s_v5", "applies_to": "virtual_machine", "family": "Esv5", "vcpu": 8, "memory_gb": "64", "monthly_cost": "367.92"},
-    {"sku": "Standard_E16s_v5", "applies_to": "virtual_machine", "family": "Esv5", "vcpu": 16, "memory_gb": "128", "monthly_cost": "735.84"},
-    {"sku": "Standard_E32s_v5", "applies_to": "virtual_machine", "family": "Esv5", "vcpu": 32, "memory_gb": "256", "monthly_cost": "1471.68"},
-
-    {"sku": "Premium_LRS_P10", "applies_to": "managed_disk", "family": "PremiumSSD", "monthly_cost": "19.71"},
-    {"sku": "Premium_LRS_P15", "applies_to": "managed_disk", "family": "PremiumSSD", "monthly_cost": "38.42"},
-    {"sku": "Premium_LRS_P20", "applies_to": "managed_disk", "family": "PremiumSSD", "monthly_cost": "76.84"},
-    {"sku": "Premium_LRS_P30", "applies_to": "managed_disk", "family": "PremiumSSD", "monthly_cost": "153.68"},
-
-    {"sku": "Standard_LRS_Snapshot_128", "applies_to": "snapshot", "family": "SnapshotStandardLRS", "monthly_cost": "6.14"},
-    {"sku": "Standard_LRS_Snapshot_512", "applies_to": "snapshot", "family": "SnapshotStandardLRS", "monthly_cost": "24.58"},
-
-    {"sku": "Standard_Static", "applies_to": "public_ip", "family": "PublicIPStandard", "monthly_cost": "3.65"},
-
-    {"sku": "Standard_GRS_Cool", "applies_to": "storage_account", "family": "StorageGRS", "monthly_cost": "48.20"},
-    {"sku": "Standard_LRS_Hot", "applies_to": "storage_account", "family": "StorageLRS", "monthly_cost": "11.40"},
-
-    {"sku": "GP_Gen5_2", "applies_to": "sql_database", "family": "SqlGpGen5", "vcpu": 2, "memory_gb": "10.4", "monthly_cost": "73.65"},
-    {"sku": "GP_Gen5_4", "applies_to": "sql_database", "family": "SqlGpGen5", "vcpu": 4, "memory_gb": "20.8", "monthly_cost": "147.30"},
-    {"sku": "GP_Gen5_8", "applies_to": "sql_database", "family": "SqlGpGen5", "vcpu": 8, "memory_gb": "41.6", "monthly_cost": "294.60"},
-
-    {"sku": "P0v3", "applies_to": "app_service_plan", "family": "AppServicePremiumV3", "vcpu": 1, "memory_gb": "4", "monthly_cost": "109.50"},
-    {"sku": "P1v3", "applies_to": "app_service_plan", "family": "AppServicePremiumV3", "vcpu": 2, "memory_gb": "8", "monthly_cost": "219.00"},
-    {"sku": "P2v3", "applies_to": "app_service_plan", "family": "AppServicePremiumV3", "vcpu": 4, "memory_gb": "16", "monthly_cost": "438.00"},
-    {"sku": "S1", "applies_to": "app_service_plan", "family": "AppServiceStandard", "vcpu": 1, "memory_gb": "1.75", "monthly_cost": "73.00"}
+    {
+      "sku": "Standard_D2s_v5",
+      "applies_to": "virtual_machine",
+      "family": "Dsv5",
+      "unit": "per_hour",
+      "vcpu": 2,
+      "memory_gb": "8",
+      "prices": {
+        "eastus": {
+          "unit_price": "0.096",
+          "meter_id": "36cc2454-47d7-517f-884f-be4d6b7efa55",
+          "meter_name": "D2s v5",
+          "product_name": "Virtual Machines Dsv5 Series",
+          "sku_name": "Standard_D2s_v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2021-11-01T00:00:00Z",
+          "monthly_cost": "70.08"
+        },
+        "qatarcentral": {
+          "unit_price": "0.118",
+          "meter_id": "86965ecf-423c-53f7-be4b-19d17a2fea50",
+          "meter_name": "D2s v5",
+          "product_name": "Virtual Machines Dsv5 Series",
+          "sku_name": "Standard_D2s_v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2023-03-01T00:00:00Z",
+          "monthly_cost": "86.14"
+        }
+      }
+    },
+    {
+      "sku": "Standard_D4s_v5",
+      "applies_to": "virtual_machine",
+      "family": "Dsv5",
+      "unit": "per_hour",
+      "vcpu": 4,
+      "memory_gb": "16",
+      "prices": {
+        "eastus": {
+          "unit_price": "0.192",
+          "meter_id": "db8c0962-f3f8-5b44-99aa-f3c7c1e668c8",
+          "meter_name": "D4s v5",
+          "product_name": "Virtual Machines Dsv5 Series",
+          "sku_name": "Standard_D4s_v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2021-11-01T00:00:00Z",
+          "monthly_cost": "140.16"
+        },
+        "qatarcentral": {
+          "unit_price": "0.235",
+          "meter_id": "ff67d94e-cdb6-5fb4-ae70-5a8144553cb3",
+          "meter_name": "D4s v5",
+          "product_name": "Virtual Machines Dsv5 Series",
+          "sku_name": "Standard_D4s_v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2023-03-01T00:00:00Z",
+          "monthly_cost": "171.55"
+        }
+      }
+    },
+    {
+      "sku": "Standard_D8s_v5",
+      "applies_to": "virtual_machine",
+      "family": "Dsv5",
+      "unit": "per_hour",
+      "vcpu": 8,
+      "memory_gb": "32",
+      "prices": {
+        "eastus": {
+          "unit_price": "0.384",
+          "meter_id": "17a4cba9-d983-5344-a8ef-ac7c8e0d34af",
+          "meter_name": "D8s v5",
+          "product_name": "Virtual Machines Dsv5 Series",
+          "sku_name": "Standard_D8s_v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2021-11-01T00:00:00Z",
+          "monthly_cost": "280.32"
+        },
+        "qatarcentral": {
+          "unit_price": "0.471",
+          "meter_id": "c4d857f8-dc6c-5271-b2bd-2f7baf4b446a",
+          "meter_name": "D8s v5",
+          "product_name": "Virtual Machines Dsv5 Series",
+          "sku_name": "Standard_D8s_v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2023-03-01T00:00:00Z",
+          "monthly_cost": "343.83"
+        }
+      }
+    },
+    {
+      "sku": "Standard_D16s_v5",
+      "applies_to": "virtual_machine",
+      "family": "Dsv5",
+      "unit": "per_hour",
+      "vcpu": 16,
+      "memory_gb": "64",
+      "prices": {
+        "eastus": {
+          "unit_price": "0.768",
+          "meter_id": "fe5cc4b8-fb43-5188-a76d-8780fd6eca98",
+          "meter_name": "D16s v5",
+          "product_name": "Virtual Machines Dsv5 Series",
+          "sku_name": "Standard_D16s_v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2021-11-01T00:00:00Z",
+          "monthly_cost": "560.64"
+        },
+        "qatarcentral": {
+          "unit_price": "0.942",
+          "meter_id": "f4dfe74f-f6ae-5b42-8786-025804b4a3ef",
+          "meter_name": "D16s v5",
+          "product_name": "Virtual Machines Dsv5 Series",
+          "sku_name": "Standard_D16s_v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2023-03-01T00:00:00Z",
+          "monthly_cost": "687.66"
+        }
+      }
+    },
+    {
+      "sku": "Standard_D32s_v5",
+      "applies_to": "virtual_machine",
+      "family": "Dsv5",
+      "unit": "per_hour",
+      "vcpu": 32,
+      "memory_gb": "128",
+      "prices": {
+        "eastus": {
+          "unit_price": "1.536",
+          "meter_id": "28244f6b-a2de-5875-b843-0f47a351ebbd",
+          "meter_name": "D32s v5",
+          "product_name": "Virtual Machines Dsv5 Series",
+          "sku_name": "Standard_D32s_v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2021-11-01T00:00:00Z",
+          "monthly_cost": "1121.28"
+        },
+        "qatarcentral": {
+          "unit_price": "1.883",
+          "meter_id": "55f89064-835e-50c7-81f9-22204aece9f5",
+          "meter_name": "D32s v5",
+          "product_name": "Virtual Machines Dsv5 Series",
+          "sku_name": "Standard_D32s_v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2023-03-01T00:00:00Z",
+          "monthly_cost": "1374.59"
+        }
+      }
+    },
+    {
+      "sku": "Standard_E2s_v5",
+      "applies_to": "virtual_machine",
+      "family": "Esv5",
+      "unit": "per_hour",
+      "vcpu": 2,
+      "memory_gb": "16",
+      "prices": {
+        "eastus": {
+          "unit_price": "0.126",
+          "meter_id": "683e47f0-b25f-501b-9aac-d189cf9de2c9",
+          "meter_name": "E2s v5",
+          "product_name": "Virtual Machines Esv5 Series",
+          "sku_name": "E2s v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2021-11-01T00:00:00Z",
+          "monthly_cost": "91.98"
+        },
+        "qatarcentral": {
+          "unit_price": "0.148",
+          "meter_id": "dda747f7-cfc2-532e-abc6-44d07b2dcc08",
+          "meter_name": "E2s v5",
+          "product_name": "Virtual Machines Esv5 Series",
+          "sku_name": "E2s v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2023-12-01T00:00:00Z",
+          "monthly_cost": "108.04"
+        }
+      }
+    },
+    {
+      "sku": "Standard_E4s_v5",
+      "applies_to": "virtual_machine",
+      "family": "Esv5",
+      "unit": "per_hour",
+      "vcpu": 4,
+      "memory_gb": "32",
+      "prices": {
+        "eastus": {
+          "unit_price": "0.252",
+          "meter_id": "4ff6a746-22b1-5bee-a920-84dca7a9a5ba",
+          "meter_name": "E4s v5",
+          "product_name": "Virtual Machines Esv5 Series",
+          "sku_name": "E4s v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2021-11-01T00:00:00Z",
+          "monthly_cost": "183.96"
+        },
+        "qatarcentral": {
+          "unit_price": "0.296",
+          "meter_id": "d3ace38a-eaea-5397-916a-0bbd5c0c2fda",
+          "meter_name": "E4s v5",
+          "product_name": "Virtual Machines Esv5 Series",
+          "sku_name": "E4s v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2023-12-01T00:00:00Z",
+          "monthly_cost": "216.08"
+        }
+      }
+    },
+    {
+      "sku": "Standard_E8s_v5",
+      "applies_to": "virtual_machine",
+      "family": "Esv5",
+      "unit": "per_hour",
+      "vcpu": 8,
+      "memory_gb": "64",
+      "prices": {
+        "eastus": {
+          "unit_price": "0.504",
+          "meter_id": "371c0fff-1e22-5840-9d73-28f2d99f975e",
+          "meter_name": "E8s v5",
+          "product_name": "Virtual Machines Esv5 Series",
+          "sku_name": "E8s v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2021-11-01T00:00:00Z",
+          "monthly_cost": "367.92"
+        },
+        "qatarcentral": {
+          "unit_price": "0.592",
+          "meter_id": "6651f32b-47c7-5024-8e58-8e283d210d12",
+          "meter_name": "E8s v5",
+          "product_name": "Virtual Machines Esv5 Series",
+          "sku_name": "E8s v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2023-12-01T00:00:00Z",
+          "monthly_cost": "432.16"
+        }
+      }
+    },
+    {
+      "sku": "Standard_E16s_v5",
+      "applies_to": "virtual_machine",
+      "family": "Esv5",
+      "unit": "per_hour",
+      "vcpu": 16,
+      "memory_gb": "128",
+      "prices": {
+        "eastus": {
+          "unit_price": "1.008",
+          "meter_id": "ce95f87c-2034-5afa-842f-1197d3b4b64e",
+          "meter_name": "E16s v5",
+          "product_name": "Virtual Machines Esv5 Series",
+          "sku_name": "E16s v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2021-11-01T00:00:00Z",
+          "monthly_cost": "735.84"
+        },
+        "qatarcentral": {
+          "unit_price": "1.184",
+          "meter_id": "d32c15ca-cb6c-59f1-a1a8-e0596abe1b4f",
+          "meter_name": "E16s v5",
+          "product_name": "Virtual Machines Esv5 Series",
+          "sku_name": "E16s v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2023-12-01T00:00:00Z",
+          "monthly_cost": "864.32"
+        }
+      }
+    },
+    {
+      "sku": "Standard_E32s_v5",
+      "applies_to": "virtual_machine",
+      "family": "Esv5",
+      "unit": "per_hour",
+      "vcpu": 32,
+      "memory_gb": "256",
+      "prices": {
+        "eastus": {
+          "unit_price": "2.016",
+          "meter_id": "1aacf10d-2f52-512f-aa3d-e90fd00df263",
+          "meter_name": "E32s v5",
+          "product_name": "Virtual Machines Esv5 Series",
+          "sku_name": "E32s v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2021-11-01T00:00:00Z",
+          "monthly_cost": "1471.68"
+        },
+        "qatarcentral": {
+          "unit_price": "2.368",
+          "meter_id": "7020e181-0a44-5ced-aa6f-a88e2c6df958",
+          "meter_name": "E32s v5",
+          "product_name": "Virtual Machines Esv5 Series",
+          "sku_name": "E32s v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2023-12-01T00:00:00Z",
+          "monthly_cost": "1728.64"
+        }
+      }
+    },
+    {
+      "sku": "Standard_D4s_v5_RI12M",
+      "applies_to": "virtual_machine",
+      "family": "Dsv5Reserved",
+      "unit": "per_term",
+      "term_months": 12,
+      "prices": {
+        "eastus": {
+          "unit_price": "1038",
+          "meter_id": "db8c0962-f3f8-5b44-99aa-f3c7c1e668c8",
+          "meter_name": "D4s v5",
+          "product_name": "Virtual Machines Dsv5 Series",
+          "sku_name": "Standard_D4s_v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2026-06-01T00:00:00Z",
+          "monthly_cost": "86.50"
+        },
+        "qatarcentral": {
+          "unit_price": "1272",
+          "meter_id": "ff67d94e-cdb6-5fb4-ae70-5a8144553cb3",
+          "meter_name": "D4s v5",
+          "product_name": "Virtual Machines Dsv5 Series",
+          "sku_name": "Standard_D4s_v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2026-06-01T00:00:00Z",
+          "monthly_cost": "106.00"
+        }
+      }
+    },
+    {
+      "sku": "Standard_D4s_v5_RI36M",
+      "applies_to": "virtual_machine",
+      "family": "Dsv5Reserved",
+      "unit": "per_term",
+      "term_months": 36,
+      "prices": {
+        "eastus": {
+          "unit_price": "1993",
+          "meter_id": "db8c0962-f3f8-5b44-99aa-f3c7c1e668c8",
+          "meter_name": "D4s v5",
+          "product_name": "Virtual Machines Dsv5 Series",
+          "sku_name": "Standard_D4s_v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2026-06-01T00:00:00Z",
+          "monthly_cost": "55.36"
+        },
+        "qatarcentral": {
+          "unit_price": "2444",
+          "meter_id": "ff67d94e-cdb6-5fb4-ae70-5a8144553cb3",
+          "meter_name": "D4s v5",
+          "product_name": "Virtual Machines Dsv5 Series",
+          "sku_name": "Standard_D4s_v5",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2026-06-01T00:00:00Z",
+          "monthly_cost": "67.89"
+        }
+      }
+    },
+    {
+      "sku": "Premium_LRS_P10",
+      "applies_to": "managed_disk",
+      "family": "PremiumSSD",
+      "unit": "per_month",
+      "prices": {
+        "eastus": {
+          "unit_price": "19.71",
+          "meter_id": "93a6a529-4f49-47cb-9b1e-db9e5f23263f",
+          "meter_name": "P10 LRS Disk",
+          "product_name": "Premium SSD Managed Disks",
+          "sku_name": "P10 LRS",
+          "unit_of_measure": "1/Month",
+          "effective_start_date": "2018-05-01T00:00:00Z",
+          "monthly_cost": "19.71"
+        },
+        "qatarcentral": {
+          "unit_price": "21.504",
+          "meter_id": "c6612762-cd06-5b1d-9bd6-b91ccbc0a3aa",
+          "meter_name": "P10 LRS Disk",
+          "product_name": "Premium SSD Managed Disks",
+          "sku_name": "P10 LRS",
+          "unit_of_measure": "1/Month",
+          "effective_start_date": "2022-07-05T00:00:00Z",
+          "monthly_cost": "21.50"
+        }
+      }
+    },
+    {
+      "sku": "Premium_LRS_P15",
+      "applies_to": "managed_disk",
+      "family": "PremiumSSD",
+      "unit": "per_month",
+      "prices": {
+        "eastus": {
+          "unit_price": "38.012142",
+          "meter_id": "3edf40c0-4da2-4e8e-8124-c845caeaf249",
+          "meter_name": "P15 LRS Disk",
+          "product_name": "Premium SSD Managed Disks",
+          "sku_name": "P15 LRS",
+          "unit_of_measure": "1/Month",
+          "effective_start_date": "2018-05-01T00:00:00Z",
+          "monthly_cost": "38.01"
+        },
+        "qatarcentral": {
+          "unit_price": "41.472",
+          "meter_id": "57245c6c-bf9c-591b-a2e9-e940b6483156",
+          "meter_name": "P15 LRS Disk",
+          "product_name": "Premium SSD Managed Disks",
+          "sku_name": "P15 LRS",
+          "unit_of_measure": "1/Month",
+          "effective_start_date": "2022-07-05T00:00:00Z",
+          "monthly_cost": "41.47"
+        }
+      }
+    },
+    {
+      "sku": "Premium_LRS_P20",
+      "applies_to": "managed_disk",
+      "family": "PremiumSSD",
+      "unit": "per_month",
+      "prices": {
+        "eastus": {
+          "unit_price": "73.22",
+          "meter_id": "a7bc0add-2f2f-4a67-8563-82be4536ca29",
+          "meter_name": "P20 LRS Disk",
+          "product_name": "Premium SSD Managed Disks",
+          "sku_name": "P20 LRS",
+          "unit_of_measure": "1/Month",
+          "effective_start_date": "2018-05-01T00:00:00Z",
+          "monthly_cost": "73.22"
+        },
+        "qatarcentral": {
+          "unit_price": "79.872",
+          "meter_id": "8610cfd5-78cd-5ae9-bc48-515684c28971",
+          "meter_name": "P20 LRS Disk",
+          "product_name": "Premium SSD Managed Disks",
+          "sku_name": "P20 LRS",
+          "unit_of_measure": "1/Month",
+          "effective_start_date": "2022-07-05T00:00:00Z",
+          "monthly_cost": "79.87"
+        }
+      }
+    },
+    {
+      "sku": "Premium_LRS_P30",
+      "applies_to": "managed_disk",
+      "family": "PremiumSSD",
+      "unit": "per_month",
+      "prices": {
+        "eastus": {
+          "unit_price": "135.17",
+          "meter_id": "1c338583-0cf2-4ad8-9185-1a788af43d12",
+          "meter_name": "P30 LRS Disk",
+          "product_name": "Premium SSD Managed Disks",
+          "sku_name": "P30 LRS",
+          "unit_of_measure": "1/Month",
+          "effective_start_date": "2018-05-01T00:00:00Z",
+          "monthly_cost": "135.17"
+        },
+        "qatarcentral": {
+          "unit_price": "147.456",
+          "meter_id": "644eb120-8c84-516c-9434-b28bb04d6d18",
+          "meter_name": "P30 LRS Disk",
+          "product_name": "Premium SSD Managed Disks",
+          "sku_name": "P30 LRS",
+          "unit_of_measure": "1/Month",
+          "effective_start_date": "2022-07-05T00:00:00Z",
+          "monthly_cost": "147.46"
+        }
+      }
+    },
+    {
+      "sku": "Premium_LRS_Snapshot",
+      "applies_to": "snapshot",
+      "family": "PremiumSSDSnapshot",
+      "unit": "per_gb_month",
+      "prices": {
+        "eastus": {
+          "unit_price": "0.132",
+          "meter_id": "8d7eb527-5a2b-4193-ac09-f7b6717a756e",
+          "meter_name": "LRS Snapshots",
+          "product_name": "Premium SSD Managed Disks",
+          "sku_name": "Snapshots LRS",
+          "unit_of_measure": "1 GB/Month",
+          "effective_start_date": "2019-09-30T00:00:00Z"
+        },
+        "qatarcentral": {
+          "unit_price": "0.144",
+          "meter_id": "5e2b52b1-8715-5a40-88a6-d19535f6264d",
+          "meter_name": "LRS Snapshots",
+          "product_name": "Premium SSD Managed Disks",
+          "sku_name": "Snapshots LRS",
+          "unit_of_measure": "1 GB/Month",
+          "effective_start_date": "2022-07-05T00:00:00Z"
+        }
+      }
+    },
+    {
+      "sku": "Standard_Static",
+      "applies_to": "public_ip",
+      "family": "PublicIPStandard",
+      "unit": "per_hour",
+      "prices": {
+        "eastus": {
+          "unit_price": "0.005",
+          "meter_id": "9c150bf9-2bad-430e-a53c-c213804f49ef",
+          "meter_name": "Standard IPv4 Static Public IP",
+          "product_name": "IP Addresses",
+          "sku_name": "Standard",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2018-06-01T00:00:00Z",
+          "monthly_cost": "3.65"
+        },
+        "qatarcentral": {
+          "unit_price": "0.005",
+          "meter_id": "9c150bf9-2bad-430e-a53c-c213804f49ef",
+          "meter_name": "Standard IPv4 Static Public IP",
+          "product_name": "IP Addresses",
+          "sku_name": "Standard",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2022-07-05T00:00:00Z",
+          "monthly_cost": "3.65"
+        }
+      }
+    },
+    {
+      "sku": "Standard_LRS_Hot",
+      "applies_to": "storage_account",
+      "family": "BlockBlobHotLRS",
+      "unit": "per_gb_month",
+      "prices": {
+        "eastus": {
+          "unit_price": "0.0208",
+          "meter_id": "272492b3-1c92-4a5f-bee9-52a8e10ca514",
+          "meter_name": "Hot LRS Data Stored",
+          "product_name": "General Block Blob v2",
+          "sku_name": "Hot LRS",
+          "unit_of_measure": "1 GB/Month",
+          "effective_start_date": "2017-02-03T00:00:00Z"
+        },
+        "qatarcentral": {
+          "unit_price": "0.02",
+          "meter_id": "a9b51817-8aeb-52ab-8bef-4ce330e33fc5",
+          "meter_name": "Hot LRS Data Stored",
+          "product_name": "General Block Blob v2",
+          "sku_name": "Hot LRS",
+          "unit_of_measure": "1 GB/Month",
+          "effective_start_date": "2022-07-05T00:00:00Z"
+        }
+      }
+    },
+    {
+      "sku": "Standard_GRS_Cool",
+      "applies_to": "storage_account",
+      "family": "BlockBlobCoolGRS",
+      "unit": "per_gb_month",
+      "prices": {
+        "eastus": {
+          "unit_price": "0.0334",
+          "meter_id": "5435d17e-896a-4d1f-aabc-8b74183f6e9e",
+          "meter_name": "Cool GRS Data Stored",
+          "product_name": "General Block Blob v2",
+          "sku_name": "Cool GRS",
+          "unit_of_measure": "1 GB/Month",
+          "effective_start_date": "2017-02-03T00:00:00Z"
+        }
+      }
+    },
+    {
+      "sku": "GP_Gen5_2",
+      "applies_to": "sql_database",
+      "family": "SqlGpGen5",
+      "unit": "per_hour",
+      "vcpu": 2,
+      "memory_gb": "10.2",
+      "prices": {
+        "eastus": {
+          "unit_price": "0.304434",
+          "meter_id": "d0fc12d4-91ca-4689-bf8f-9ccdf1b0a619",
+          "meter_name": "vCore",
+          "product_name": "SQL Database Single/Elastic Pool General Purpose - Compute Gen5",
+          "sku_name": "2 vCore",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2025-06-01T00:00:00Z",
+          "monthly_cost": "222.24"
+        },
+        "qatarcentral": {
+          "unit_price": "0.401852",
+          "meter_id": "9143c868-185d-59e1-a890-dcbb0102255b",
+          "meter_name": "vCore",
+          "product_name": "SQL Database Single/Elastic Pool General Purpose - Compute Gen5",
+          "sku_name": "2 vCore",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2025-06-01T00:00:00Z",
+          "monthly_cost": "293.35"
+        }
+      }
+    },
+    {
+      "sku": "GP_Gen5_4",
+      "applies_to": "sql_database",
+      "family": "SqlGpGen5",
+      "unit": "per_hour",
+      "vcpu": 4,
+      "memory_gb": "20.4",
+      "prices": {
+        "eastus": {
+          "unit_price": "0.608868",
+          "meter_id": "d0fc12d4-91ca-4689-bf8f-9ccdf1b0a619",
+          "meter_name": "vCore",
+          "product_name": "SQL Database Single/Elastic Pool General Purpose - Compute Gen5",
+          "sku_name": "4 vCore",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2025-06-01T00:00:00Z",
+          "monthly_cost": "444.47"
+        },
+        "qatarcentral": {
+          "unit_price": "0.803704",
+          "meter_id": "9143c868-185d-59e1-a890-dcbb0102255b",
+          "meter_name": "vCore",
+          "product_name": "SQL Database Single/Elastic Pool General Purpose - Compute Gen5",
+          "sku_name": "4 vCore",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2025-06-01T00:00:00Z",
+          "monthly_cost": "586.70"
+        }
+      }
+    },
+    {
+      "sku": "GP_Gen5_8",
+      "applies_to": "sql_database",
+      "family": "SqlGpGen5",
+      "unit": "per_hour",
+      "vcpu": 8,
+      "memory_gb": "40.8",
+      "prices": {
+        "eastus": {
+          "unit_price": "1.217736",
+          "meter_id": "d0fc12d4-91ca-4689-bf8f-9ccdf1b0a619",
+          "meter_name": "vCore",
+          "product_name": "SQL Database Single/Elastic Pool General Purpose - Compute Gen5",
+          "sku_name": "8 vCore",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2025-06-01T00:00:00Z",
+          "monthly_cost": "888.95"
+        },
+        "qatarcentral": {
+          "unit_price": "1.607408",
+          "meter_id": "9143c868-185d-59e1-a890-dcbb0102255b",
+          "meter_name": "vCore",
+          "product_name": "SQL Database Single/Elastic Pool General Purpose - Compute Gen5",
+          "sku_name": "8 vCore",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2025-06-01T00:00:00Z",
+          "monthly_cost": "1173.41"
+        }
+      }
+    },
+    {
+      "sku": "P0v3",
+      "applies_to": "app_service_plan",
+      "family": "AppServicePremiumV3",
+      "unit": "per_hour",
+      "vcpu": 1,
+      "memory_gb": "4",
+      "prices": {
+        "eastus": {
+          "unit_price": "0.0775",
+          "meter_id": "e7c5a806-2f52-574c-8c69-4ef3c857002b",
+          "meter_name": "P0v3 App",
+          "product_name": "Azure App Service Premium v3 Plan - Linux",
+          "sku_name": "P0v3",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2024-08-01T00:00:00Z",
+          "monthly_cost": "56.58"
+        },
+        "qatarcentral": {
+          "unit_price": "0.0955",
+          "meter_id": "699f75d8-42c5-5ecc-aaf3-aa2a0e8644c8",
+          "meter_name": "P0v3 App",
+          "product_name": "Azure App Service Premium v3 Plan - Linux",
+          "sku_name": "P0v3",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2024-08-01T00:00:00Z",
+          "monthly_cost": "69.72"
+        }
+      }
+    },
+    {
+      "sku": "P1v3",
+      "applies_to": "app_service_plan",
+      "family": "AppServicePremiumV3",
+      "unit": "per_hour",
+      "vcpu": 2,
+      "memory_gb": "8",
+      "prices": {
+        "eastus": {
+          "unit_price": "0.155",
+          "meter_id": "cc850c00-f902-5960-a359-f3cd3abfccf5",
+          "meter_name": "P1 v3 App",
+          "product_name": "Azure App Service Premium v3 Plan - Linux",
+          "sku_name": "P1 v3",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2020-10-01T00:00:00Z",
+          "monthly_cost": "113.15"
+        },
+        "qatarcentral": {
+          "unit_price": "0.191",
+          "meter_id": "636c9ff4-c553-5a4f-9a30-9784249622e5",
+          "meter_name": "P1 v3 App",
+          "product_name": "Azure App Service Premium v3 Plan - Linux",
+          "sku_name": "P1 v3",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2022-07-05T00:00:00Z",
+          "monthly_cost": "139.43"
+        }
+      }
+    },
+    {
+      "sku": "P2v3",
+      "applies_to": "app_service_plan",
+      "family": "AppServicePremiumV3",
+      "unit": "per_hour",
+      "vcpu": 4,
+      "memory_gb": "16",
+      "prices": {
+        "eastus": {
+          "unit_price": "0.31",
+          "meter_id": "9003fa3d-5892-5a94-b9de-b6b5c151b84e",
+          "meter_name": "P2 v3 App",
+          "product_name": "Azure App Service Premium v3 Plan - Linux",
+          "sku_name": "P2 v3",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2020-10-01T00:00:00Z",
+          "monthly_cost": "226.30"
+        },
+        "qatarcentral": {
+          "unit_price": "0.382",
+          "meter_id": "ef8cf2c8-7d3b-57f7-b1b7-93e20c885eb2",
+          "meter_name": "P2 v3 App",
+          "product_name": "Azure App Service Premium v3 Plan - Linux",
+          "sku_name": "P2 v3",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2022-07-05T00:00:00Z",
+          "monthly_cost": "278.86"
+        }
+      }
+    },
+    {
+      "sku": "S1",
+      "applies_to": "app_service_plan",
+      "family": "AppServiceStandard",
+      "unit": "per_hour",
+      "vcpu": 1,
+      "memory_gb": "1.75",
+      "prices": {
+        "eastus": {
+          "unit_price": "0.095",
+          "meter_id": "dd3a7516-8abf-48c7-a4be-5a493dca2900",
+          "meter_name": "S1 App",
+          "product_name": "Azure App Service Standard Plan - Linux",
+          "sku_name": "S1",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2018-05-11T00:00:00Z",
+          "monthly_cost": "69.35"
+        },
+        "qatarcentral": {
+          "unit_price": "0.1045",
+          "meter_id": "198752e2-bdbc-5d14-910f-0fc9ed0af110",
+          "meter_name": "S1 App",
+          "product_name": "Azure App Service Standard Plan - Linux",
+          "sku_name": "S1",
+          "unit_of_measure": "1 Hour",
+          "effective_start_date": "2022-07-05T00:00:00Z",
+          "monthly_cost": "76.29"
+        }
+      }
+    }
   ]
 }

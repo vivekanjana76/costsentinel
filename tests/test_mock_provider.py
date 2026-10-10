@@ -260,10 +260,31 @@ def test_reservations_carry_commitment_structure(provider: MockAzureProvider) ->
     assert under_used.term_months == 36
     assert under_used.quantity == 4
     assert under_used.utilisation_pct == Decimal("34.5")
-    assert under_used.monthly_amortised_cost.amount == Decimal("420.48")
     assert under_used.expires_on is not None
     assert under_used.is_measured
     assert not under_used.monthly_amortised_cost.provenance.is_model_derived
+
+
+def test_a_reservation_is_priced_from_the_real_reserved_meter(
+    provider: MockAzureProvider,
+) -> None:
+    """The quantity is synthetic; the rate is not.
+
+    What a given customer paid for a reservation is contract data with no public API,
+    so the amortised cost is the published reserved rate times a quantity this
+    provider supplies -- which keeps the last invented price out of the repository.
+    """
+    under_used = next(r for r in provider.list_reservations() if r.name == "nw-compute-dsv5-3y")
+    reserved = provider.catalogue.reserved_price_for("Standard_D4s_v5", 36, "eastus")
+    assert reserved is not None
+    assert reserved.monthly_cost.amount is not None
+    assert under_used.monthly_amortised_cost.amount == reserved.monthly_cost.amount * 4
+
+    reference = under_used.monthly_amortised_cost.provenance.reference or ""
+    assert "per instance per month" in reference
+    assert "4 instance(s)" in reference
+    assert reserved.meter is not None
+    assert reserved.meter.meter_id in reference
 
 
 def test_orphaned_disks_appear_in_two_different_clients(provider: MockAzureProvider) -> None:
@@ -301,8 +322,9 @@ def test_no_resource_cost_has_model_provenance(provider: MockAzureProvider) -> N
 def test_every_resource_cost_matches_the_catalogue(provider: MockAzureProvider) -> None:
     """A resource cost and its catalogue price must not be able to drift apart.
 
-    Phase 2 prices every kind from the catalogue, not just compute, so there is one
-    source for every figure the system reports.
+    Every kind is priced from the catalogue, not just compute, so there is one source
+    for every figure the system reports. For a per-GB SKU the rate comes from the
+    catalogue and the capacity from the provider, so the check is the product.
     """
     for subscription in provider.list_subscriptions():
         region = subscription.tags["region"]
@@ -311,33 +333,109 @@ def test_every_resource_cost_matches_the_catalogue(provider: MockAzureProvider) 
                 continue
             priced = provider.catalogue.price_for(resource.sku, resource.kind, region)
             assert priced is not None, f"{resource.name} sku {resource.sku} is unpriced"
-            assert resource.monthly_cost.amount == priced.monthly_cost.amount
+            expected = priced.monthly_for(resource.capacity_gb)
+            assert resource.monthly_cost.amount == expected.amount
 
 
-def test_sku_catalogue_is_priced_and_regionally_differentiated(
+def test_a_per_gb_resource_carries_the_capacity_it_is_priced_on(
     provider: MockAzureProvider,
 ) -> None:
+    """The rate is Azure's; the quantity is this provider's."""
+    from costsentinel.domain.estate import PriceUnit
+
+    seen = 0
+    for subscription in provider.list_subscriptions():
+        region = subscription.tags["region"]
+        for resource in provider.list_resources(subscription.subscription_id):
+            if resource.sku is None:
+                continue
+            priced = provider.catalogue.price_for(resource.sku, resource.kind, region)
+            assert priced is not None
+            if priced.unit is not PriceUnit.PER_GB_MONTH:
+                continue
+            seen += 1
+            assert resource.capacity_gb is not None, f"{resource.name} has no capacity"
+            assert priced.meter is not None
+            assert resource.monthly_cost.amount == (
+                priced.meter.unit_price * resource.capacity_gb
+            ).quantize(Decimal("0.01"))
+    assert seen >= 3  # snapshots and storage accounts
+
+
+def test_every_resource_cost_is_either_real_or_explicitly_unknown(
+    provider: MockAzureProvider,
+) -> None:
+    """Nothing in the estate claims a synthetic price any more."""
+    from costsentinel.domain.common import ProvenanceSource, Verification
+
+    for subscription in provider.list_subscriptions():
+        for resource in provider.list_resources(subscription.subscription_id):
+            provenance = resource.monthly_cost.provenance
+            if resource.monthly_cost.is_known:
+                assert provenance.source is ProvenanceSource.AZURE_RETAIL_PRICES
+                assert provenance.verification is Verification.VERIFIED
+            else:
+                assert provenance.verification is Verification.UNKNOWN
+
+
+def test_sku_catalogue_is_priced_per_region(provider: MockAzureProvider) -> None:
+    """Each region is fetched separately, with its own meter per SKU.
+
+    Not every SKU differs between regions: a few, like the standard static public
+    address, are billed from a single global meter at the same rate everywhere. So
+    the property worth asserting is that *most* SKUs are regionally priced and that
+    a price difference always comes with a different meter -- not that every SKU
+    differs, which would be a claim about Azure rather than about this code.
+    """
     eastus = {(p.sku, p.applies_to): p for p in provider.list_sku_prices("eastus")}
     qatar = {(p.sku, p.applies_to): p for p in provider.list_sku_prices("qatarcentral")}
     assert eastus
-    assert set(eastus) == set(qatar)
-    for sku, price in eastus.items():
-        base = price.monthly_cost.amount
-        regional = qatar[sku].monthly_cost.amount
-        assert base is not None
-        assert regional is not None
-        assert regional > base
+    assert qatar
+
+    # Most SKUs are sold in both, but not all -- which is a real fact, not a gap.
+    shared = set(eastus) & set(qatar)
+    assert len(shared) >= 20
+    assert set(eastus) - set(qatar), "at least one SKU is region-limited"
+
+    regionally_priced = 0
+    for key in shared:
+        base, other = eastus[key], qatar[key]
+        assert base.meter is not None
+        assert other.meter is not None
+        if base.meter.unit_price != other.meter.unit_price:
+            regionally_priced += 1
+            assert base.meter.meter_id != other.meter.meter_id
+        else:
+            # A single global meter, legitimately priced the same in both.
+            assert base.meter.meter_id == other.meter.meter_id
+
+    # The overwhelming majority are regionally priced; a handful are global.
+    assert regionally_priced >= len(shared) - 2
 
 
-def test_unknown_region_falls_back_to_base_prices(provider: MockAzureProvider) -> None:
-    base = {
-        (p.sku, p.applies_to): p.monthly_cost.amount for p in provider.list_sku_prices("eastus")
-    }
-    other = {
-        (p.sku, p.applies_to): p.monthly_cost.amount
-        for p in provider.list_sku_prices("mars-central")
-    }
-    assert base == other
+def test_an_unlisted_region_yields_no_prices(provider: MockAzureProvider) -> None:
+    """No fallback: a region nobody priced is empty rather than borrowing prices."""
+    assert provider.list_sku_prices("mars-central") == ()
+
+
+def test_a_resource_in_an_unpriced_region_has_an_unknown_cost(
+    provider: MockAzureProvider,
+) -> None:
+    """Borrowing a price from another region would quietly invent a figure."""
+    from costsentinel.domain.estate import ResourceKind, ResourceState
+    from costsentinel.providers.mock import _ResSpec
+
+    spec = _ResSpec(
+        name="vm-elsewhere",
+        kind=ResourceKind.VIRTUAL_MACHINE,
+        subscription_index=0,
+        resource_group="rg-core-prod",
+        state=ResourceState.RUNNING,
+        sku="Standard_D4s_v5",
+    )
+    priced = provider._resource_monthly(spec, "mars-central")
+    assert not priced.is_known
+    assert "mars-central" in (priced.provenance.reference or "")
 
 
 def test_cost_series_covers_the_requested_window(provider: MockAzureProvider) -> None:

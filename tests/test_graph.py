@@ -41,26 +41,32 @@ from costsentinel.guardrails.policy import PolicyStore
 from costsentinel.llm.fake import FakeLLM
 from costsentinel.providers.mock import CLIENT_MINISTRY, CLIENT_NORTHWIND, MockAzureProvider
 
-# Hand-computed from the committed price catalogue, so a drift in the arithmetic is a
-# failure rather than a silently updated expectation.
+# Hand-computed from the committed price catalogue, which since Phase 3 holds real
+# Azure Retail Prices figures. A drift in the arithmetic is a failure rather than a
+# silently updated expectation; a drift in Azure's prices is a deliberate re-baseline
+# after running scripts/refresh_prices.py.
+#
+# eastus rates: D16s_v5 560.64, E16s_v5 735.84, E8s_v5 367.92, GP_Gen5_4 444.47,
+# GP_Gen5_2 222.24, P15 disk 38.01, Standard_Static 3.65, snapshot 0.132/GB,
+# D4s_v5 3-year reserved 55.36/instance/month.
 EXPECTED_NORTHWIND: dict[str, Decimal] = {
     "vm-analytics-01": Decimal("560.64"),  # D16s_v5 compute charge ceases
     "vm-batch-02": Decimal("367.92"),  # E16s_v5 (735.84) -> E8s_v5 (367.92)
-    "nw-compute-dsv5-3y": Decimal("275.41"),  # 420.48 x (100 - 34.5)% unused
-    "sql-dev-sandbox": Decimal("73.65"),  # GP_Gen5_4 (147.30) -> GP_Gen5_2 (73.65)
-    "disk-analytics-01-data": Decimal("38.42"),  # full disk cost
-    "snap-web-01-pre-upgrade": Decimal("24.58"),  # full snapshot cost
-    "snap-analytics-baseline": Decimal("6.14"),  # full snapshot cost
+    "sql-dev-sandbox": Decimal("222.23"),  # GP_Gen5_4 (444.47) -> GP_Gen5_2 (222.24)
+    "nw-compute-dsv5-3y": Decimal("145.04"),  # 55.36 x 4 = 221.44, x (100-34.5)% unused
+    "snap-web-01-pre-upgrade": Decimal("67.58"),  # 0.132/GB x 512 GB
+    "disk-analytics-01-data": Decimal("38.01"),  # full P15 disk cost
+    "snap-analytics-baseline": Decimal("16.90"),  # 0.132/GB x 128 GB
     "pip-legacy-api": Decimal("3.65"),  # full address cost
 }
-EXPECTED_NORTHWIND_MONTHLY = Decimal("1350.41")
+EXPECTED_NORTHWIND_MONTHLY = Decimal("1421.97")
 
-# qatarcentral: P1v3 (245.28) -> P0v3 (122.64), plus the P20 disk at 76.84 x 1.12.
+# qatarcentral rates: P1v3 139.43, P0v3 69.72, P20 disk 79.87.
 EXPECTED_MINISTRY: dict[str, Decimal] = {
-    "app-portal-plan": Decimal("122.64"),
-    "disk-portal-legacy-snapshot": Decimal("86.06"),
+    "disk-portal-legacy-snapshot": Decimal("79.87"),
+    "app-portal-plan": Decimal("69.71"),  # P1v3 (139.43) -> P0v3 (69.72)
 }
-EXPECTED_MINISTRY_MONTHLY = Decimal("208.70")
+EXPECTED_MINISTRY_MONTHLY = Decimal("149.58")
 
 #: Four model calls per client: root cause, planning, ranking rationale, report prose.
 EXPECTED_LLM_CALLS_PER_CLIENT = 4
@@ -197,7 +203,7 @@ def test_waste_breakdown_groups_and_sums_by_kind(northwind_report: ClientReport)
 
     snapshots = breakdown[WasteKind.STALE_SNAPSHOT]
     assert snapshots.findings_count == 2
-    assert snapshots.monthly_saving.amount == Decimal("24.58") + Decimal("6.14")
+    assert snapshots.monthly_saving.amount == Decimal("67.58") + Decimal("16.90")
 
     # Ordered with the biggest category first.
     amounts = [
@@ -401,6 +407,12 @@ def test_production_deletion_is_blocked_not_merely_reviewed(
     assert report.totals.projected_monthly_savings.amount == EXPECTED_MINISTRY_MONTHLY
     assert report.totals.automatable_count == 0
     assert any("will not execute it" in item.reason for item in report.approval_queue)
+
+    # With the real prices this blocked orphan is the largest single opportunity in
+    # the estate, so it leads the report -- which is the documented behaviour
+    # (ARCHITECTURE.md D37). A client should hear about their biggest opportunity
+    # first even when CostSentinel will not touch it; they can do it by hand.
+    assert orphan.rank == 1
 
 
 def test_report_states_that_nothing_was_changed(northwind_report: ClientReport) -> None:
