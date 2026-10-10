@@ -107,6 +107,7 @@ ignore = [
     "D101",    # test-local helper classes document themselves by name
     "D102",    # ditto for their methods
     "D103",    # ditto for test functions
+    "D107",    # ditto for a test double's constructor
     "PLR2004", # magic values are fine in assertions
     "PLC0415", # a narrow import stays next to the one test that needs it
     "ARG001",  # pytest fixtures are requested by name, not always referenced

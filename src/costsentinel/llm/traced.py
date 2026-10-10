@@ -19,6 +19,7 @@ from decimal import Decimal
 from pydantic import BaseModel
 
 from costsentinel.config import LLMBackend, Settings
+from costsentinel.domain.common import MoneyAmount
 from costsentinel.domain.observability import (
     LLMCallMetrics,
     ModelTier,
@@ -27,50 +28,22 @@ from costsentinel.domain.observability import (
     TokenUsage,
 )
 from costsentinel.llm.base import LLM, LLMTask, Prompt, StructuredResponseT
-from costsentinel.llm.routing import resolve_route, tier_for
+from costsentinel.llm.routing import FAKE_MODEL, resolve_route, tier_for
 from costsentinel.observability.logging import get_logger
 from costsentinel.observability.tracing import Tracer
 
 _log = get_logger("llm.traced")
 
-#: Token prices per million tokens, by backend and tier.
+#: What the fake backend costs per million tokens.
 #:
-#: The fake backend genuinely costs nothing, so zero here is a measured fact rather
-#: than an unknown standing in as zero. The real rates are placeholders until the
-#: Phase 3 adapters land with their actual deployments; they are committed data so a
-#: run's cost is reproducible, and they are the thing to update when a rate changes.
-TOKEN_PRICES: dict[tuple[LLMBackend, ModelTier], TokenPrice] = {
-    (LLMBackend.FAKE, ModelTier.SMALL): TokenPrice(
-        model="fake-deterministic",
-        prompt_per_million=Decimal(0),
-        completion_per_million=Decimal(0),
-    ),
-    (LLMBackend.FAKE, ModelTier.LARGE): TokenPrice(
-        model="fake-deterministic",
-        prompt_per_million=Decimal(0),
-        completion_per_million=Decimal(0),
-    ),
-    (LLMBackend.AZURE_OPENAI, ModelTier.SMALL): TokenPrice(
-        model="configured-small",
-        prompt_per_million=Decimal("0.15"),
-        completion_per_million=Decimal("0.60"),
-    ),
-    (LLMBackend.AZURE_OPENAI, ModelTier.LARGE): TokenPrice(
-        model="configured-large",
-        prompt_per_million=Decimal("2.50"),
-        completion_per_million=Decimal("10.00"),
-    ),
-    (LLMBackend.GEMINI, ModelTier.SMALL): TokenPrice(
-        model="configured-small",
-        prompt_per_million=Decimal("0.10"),
-        completion_per_million=Decimal("0.40"),
-    ),
-    (LLMBackend.GEMINI, ModelTier.LARGE): TokenPrice(
-        model="configured-large",
-        prompt_per_million=Decimal("1.25"),
-        completion_per_million=Decimal("5.00"),
-    ),
-}
+#: Zero here is a measured fact rather than an unknown standing in as zero: the fake
+#: makes no network call, so it genuinely costs nothing. The real backends are
+#: deliberately absent from this table -- see :func:`price_for`.
+FAKE_PRICE = TokenPrice(
+    model=FAKE_MODEL,
+    prompt_per_million=Decimal(0),
+    completion_per_million=Decimal(0),
+)
 
 #: Fallback when a prompt or response carries no usage information at all.
 _NO_USAGE = TokenUsage(prompt_tokens=0, completion_tokens=0)
@@ -79,20 +52,31 @@ _NO_USAGE = TokenUsage(prompt_tokens=0, completion_tokens=0)
 CHARS_PER_TOKEN = 4
 
 
-def price_for(backend: LLMBackend, tier: ModelTier) -> TokenPrice:
-    """The token price for one backend and tier.
+def price_for(
+    backend: LLMBackend, tier: ModelTier, settings: Settings, *, model: str = ""
+) -> TokenPrice | None:
+    """The token price for one backend and tier, or ``None`` if there is no rate.
 
-    An unlisted combination prices at zero rather than raising, and says so in the
-    model name -- a missing rate should not take down a sweep, and a zero that is
-    labelled ``unpriced`` cannot be mistaken for a real figure.
+    The fake backend is free, which is a fact. Every real backend's rate must come
+    from configuration, and ``None`` means the run reports its model cost as
+    unknown.
+
+    There is deliberately no default rate for a real model. A per-run cost is a cost
+    figure, and a plausible-looking published list price applied to whatever
+    deployment an operator happened to name would be a fabricated number dressed as
+    a calculated one -- exactly what CLAUDE.md golden rule 5 forbids. Unknown is the
+    honest answer, and :attr:`RunMetrics.total_cost` already propagates it.
     """
-    price = TOKEN_PRICES.get((backend, tier))
-    if price is not None:
-        return price
+    if backend is LLMBackend.FAKE:
+        return FAKE_PRICE
+    rates = settings.token_rates(tier.value)
+    if rates is None:
+        return None
+    prompt_rate, completion_rate = rates
     return TokenPrice(
-        model=f"unpriced-{backend.value}-{tier.value}",
-        prompt_per_million=Decimal(0),
-        completion_per_million=Decimal(0),
+        model=model or f"{backend.value}-{tier.value}",
+        prompt_per_million=prompt_rate,
+        completion_per_million=completion_rate,
     )
 
 
@@ -221,12 +205,27 @@ class TracedLLM:
         schema_name: str,
         succeeded: bool,
     ) -> None:
-        price = price_for(LLMBackend(routing.backend), routing.tier)
+        price = price_for(
+            LLMBackend(routing.backend),
+            routing.tier,
+            self._settings,
+            model=routing.model,
+        )
+        cost = (
+            price.cost_of(usage)
+            if price is not None
+            else MoneyAmount.undetermined(
+                f"no token rate is configured for the {routing.tier.value} tier on "
+                f"the {routing.backend} backend, so this call's cost is unknown. Set "
+                f"LLM_PRICE_{routing.tier.value.upper()}_PROMPT and "
+                f"LLM_PRICE_{routing.tier.value.upper()}_COMPLETION to price it."
+            )
+        )
         record = LLMCallMetrics(
             task=task.name,
             routing=routing,
             usage=usage,
-            cost=price.cost_of(usage),
+            cost=cost,
             latency_ms=latency_ms,
             schema_name=schema_name,
             succeeded=succeeded,

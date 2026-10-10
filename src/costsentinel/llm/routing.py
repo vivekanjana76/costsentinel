@@ -5,8 +5,10 @@ cheap and high-volume, judging a report's groundedness is neither. Routing lives
 table rather than in code so that model choice is an operational change
 (ARCHITECTURE.md section 5).
 
-Phase 1 has one backend -- the fake -- so every route resolves to it. The seam is
-real now; Phase 3 fills the table with deployments.
+The fake backend ignores which model it was routed to, as it should. The real
+backends take their model identifiers from the environment, so a model swap is a
+configuration change and the trace records the identifier that actually served the
+call rather than a placeholder.
 """
 
 from __future__ import annotations
@@ -62,13 +64,36 @@ _TASK_TIER: dict[str, str] = {
     TASK_JUDGE.name: "large",
 }
 
-#: Per-backend model identifiers by tier. Phase 3 fills in the real deployments from
-#: configuration; the fake backend ignores the identifier entirely.
-_BACKEND_MODELS: dict[LLMBackend, dict[str, str]] = {
-    LLMBackend.FAKE: {"small": "fake-deterministic", "large": "fake-deterministic"},
-    LLMBackend.AZURE_OPENAI: {"small": "configured-small", "large": "configured-large"},
-    LLMBackend.GEMINI: {"small": "configured-small", "large": "configured-large"},
-}
+#: What the fake backend is called in a trace. It ignores the identifier entirely,
+#: but recording one keeps every run's trace the same shape.
+FAKE_MODEL = "fake-deterministic"
+
+#: Stands in when a real backend is routed without a model configured. It is
+#: deliberately conspicuous: a trace saying ``unconfigured`` is a configuration bug
+#: somebody can find, where a plausible-looking default would hide one.
+UNCONFIGURED_MODEL = "unconfigured"
+
+
+def model_for(backend: LLMBackend, tier: str, settings: Settings) -> str:
+    """The model identifier a backend and tier resolve to under one configuration.
+
+    The small tier falls back to the large deployment, so a single-deployment setup
+    works without a second environment variable. Nothing falls back the other way:
+    quietly sending synthesis work to a small model would degrade a report with no
+    sign of why.
+    """
+    match backend:
+        case LLMBackend.FAKE:
+            return FAKE_MODEL
+        case LLMBackend.AZURE_OPENAI:
+            large = settings.azure_openai_deployment
+            small = settings.azure_openai_deployment_small or large
+            chosen = small if tier == "small" else large
+        case LLMBackend.GEMINI:
+            large = settings.gemini_model
+            small = settings.gemini_model_small or large
+            chosen = small if tier == "small" else large
+    return chosen or UNCONFIGURED_MODEL
 
 
 def tier_for(task: LLMTask) -> str:
@@ -84,7 +109,7 @@ def resolve_route(task: LLMTask, settings: Settings) -> ModelRoute:
     """Resolve the model configuration for one task under one configuration."""
     tier = tier_for(task)
     backend = settings.llm_backend
-    model = _BACKEND_MODELS[backend][tier]
+    model = model_for(backend, tier, settings)
     return ModelRoute(
         task_name=task.name,
         backend=backend,

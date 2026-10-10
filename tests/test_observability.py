@@ -15,6 +15,7 @@ import pytest
 from pydantic import SecretStr
 
 from costsentinel.config import LLMBackend, Settings
+from costsentinel.domain.common import MoneyAmount
 from costsentinel.domain.observability import (
     LLMCallMetrics,
     ModelTier,
@@ -32,7 +33,7 @@ from costsentinel.llm.routing import (
     TASK_REPORT_PROSE,
     TASK_ROOT_CAUSE,
 )
-from costsentinel.llm.traced import TOKEN_PRICES, TracedLLM, price_for
+from costsentinel.llm.traced import FAKE_PRICE, TracedLLM, price_for
 from costsentinel.observability import tracing_status
 from costsentinel.observability.tracing import (
     LangfuseSpan,
@@ -79,41 +80,78 @@ def test_cost_is_computed_per_million_tokens() -> None:
 
 def test_a_zero_cost_is_a_measured_fact_not_an_unknown() -> None:
     """The fake backend genuinely costs nothing, unlike a missing figure."""
-    price = price_for(LLMBackend.FAKE, ModelTier.LARGE)
+    price = price_for(LLMBackend.FAKE, ModelTier.LARGE, Settings())
+    assert price is not None
     cost = price.cost_of(TokenUsage(prompt_tokens=5000, completion_tokens=5000))
     assert cost.amount == Decimal(0)
     assert cost.is_known
 
 
-def test_real_backends_are_priced_and_large_costs_more_than_small() -> None:
-    for backend in (LLMBackend.AZURE_OPENAI, LLMBackend.GEMINI):
-        small = price_for(backend, ModelTier.SMALL)
-        large = price_for(backend, ModelTier.LARGE)
-        assert large.prompt_per_million > small.prompt_per_million
-        assert large.completion_per_million > small.completion_per_million
+def test_the_fake_backend_is_free_whatever_rates_are_configured() -> None:
+    """A configured rate is about a real deployment; the fake makes no call at all."""
+    priced = Settings(
+        llm_price_small_prompt=Decimal("1.00"),
+        llm_price_small_completion=Decimal("2.00"),
+    )
+    assert price_for(LLMBackend.FAKE, ModelTier.SMALL, priced) == FAKE_PRICE
 
 
-def test_every_backend_and_tier_is_priced() -> None:
-    for backend in LLMBackend:
-        for tier in ModelTier:
-            assert (backend, tier) in TOKEN_PRICES
+@pytest.mark.parametrize("backend", [LLMBackend.AZURE_OPENAI, LLMBackend.GEMINI])
+def test_a_real_backend_has_no_rate_until_one_is_configured(backend: LLMBackend) -> None:
+    """There is deliberately no default published rate.
+
+    A plausible list price applied to whatever deployment an operator happened to
+    name would be a fabricated number dressed as a calculated one, which golden rule
+    5 forbids. Unknown is the honest answer.
+    """
+    for tier in ModelTier:
+        assert price_for(backend, tier, Settings()) is None
 
 
-def test_an_unpriced_combination_is_labelled_rather_than_silently_zero() -> None:
-    price = price_for(LLMBackend("fake"), ModelTier("small"))
-    assert price.model == "fake-deterministic"
-    # A genuinely absent entry is named so the zero cannot be mistaken for a rate.
-    TOKEN_PRICES.pop((LLMBackend.GEMINI, ModelTier.SMALL))
-    try:
-        fallback = price_for(LLMBackend.GEMINI, ModelTier.SMALL)
-        assert "unpriced" in fallback.model
-        assert fallback.prompt_per_million == Decimal(0)
-    finally:
-        TOKEN_PRICES[(LLMBackend.GEMINI, ModelTier.SMALL)] = TokenPrice(
-            model="configured-small",
-            prompt_per_million=Decimal("0.10"),
-            completion_per_million=Decimal("0.40"),
-        )
+def test_a_configured_rate_is_used_and_names_the_deployment_it_prices() -> None:
+    settings = Settings(
+        llm_price_large_prompt=Decimal("2.50"),
+        llm_price_large_completion=Decimal("10.00"),
+    )
+    price = price_for(LLMBackend.AZURE_OPENAI, ModelTier.LARGE, settings, model="my-gpt-deployment")
+    assert price is not None
+    assert price.model == "my-gpt-deployment"
+    assert price.prompt_per_million == Decimal("2.50")
+
+
+def test_half_a_rate_prices_nothing() -> None:
+    """A missing half silently read as zero would understate a run's cost."""
+    half = Settings(llm_price_small_prompt=Decimal("0.15"))
+    assert price_for(LLMBackend.GEMINI, ModelTier.SMALL, half) is None
+
+
+def test_an_unpriced_real_call_reports_its_cost_as_unknown_not_zero() -> None:
+    routing = RoutingDecision(
+        task="planning",
+        tier=ModelTier.LARGE,
+        backend="azure_openai",
+        model="my-deployment",
+        reason="test",
+    )
+    settings = Settings(llm_backend=LLMBackend.AZURE_OPENAI)
+    price = price_for(LLMBackend.AZURE_OPENAI, ModelTier.LARGE, settings)
+    assert price is None
+    unknown = MoneyAmount.undetermined("no token rate is configured")
+    run = RunMetrics(
+        run_id="r1",
+        client="Northwind",
+        calls=(
+            LLMCallMetrics(
+                task="planning",
+                routing=routing,
+                usage=TokenUsage(prompt_tokens=100, completion_tokens=50),
+                cost=unknown,
+                latency_ms=5,
+                schema_name="Test",
+            ),
+        ),
+    )
+    assert run.total_cost.amount is None
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +168,7 @@ def _call(task: str, *, tier: ModelTier = ModelTier.SMALL, tokens: int = 100) ->
         task=task,
         routing=routing,
         usage=usage,
-        cost=price_for(LLMBackend.FAKE, tier).cost_of(usage),
+        cost=FAKE_PRICE.cost_of(usage),
         latency_ms=12,
         schema_name="Test",
     )

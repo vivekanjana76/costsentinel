@@ -405,30 +405,53 @@ def test_gemini_without_configuration_fails_at_construction(settings: Settings) 
         get_llm(configured)
 
 
-def test_configured_real_backends_still_report_their_phase(settings: Settings) -> None:
-    """With credentials present, the error says "Phase 3", not "missing key"."""
+def test_a_fully_configured_real_backend_constructs_without_reaching_out(
+    settings: Settings,
+) -> None:
+    """Construction validates configuration; it does not open a connection.
+
+    The client is built lazily on the first call, so selecting a backend stays cheap
+    and a credential problem surfaces where it can be reported rather than during
+    import.
+    """
     from pydantic import SecretStr
 
     azure = settings.model_copy(
         update={
             "llm_backend": LLMBackend.AZURE_OPENAI,
             "azure_openai_endpoint": "https://example.invalid",
-            "azure_openai_api_key": SecretStr("not-a-real-key"),
-            "azure_openai_api_version": "2024-10-01",
+            "azure_openai_api_version": "2024-10-21",
             "azure_openai_deployment": "gpt-test",
         }
     )
-    with pytest.raises(LLMNotConfiguredError, match="Phase 3"):
-        get_llm(azure)
+    assert get_llm(azure).name == "azure-openai"
 
     gemini = settings.model_copy(
         update={
             "llm_backend": LLMBackend.GEMINI,
             "gemini_api_key": SecretStr("not-a-real-key"),
+            "gemini_model": "gemini-test",
         }
     )
-    with pytest.raises(LLMNotConfiguredError, match="Phase 3"):
-        get_llm(gemini)
+    assert get_llm(gemini).name == "gemini"
+
+
+def test_azure_openai_needs_no_api_key_variable(settings: Settings) -> None:
+    """Authentication defaults to DefaultAzureCredential.
+
+    Which is the point: a key that is never stored cannot be rotated late,
+    committed, or read out of a log.
+    """
+    azure = settings.model_copy(
+        update={
+            "llm_backend": LLMBackend.AZURE_OPENAI,
+            "azure_openai_endpoint": "https://example.invalid",
+            "azure_openai_api_version": "2024-10-21",
+            "azure_openai_deployment": "gpt-test",
+        }
+    )
+    assert azure.azure_openai_api_key is None
+    assert get_llm(azure).name == "azure-openai"
 
 
 def test_contracts_reject_unexpected_fields() -> None:

@@ -212,24 +212,21 @@ def test_the_real_provider_refuses_to_run_without_a_subscription_scope() -> None
         )
 
 
-def test_real_llm_adapters_refuse_to_answer() -> None:
+def test_real_llm_adapters_refuse_an_unconfigured_selection() -> None:
+    """Refused at construction, so a missing key is a startup error.
+
+    A backend that constructed happily and failed on the first node would surface
+    the misconfiguration halfway through a sweep instead.
+    """
+    from costsentinel.config import LLMBackend, Settings
     from costsentinel.llm.azure_openai import AzureOpenAILLM
-    from costsentinel.llm.base import LLMNotConfiguredError, Prompt
-    from costsentinel.llm.contracts import RemediationPlan
+    from costsentinel.llm.base import LLMNotConfiguredError
     from costsentinel.llm.gemini import GeminiLLM
-    from costsentinel.llm.routing import TASK_PLANNING
 
-    azure = AzureOpenAILLM.__new__(AzureOpenAILLM)
-    assert azure.name == "azure-openai"
-    with pytest.raises(LLMNotConfiguredError, match="Phase 3"):
-        azure.structured(task=TASK_PLANNING, prompt=Prompt(instruction="x"), schema=RemediationPlan)
-
-    gemini = GeminiLLM.__new__(GeminiLLM)
-    assert gemini.name == "gemini"
-    with pytest.raises(LLMNotConfiguredError, match="Phase 3"):
-        gemini.structured(
-            task=TASK_PLANNING, prompt=Prompt(instruction="x"), schema=RemediationPlan
-        )
+    with pytest.raises(LLMNotConfiguredError, match="AZURE_OPENAI_ENDPOINT"):
+        AzureOpenAILLM(Settings(llm_backend=LLMBackend.AZURE_OPENAI))
+    with pytest.raises(LLMNotConfiguredError, match="GEMINI_API_KEY"):
+        GeminiLLM(Settings(llm_backend=LLMBackend.GEMINI))
 
 
 def test_mock_provider_prices_an_uncatalogued_vm_as_unknown() -> None:

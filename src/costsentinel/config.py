@@ -113,23 +113,81 @@ class Settings(BaseSettings):
         ),
     )
 
-    # --- Azure OpenAI (Phase 3) ------------------------------------------
+    # --- Azure OpenAI (LLM_BACKEND=azure_openai) -------------------------
     azure_openai_endpoint: str | None = Field(
         default=None, validation_alias=_env("AZURE_OPENAI_ENDPOINT")
     )
     azure_openai_api_key: SecretStr | None = Field(
-        default=None, validation_alias=_env("AZURE_OPENAI_API_KEY")
+        default=None,
+        validation_alias=_env("AZURE_OPENAI_API_KEY"),
+        description=(
+            "Optional. When unset, the adapter authenticates with "
+            "DefaultAzureCredential, which is the preferred path: no key to store, "
+            "rotate or leak."
+        ),
     )
     azure_openai_api_version: str | None = Field(
         default=None, validation_alias=_env("AZURE_OPENAI_API_VERSION")
     )
     azure_openai_deployment: str | None = Field(
-        default=None, validation_alias=_env("AZURE_OPENAI_DEPLOYMENT")
+        default=None,
+        validation_alias=_env("AZURE_OPENAI_DEPLOYMENT"),
+        description="Deployment name for synthesis and judging work.",
+    )
+    azure_openai_deployment_small: str | None = Field(
+        default=None,
+        validation_alias=_env("AZURE_OPENAI_DEPLOYMENT_SMALL"),
+        description=(
+            "Deployment for high-volume classification work. Falls back to "
+            "AZURE_OPENAI_DEPLOYMENT, so a single-deployment setup needs no second "
+            "variable."
+        ),
     )
 
-    # --- Gemini (Phase 3) ------------------------------------------------
+    # --- Gemini (LLM_BACKEND=gemini) -------------------------------------
     gemini_api_key: SecretStr | None = Field(default=None, validation_alias=_env("GEMINI_API_KEY"))
     gemini_model: str | None = Field(default=None, validation_alias=_env("GEMINI_MODEL"))
+    gemini_model_small: str | None = Field(
+        default=None,
+        validation_alias=_env("GEMINI_MODEL_SMALL"),
+        description="Falls back to GEMINI_MODEL.",
+    )
+
+    # --- model call behaviour --------------------------------------------
+    llm_max_attempts: int = Field(
+        default=2,
+        ge=1,
+        le=5,
+        validation_alias=_env("LLM_MAX_ATTEMPTS"),
+        description=(
+            "How many times a structured call may be attempted. A real model "
+            "occasionally returns something that does not validate, and the second "
+            "attempt is told exactly what was wrong."
+        ),
+    )
+    llm_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        validation_alias=_env("LLM_TIMEOUT_SECONDS"),
+    )
+
+    # --- model token prices ----------------------------------------------
+    # Quoted per million tokens, and deliberately with no default. A per-run cost
+    # is a cost figure, so inventing a rate for whatever deployment the operator
+    # named would be exactly the fabrication CLAUDE.md golden rule 5 forbids. Unset
+    # means the run reports its model cost as unknown, which is the truth.
+    llm_price_small_prompt: Decimal | None = Field(
+        default=None, ge=Decimal(0), validation_alias=_env("LLM_PRICE_SMALL_PROMPT")
+    )
+    llm_price_small_completion: Decimal | None = Field(
+        default=None, ge=Decimal(0), validation_alias=_env("LLM_PRICE_SMALL_COMPLETION")
+    )
+    llm_price_large_prompt: Decimal | None = Field(
+        default=None, ge=Decimal(0), validation_alias=_env("LLM_PRICE_LARGE_PROMPT")
+    )
+    llm_price_large_completion: Decimal | None = Field(
+        default=None, ge=Decimal(0), validation_alias=_env("LLM_PRICE_LARGE_COMPLETION")
+    )
 
     # --- memory (Phase 4) ------------------------------------------------
     database_url: SecretStr | None = Field(default=None, validation_alias=_env("DATABASE_URL"))
@@ -170,6 +228,20 @@ class Settings(BaseSettings):
     def requires_no_credentials(self) -> bool:
         """Whether this configuration can run with no secrets at all."""
         return self.is_mock_mode and self.uses_fake_llm
+
+    def token_rates(self, tier: str) -> tuple[Decimal, Decimal] | None:
+        """Configured prompt and completion rates per million tokens for one tier.
+
+        ``None`` when either rate is unset, because half a rate cannot price a call
+        and a missing half silently read as zero would understate a run's cost.
+        """
+        if tier == "small":
+            prompt, completion = self.llm_price_small_prompt, self.llm_price_small_completion
+        else:
+            prompt, completion = self.llm_price_large_prompt, self.llm_price_large_completion
+        if prompt is None or completion is None:
+            return None
+        return prompt, completion
 
     @property
     def memory_enabled(self) -> bool:
