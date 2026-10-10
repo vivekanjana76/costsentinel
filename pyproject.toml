@@ -22,6 +22,26 @@ dependencies = [
 # when it is absent, so CI does not install this and the suite passes without it.
 [project.optional-dependencies]
 tracing = ["langfuse>=2.50"]
+# Read-only Azure access for MODE=real. Only these packages: no management client
+# capable of mutating a resource is listed, and a test asserts none is imported.
+azure = [
+    "azure-identity>=1.19",
+    "azure-mgmt-resourcegraph>=8.0",
+    "azure-mgmt-costmanagement>=4.0",
+    "azure-mgmt-monitor>=6.0",
+    "azure-mgmt-advisor>=9.0",
+    "azure-mgmt-reservations>=2.0",
+]
+# The MCP tool server.
+mcp = ["fastmcp>=2.0"]
+# Real language-model backends. FakeLLM stays the default and CI installs neither.
+llm = ["openai>=1.50", "google-genai>=1.0"]
+# Everything a real read-only run needs.
+real = [
+    "costsentinel[azure]",
+    "costsentinel[mcp]",
+    "costsentinel[llm]",
+]
 
 [project.scripts]
 costsentinel = "costsentinel.cli:main"
