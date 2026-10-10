@@ -10,7 +10,7 @@ CostSentinel is pre-1.0, so the public API may change between minor versions.
 
 Nothing yet. Next up is Phase 3: the MCP Azure tool server and the real backends.
 
-## [0.2.0] - 2026-10-08
+## [0.2.0] - 2026-10-10
 
 Phase 2: the full six-specialist graph, observability, and an observable
 model-routing seam. Still mock- and fake-runnable end to end, with no new secrets and
