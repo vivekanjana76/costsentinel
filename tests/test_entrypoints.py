@@ -102,9 +102,27 @@ def test_secrets_are_not_exposed_by_repr(tmp_path: Path) -> None:
     """No secrets in logs, which includes an accidental settings dump."""
     from pydantic import SecretStr
 
-    configured = Settings(state_dir=tmp_path, azure_client_secret=SecretStr("super-secret"))
+    configured = Settings(state_dir=tmp_path, azure_openai_api_key=SecretStr("super-secret"))
     assert "super-secret" not in repr(configured)
     assert "super-secret" not in str(configured.model_dump())
+
+
+def test_there_is_no_azure_client_secret_setting() -> None:
+    """CostSentinel never reads an Azure client secret.
+
+    Authentication is ``DefaultAzureCredential`` only, so a service-principal secret
+    is Azure's own env chain to read, not ours. A secret this code never touches is
+    one it cannot log, trace or commit -- which is why the field is absent rather
+    than present and unused.
+    """
+    assert "azure_client_secret" not in Settings.model_fields
+
+
+def test_a_real_run_has_no_implicit_subscription_scope(tmp_path: Path) -> None:
+    configured = Settings(state_dir=tmp_path)
+    assert configured.subscription_scope == ()
+    named = Settings(state_dir=tmp_path, azure_subscription_ids=" sub-a , sub-b ,, ")
+    assert named.subscription_scope == ("sub-a", "sub-b")
 
 
 def test_headroom_factor_must_exceed_one(tmp_path: Path) -> None:
@@ -142,9 +160,13 @@ def test_factory_passes_the_seed_through(tmp_path: Path) -> None:
 
 
 def test_real_mode_fails_fast_with_a_clear_message(settings: Settings) -> None:
-    """Not implemented until Phase 2 -- and it says so rather than half-working."""
+    """A real run with no subscription scope is refused, and says what to pass.
+
+    Refused before any Azure import, so the message is the same whether or not the
+    optional ``azure`` extra is installed -- which is what makes it actionable.
+    """
     real = settings.model_copy(update={"mode": RunMode.REAL})
-    with pytest.raises(ProviderNotConfiguredError, match="Phase 3"):
+    with pytest.raises(ProviderNotConfiguredError, match="explicit subscription scope"):
         get_provider(real)
 
 
@@ -286,7 +308,7 @@ def test_cli_reports_a_backend_failure_as_exit_1(
     real = settings.model_copy(update={"mode": RunMode.REAL})
     monkeypatch.setattr("costsentinel.cli.get_settings", lambda: real)
     assert main(["scan"]) == 1
-    assert "Phase 3" in capsys.readouterr().err
+    assert "explicit subscription scope" in capsys.readouterr().err
 
 
 def test_render_json_round_trips(settings: Settings) -> None:
@@ -386,7 +408,7 @@ def test_post_scan_returns_503_when_a_backend_is_unavailable(settings: Settings)
     with TestClient(app) as test_client:
         response = test_client.post("/scan", json={})
     assert response.status_code == 503
-    assert "Phase 3" in response.json()["detail"]
+    assert "explicit subscription scope" in response.json()["detail"]
 
 
 def test_openapi_schema_is_served(client: TestClient) -> None:

@@ -9,6 +9,7 @@ is unknown, is the kind of defect nobody notices until a client sees it.
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import cast
 
 import pytest
 
@@ -31,6 +32,7 @@ from costsentinel.domain.recommendations import ActionClass, ActionType
 from costsentinel.domain.report import ReportSeverity
 from costsentinel.domain.signals import AnomalyDirection, CostAnomaly
 from costsentinel.domain.state import ScanState
+from costsentinel.tools.invoker import ToolInvoker
 
 PROVENANCE = Provenance(
     source=ProvenanceSource.MOCK_PROVIDER, reference="test", verification=Verification.VERIFIED
@@ -188,30 +190,26 @@ def test_anomaly_delta_fraction_is_none_against_a_zero_baseline() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Declared-but-unimplemented seams must refuse, not return None
+# A real run must not be able to widen its own scope
 # ---------------------------------------------------------------------------
 
 
-def test_real_azure_provider_methods_all_refuse() -> None:
-    """A stub that returned ``None`` would look like an empty estate."""
+def test_the_real_provider_refuses_to_run_without_a_subscription_scope() -> None:
+    """Reading everything the credential can see is not an acceptable default.
+
+    On a managed-services tenant that would mean reading other clients' estates
+    because somebody forgot a flag, so it fails at construction instead.
+    """
+    from costsentinel.config import RunMode, Settings
     from costsentinel.providers.azure import AzureLiveProvider
     from costsentinel.providers.base import ProviderNotConfiguredError
 
-    stub = AzureLiveProvider.__new__(AzureLiveProvider)
-    assert stub.name == "azure-live"
-
-    with pytest.raises(ProviderNotConfiguredError, match="Phase 3"):
-        stub.list_subscriptions()
-    with pytest.raises(ProviderNotConfiguredError):
-        stub.list_resources("sub-1")
-    with pytest.raises(ProviderNotConfiguredError):
-        stub.list_reservations()
-    with pytest.raises(ProviderNotConfiguredError):
-        stub.get_cost_series("sub-1")
-    with pytest.raises(ProviderNotConfiguredError):
-        stub.get_resource_metrics("/r/1")
-    with pytest.raises(ProviderNotConfiguredError):
-        stub.list_sku_prices("eastus")
+    with pytest.raises(ProviderNotConfiguredError, match="explicit subscription scope"):
+        AzureLiveProvider(
+            invoker=cast("ToolInvoker", object()),
+            settings=Settings(mode=RunMode.REAL),
+            subscription_ids=(),
+        )
 
 
 def test_real_llm_adapters_refuse_to_answer() -> None:
