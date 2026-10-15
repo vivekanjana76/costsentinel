@@ -8,8 +8,9 @@ CostSentinel is pre-1.0, so the public API may change between minor versions.
 
 ## [Unreleased]
 
-Nothing yet. Next up is Phase 4: statistical cost-anomaly detection and real-model
-hardening.
+Nothing yet. Next up is Phase 4: durable episodic and semantic memory, so CostSentinel
+stops re-pitching advice a client already declined. The anomaly and real-model
+hardening work moved to Phase 5 -- see the reordering note in ROADMAP.md.
 
 ## [0.3.0] - 2026-10-15
 
