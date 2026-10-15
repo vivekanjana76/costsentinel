@@ -7,6 +7,15 @@ Revisit when the CLI surface grows.
 Output is JSON by default, because that is the Phase 1 contract. ``--summary`` gives
 a short digest for reading at a terminal; it is a digest, not a report. Rendered
 Markdown and PDF reports are Phase 6.
+
+``--real`` switches a single invocation to a live, read-only Azure estate. It is
+deliberately awkward in three ways. It requires ``--subscription`` (or
+``AZURE_SUBSCRIPTION_IDS``), because a sweep must read what the operator named
+rather than everything a credential can reach. It prints the scope and waits for
+nothing, so the operator sees what is about to be read before it is read. And it
+writes its report to a gitignored directory rather than to stdout, because real
+cost data pasted into a terminal, a ticket or a commit is the one irreversible
+mistake available here. See SECURITY.md before using it.
 """
 
 from __future__ import annotations
@@ -14,14 +23,22 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Sequence
+from datetime import UTC, datetime
+from pathlib import Path
 
-from costsentinel.config import Settings, get_settings
+from costsentinel.config import RunMode, Settings, get_settings
 from costsentinel.domain.report import ClientReport, ScanResult
 from costsentinel.graph.runner import run_scan
 from costsentinel.llm.base import LLMError
-from costsentinel.providers.base import ProviderError
+from costsentinel.providers.base import ProviderError, ProviderNotConfiguredError
+from costsentinel.tools import describe_surface
 
 PROGRAM = "costsentinel"
+
+#: Where a real run's report lands by default. Under ``var/``, which is gitignored,
+#: and checked by ``scripts/check_no_real_data.py`` as a belt to that brace. Real
+#: cost data in a commit is the one irreversible mistake available here.
+DEFAULT_REAL_OUTPUT_DIR = Path("var/real-runs")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -64,6 +81,34 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=2,
         help="JSON indentation. Use 0 for a single line. Default: 2.",
+    )
+    scan.add_argument(
+        "--real",
+        action="store_true",
+        help=(
+            "Scan a live Azure estate, read-only, via DefaultAzureCredential. "
+            "Requires --subscription. Read SECURITY.md first."
+        ),
+    )
+    scan.add_argument(
+        "--subscription",
+        action="append",
+        default=None,
+        metavar="ID",
+        dest="subscriptions",
+        help=(
+            "A subscription a real run may read. Repeatable. Required with --real "
+            "unless AZURE_SUBSCRIPTION_IDS is set. There is no wildcard."
+        ),
+    )
+    scan.add_argument(
+        "--out",
+        default=None,
+        metavar="DIR",
+        help=(
+            f"Directory for a real run's report. Default: {DEFAULT_REAL_OUTPUT_DIR} "
+            f"(gitignored). Ignored for a mock run, which prints to stdout."
+        ),
     )
 
     subcommands.add_parser(
@@ -151,8 +196,82 @@ def _config_text(settings: Settings) -> str:
             f"memory               {memory}",
             f"tracing              {tracing}",
             f"credentials          {credentials}",
+            f"subscription_scope   {_scope_text(settings.subscription_scope)}",
+            f"client_tag           {settings.azure_client_tag}",
         ]
     )
+
+
+def _scope_text(scope: Sequence[str]) -> str:
+    return ", ".join(scope) if scope else "none (MODE=real would refuse to run)"
+
+
+def real_run_banner(settings: Settings, scope: Sequence[str]) -> str:
+    """What a real run is about to do, printed before it does any of it.
+
+    An operator pointing this at an estate should not have to read the source to
+    know what will be touched. Enumerating the tool surface rather than describing
+    it means this cannot drift from what is actually exposed.
+    """
+    lines = [
+        "CostSentinel real run -- READ ONLY",
+        "  identity             DefaultAzureCredential (az login, managed identity "
+        "or workload identity)",
+        f"  subscriptions        {_scope_text(scope)}",
+        f"  client tag           {settings.azure_client_tag}",
+        f"  llm backend          {settings.llm_backend.value}",
+        "  permissions needed   Reader, Cost Management Reader",
+        "  operations performed  read only; this build has no write path at all",
+        "",
+        "  Azure tools this run may call:",
+    ]
+    lines += [f"    {line}" for line in describe_surface()]
+    lines += [
+        "",
+        "  Pilot on a personal or sandbox subscription first. Obtain written "
+        "approval before any client estate. Never commit the output.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def resolve_real_scope(args: argparse.Namespace, settings: Settings) -> tuple[str, ...]:
+    """The subscriptions a ``--real`` run may read.
+
+    ``--subscription`` wins over the environment, so a shell with a lingering
+    ``AZURE_SUBSCRIPTION_IDS`` cannot silently widen what a deliberate command asked
+    for.
+
+    Raises:
+        ProviderNotConfiguredError: If no scope was given. A real run with no scope
+            is refused rather than defaulted, because the default anybody would
+            reach for -- everything the credential can see -- means reading other
+            clients' estates on a managed-services tenant.
+    """
+    named = tuple(dict.fromkeys(args.subscriptions or ()))
+    scope = named or settings.subscription_scope
+    if not scope:
+        msg = (
+            "--real needs an explicit subscription scope. Pass --subscription ID "
+            "(repeatable) or set AZURE_SUBSCRIPTION_IDS. There is no wildcard: "
+            "CostSentinel will not read every subscription a credential can reach."
+        )
+        raise ProviderNotConfiguredError(msg)
+    return scope
+
+
+def write_real_report(result: ScanResult, directory: Path, indent: int) -> Path:
+    """Write a real run's report under ``directory`` and return the path.
+
+    Straight to a gitignored directory rather than to stdout. Real cost data pasted
+    into a terminal, a ticket or a commit is the one irreversible mistake available
+    here, and the shape of the command should make the safe thing the easy one.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    path = directory / f"scan-{stamp}.json"
+    path.write_text(render_json(result, indent), encoding="utf-8")
+    return path
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -169,11 +288,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(_config_text(settings))
         return 0
 
+    real = bool(args.real) or settings.mode is RunMode.REAL
+    scope: tuple[str, ...] = ()
+    if real:
+        settings = settings.model_copy(update={"mode": RunMode.REAL})
+        try:
+            scope = resolve_real_scope(args, settings)
+        except ProviderError as exc:
+            print(f"{PROGRAM}: {exc}", file=sys.stderr)
+            return 1
+        print(real_run_banner(settings, scope), file=sys.stderr)
+
     try:
-        result = run_scan(client=args.client, settings=settings, requested_by=PROGRAM)
+        result = run_scan(
+            client=args.client,
+            settings=settings,
+            requested_by=PROGRAM,
+            subscription_ids=scope or None,
+        )
     except (ProviderError, LLMError) as exc:
         print(f"{PROGRAM}: {exc}", file=sys.stderr)
         return 1
+
+    if real:
+        directory = Path(args.out) if args.out else DEFAULT_REAL_OUTPUT_DIR
+        written = write_real_report(result, directory, args.indent)
+        print(summarise(result))
+        print(f"\nReport written to {written}")
+        print("That directory is gitignored. Do not commit it, and do not paste it.")
+        return 0
 
     print(summarise(result) if args.summary else render_json(result, args.indent))
     return 0
