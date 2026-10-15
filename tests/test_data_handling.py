@@ -551,3 +551,86 @@ def test_the_changelog_has_an_entry_for_the_current_version() -> None:
 
     changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
     assert f"[{__version__}]" in changelog
+
+
+# ---------------------------------------------------------------------------
+# The compose stack is for local and real runs only
+# ---------------------------------------------------------------------------
+
+
+def test_ci_does_not_use_the_compose_stack() -> None:
+    """CI runs the whole suite with no service of any kind.
+
+    Asserted against the workflow rather than trusted, because the day somebody
+    adds a database to CI is the day "memory works offline" stops being true.
+    """
+    workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+    for token in ("docker", "compose", "postgres", "DATABASE_URL", "--extra memory"):
+        assert token not in workflow, f"CI must not reference {token!r}"
+
+
+def test_the_compose_stack_wires_memory_to_postgres_and_nothing_else() -> None:
+    """Compose changes the memory backend. It does not reach a real estate.
+
+    That is what makes it a safe way to watch the learning loop work: still the mock
+    estate, still the fake model, only the store is different.
+    """
+    import yaml
+
+    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
+    app = compose["services"]["app"]["environment"]
+    assert app["MODE"] == "mock"
+    assert app["LLM_BACKEND"] == "fake"
+    assert app["EMBEDDER_BACKEND"] == "fake"
+    assert app["MEMORY_BACKEND"] == "postgres"
+    assert "postgres:5432" in app["DATABASE_URL"]
+
+
+def test_the_compose_database_has_pgvector_a_volume_and_a_healthcheck() -> None:
+    """Without the extension the schema cannot be created at all.
+
+    Without the healthcheck the app starts against an initialising database and
+    fails its first write for a reason nobody can see.
+    """
+    import yaml
+
+    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
+    postgres = compose["services"]["postgres"]
+    assert "pgvector" in postgres["image"]
+    assert postgres["healthcheck"]["test"]
+    assert any("postgres-data" in volume for volume in postgres["volumes"])
+    assert compose["services"]["app"]["depends_on"]["postgres"]["condition"] == "service_healthy"
+
+
+def test_no_compose_port_is_published_to_every_interface() -> None:
+    """A database reachable from the network is not what anybody wanted locally."""
+    import yaml
+
+    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
+    for name, service in compose["services"].items():
+        for mapping in service.get("ports", []):
+            assert str(mapping).startswith("127.0.0.1:"), f"{name} publishes {mapping} too widely"
+
+
+def test_the_compose_password_is_visibly_development_only() -> None:
+    """It is not a secret -- it is a local database -- and it should look like it.
+
+    A plausible-looking password in a committed file is the kind of thing somebody
+    copies into a real deployment.
+    """
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+    assert "costsentinel-dev-only" in compose
+    assert "POSTGRES_PASSWORD:-" in compose, "the password must be environment-overridable"
+    assert "SECURITY.md" in compose
+
+
+def test_the_image_does_not_install_the_azure_or_llm_extras() -> None:
+    """A container that cannot reach Azure cannot read a client estate by accident."""
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    assert "--extra memory" in dockerfile
+    assert "--extra azure" not in dockerfile
+    assert "--extra llm" not in dockerfile
+    assert "--extra real" not in dockerfile
+    # Not root, and not running a sweep on start-up.
+    assert "USER costsentinel" in dockerfile
+    assert "uvicorn" in dockerfile

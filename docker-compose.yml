@@ -1,0 +1,79 @@
+# CostSentinel with durable memory, for a local or real run.
+#
+# **CI does not use this.** The whole test suite runs against the SQLite memory
+# store, the mock estate and the fake model, with no service of any kind -- a test
+# asserts the CI workflow never references this file. Compose exists for the case
+# the default store is not meant to cover: a deployment where several runs, several
+# operators or a restart need to see the same history.
+#
+# Start it with:
+#
+#   docker compose up -d postgres     # just the database
+#   docker compose up --build         # database and API
+#
+# The API is then on http://localhost:8000 with MEMORY_BACKEND=postgres, so a sweep
+# reads and writes its history in Postgres rather than in a local file.
+#
+# The credentials below are development-only and obviously so. They are not a
+# secret: they are a local database nobody outside the compose network can reach.
+# For anything that is not your laptop, set POSTGRES_PASSWORD in the environment and
+# read SECURITY.md first.
+
+name: costsentinel
+
+services:
+  postgres:
+    # pgvector's own image, rather than postgres plus a build step: the extension
+    # has to be present for CREATE EXTENSION vector to work, and this is the
+    # smallest honest way to guarantee it.
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-costsentinel}
+      POSTGRES_USER: ${POSTGRES_USER:-costsentinel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-costsentinel-dev-only}
+    ports:
+      # Published so the skipped pgvector integration test can reach it from the
+      # host. Bound to localhost, not 0.0.0.0: a database reachable from the network
+      # is not what anybody wanted from a compose file.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # So the app does not start against a database that is still initialising and
+      # then fail its first write for a reason nobody can see.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-costsentinel} -d ${POSTGRES_DB:-costsentinel}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      target: runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Still the mock estate and the fake model. Memory is the only thing this
+      # stack changes, which is the point: you can watch the learning loop work
+      # without going anywhere near a real subscription.
+      MODE: mock
+      LLM_BACKEND: fake
+      EMBEDDER_BACKEND: fake
+      MEMORY_BACKEND: postgres
+      DATABASE_URL: >-
+        postgresql://${POSTGRES_USER:-costsentinel}:${POSTGRES_PASSWORD:-costsentinel-dev-only}@postgres:5432/${POSTGRES_DB:-costsentinel}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      STATE_DIR: /var/lib/costsentinel
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # LangGraph checkpoints, so a sweep interrupted by a restart resumes.
+      - app-state:/var/lib/costsentinel
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  app-state:

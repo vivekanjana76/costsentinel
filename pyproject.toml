@@ -58,6 +58,10 @@ dev = [
     "pyright>=1.1.390",
     # Required by fastapi.testclient; declared rather than relied on transitively.
     "httpx>=0.27",
+    # Tests parse docker-compose.yml to assert what the stack wires up. Text
+    # matching would pass on a commented-out line, which is exactly the mistake
+    # those assertions exist to catch. Dev-only: nothing in src imports yaml.
+    "pyyaml>=6.0",
 ]
 
 [build-system]
