@@ -1,6 +1,6 @@
 # CostSentinel — Roadmap
 
-**Current phase: 3**
+**Current phase: 4**
 
 Phases are sequential. Do not start work in a later phase before the current phase
 is complete and its exit criteria are met. If an idea arrives mid-phase, record it
@@ -105,29 +105,41 @@ everything before it runs offline.
 
 Milestone: *Phase 3 - Real estate, read-only*.
 
-- [ ] Real prices for every catalogue SKU in both regions, fetched from the public
+- [x] Real prices for every catalogue SKU in both regions, fetched from the public
       Azure Retail Prices API, with each price tracing to a named meter (#15)
-- [ ] FastMCP tool server over Resource Graph, Cost Management, Advisor and Monitor,
+- [x] FastMCP tool server over Resource Graph, Cost Management, Advisor and Monitor,
       typed in and out, with a verified / unknown / failed status on every response
       and **no write verb anywhere in the surface** (#16)
-- [ ] Read-only `AzureProvider` backed by those tools, authenticated with
+- [x] Read-only `AzureProvider` backed by those tools, authenticated with
       `DefaultAzureCredential`, selected only when `MODE=real` (#17)
-- [ ] Azure OpenAI and Gemini adapters implemented behind the existing routing seam
+- [x] Azure OpenAI and Gemini adapters implemented behind the existing routing seam
       (#18)
-- [ ] A mechanical read-only assertion: no mutating tool, method, or even importable
+- [x] A mechanical read-only assertion: no mutating tool, method, or even importable
       mutating client exists in the real surface (#19)
-- [ ] A guard that refuses to commit a real-run artefact, and gitignores for real
+- [x] A guard that refuses to commit a real-run artefact, and gitignores for real
       output and `.env` (#20)
-- [ ] `SECURITY.md`: the real-scan runbook, the pilot-on-a-sandbox warning, the
+- [x] `SECURITY.md`: the real-scan runbook, the pilot-on-a-sandbox warning, the
       get-approval-first instruction, and the never-commit-real-output rule (#21)
-- [ ] `costsentinel scan --real --subscription <id>`, guarded so CI never runs it
+- [x] `costsentinel scan --real --subscription <id>`, guarded so CI never runs it
       (#22)
-- [ ] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.3.0 (#23)
+- [x] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.3.0 (#23)
 
-**Exit criteria:** a real read-only sweep of one personal or sandbox subscription
-produces the same report shape as a mock run; the Phase 2 graph runs against the real
-provider unchanged; CI stays fully offline with no secrets; the read-only guarantee is
-asserted by test rather than by review.
+**Exit criteria:** 671 tests green at 96.5% coverage, with `domain`, `agents`,
+`guardrails` and `graph` at 98-100%; `ruff check`, `ruff format --check` and `pyright`
+clean; every committed price traces to a named Azure meter and nothing in the
+repository claims a synthetic price; the read-only guarantee asserted by 17 mechanical
+tests rather than by review; CI installs no optional extra and no credential, and a
+test asserts the workflow never invokes the real path.
+
+**One criterion is not yet met, deliberately.** "A real read-only sweep of one
+personal or sandbox subscription produces the same report shape as a mock run" has not
+been executed, because doing it requires an Azure tenant and a human decision about
+which subscription to point at. Everything it depends on is in place and tested
+offline: the provider satisfies the same protocol, the graph is unchanged, the CLI
+path works up to the point of needing a credential, and `SECURITY.md` section 5 is the
+runbook. The first real run is the operator's call, not the build's -- and it is
+exactly the step this phase was built to make safe rather than to take on somebody's
+behalf.
 
 **Deliberately *not* in this phase:** any write, delete or mutate path (Phase 11);
 statistical cost-anomaly detection and real-model hardening (Phase 4, split out of
@@ -354,6 +366,36 @@ a complete audit chain from signal to execution, and the outcome recorded.
   the effective weights reported on every finding so a client can see what was applied
   to them. The ranking must stay deterministic and the weights must stay data, never
   model output.
+
+- **Report residual spend alongside the saving, for every conservative action**
+  (Phase 7, with reporting). A finding currently says "resize this VM, saves
+  $140/month". For a conservative action it does not say what remains: downsizing
+  `Standard_D8s_v5` to `Standard_D4s_v5` saves half and leaves the other half
+  running. A client reading a report with a $12,000 annual savings headline cannot
+  tell whether that is most of the waste or a third of it, which makes the headline
+  simultaneously true and misleading.
+
+  The report should carry, per finding and per client total: the spend today, the
+  saving if the recommendation is accepted, and the **residual spend** that remains
+  afterwards -- plus, where a more aggressive action exists, what that residual would
+  be under it. That last part is what turns the number into a decision: "we are
+  recommending the reversible change; the irreversible one would save this much more".
+
+  All three figures are differences between catalogue prices and provider quantities,
+  so they stay deterministic and go through `MoneyAmount` like any other cost. Where
+  the more aggressive alternative is a `block`-class action, the residual must be
+  stated without the action being proposed -- the point is to inform the client, not
+  to route around the approval gate. Needs the reporting layer in place first, because
+  it is a presentation change to a number the Savings Estimator can already compute.
+
+- **A real-run acceptance checklist** (Phase 4, alongside threshold calibration).
+  Phase 3 made a real read-only run safe but did not execute one. The first real sweep
+  against a sandbox subscription will surface a predictable class of gap -- a SKU the
+  catalogue does not price, a resource type `sku_mapping` does not translate, an
+  untagged subscription, a region nobody refreshed prices for. Each of those currently
+  degrades to an explicit unknown, which is correct behaviour and poor experience. The
+  checklist should turn the first run into a diagnostic: what fraction of resources
+  priced, which SKUs and regions were missed, and the exact command to fix each gap.
 
 ---
 

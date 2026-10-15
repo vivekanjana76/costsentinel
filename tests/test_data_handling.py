@@ -493,3 +493,35 @@ def test_the_runbooks_commands_use_flags_that_exist() -> None:
         for token in invocation.split():
             if token.startswith("--"):
                 assert token in {"--verify", "--dry-run", "--region", "--out"}, token
+
+
+# ---------------------------------------------------------------------------
+# The version is stated once
+# ---------------------------------------------------------------------------
+
+
+def test_the_package_and_the_distribution_agree_on_the_version() -> None:
+    """They drifted once already: the tag said 0.2.0 while both said 0.1.0.
+
+    A version is a claim, and a claim nobody checks goes stale quietly.
+    """
+    from costsentinel import __version__
+
+    pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
+    declared = re.search(r'^version = "([^"]+)"', pyproject, re.MULTILINE)
+    assert declared is not None
+    assert declared.group(1) == __version__
+
+
+def test_the_api_reports_the_package_version_rather_than_its_own_copy() -> None:
+    from costsentinel import __version__
+    from costsentinel.api.app import API_VERSION
+
+    assert __version__ == API_VERSION
+
+
+def test_the_changelog_has_an_entry_for_the_current_version() -> None:
+    from costsentinel import __version__
+
+    changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+    assert f"[{__version__}]" in changelog
