@@ -36,11 +36,15 @@ azure = [
 mcp = ["fastmcp>=2.0"]
 # Real language-model backends. FakeLLM stays the default and CI installs neither.
 llm = ["openai>=1.50", "google-genai>=1.0"]
+# Durable memory in PostgreSQL. The default memory store is SQLite from the standard
+# library, so CI and the demo install nothing for memory to work.
+memory = ["psycopg[binary]>=3.2", "pgvector>=0.3"]
 # Everything a real read-only run needs.
 real = [
     "costsentinel[azure]",
     "costsentinel[mcp]",
     "costsentinel[llm]",
+    "costsentinel[memory]",
 ]
 
 [project.scripts]
