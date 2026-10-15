@@ -27,6 +27,15 @@ repos:
 
   - repo: local
     hooks:
+      # First, because it is the only failure here that cannot be undone: once a
+      # real subscription id or a real sweep's output is in a commit, git history
+      # is permanent and this repository is public.
+      - id: no-real-data
+        name: refuse real-estate artefacts
+        entry: uv run python scripts/check_no_real_data.py
+        language: system
+        pass_filenames: true
+
       - id: pyright
         name: pyright (strict on src)
         entry: uv run pyright

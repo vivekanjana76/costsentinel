@@ -188,6 +188,32 @@ def test_logging_emits_structured_json(
     assert payload["logger"] == LOGGER_NAME
 
 
+def test_logging_follows_a_replaced_stderr(settings: Settings) -> None:
+    """The handler resolves ``sys.stderr`` at write time, not at install time.
+
+    A handler that captured the stream when it was built would keep writing to the
+    old object after anything replaced it -- a wrapper process, a supervisor
+    reopening stderr on log rotation, a redirect. A cost tool whose audit trail can
+    go quietly missing is worse than one that is loud. Found by a test that failed
+    only when another test configured logging first.
+    """
+    import io
+    import sys
+
+    configure_logging(settings)
+    original = sys.stderr
+    replacement = io.StringIO()
+    sys.stderr = replacement
+    try:
+        logging.getLogger(LOGGER_NAME).info("after the swap", extra={"run_id": "run-2"})
+    finally:
+        sys.stderr = original
+
+    payload = json.loads(replacement.getvalue().strip().splitlines()[-1])
+    assert payload["message"] == "after the swap"
+    assert payload["run_id"] == "run-2"
+
+
 def test_logging_configuration_is_idempotent(settings: Settings) -> None:
     """Both the CLI and the API configure logging on start-up."""
     first = configure_logging(settings)
