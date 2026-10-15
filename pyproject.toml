@@ -70,6 +70,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/costsentinel"]
+# The price catalogue and the reference corpus are data the package reads at
+# runtime, so they ship with it rather than being dev-only files.
+artifacts = [
+    "src/costsentinel/providers/data/*.json",
+    "src/costsentinel/memory/data/*.md",
+]
 
 # --------------------------------------------------------------------------
 # ruff
@@ -129,8 +135,15 @@ ignore = [
 # Nodes, detectors and the sweep runner take their dependencies as keyword-only
 # arguments, which is the injection seam that keeps them testable. PLR0913 guards
 # against unreadable positional call sites, a concern keyword-only params already
-# address, so the limit is raised rather than suppressed per site.
-max-args = 9
+# address, so the limit is raised rather than suppressed per site. Raised to 10 in
+# Phase 4, when the memory store joined the provider, the model, the policy store,
+# the tracer and the checkpointer as a seam the runner takes rather than reaches for.
+#
+# It stops at 10. When the embedder would have made eleven, the right answer was to
+# notice that an embedder is derived from configuration rather than chosen by a
+# caller, and not to raise this again. The next thing that wants an eleventh
+# argument should be bundled, not accommodated.
+max-args = 10
 # Two functions are dispatch tables: the savings calculator maps an action to its
 # arithmetic, and the supervisor maps a state to its next route. A flat series of
 # guarded returns is the clearest possible form for both -- collapsing them into

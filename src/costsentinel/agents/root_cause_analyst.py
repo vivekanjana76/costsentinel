@@ -13,21 +13,38 @@ the narrative, and it is held to the evidence in two ways:
 That second check is what makes groundedness a property rather than a hope. A model
 that invents "the owner left the company" cannot get it into a report, because
 there is no observation by that name to cite.
+
+From Phase 4 the node may also retrieve relevant passages from semantic memory --
+the org FinOps policy, cost guidance, pricing notes -- and show them to the model
+alongside the signal. That widens what an explanation can *rest on* and not what it
+can *assert*: retrieved text travels inside the same evidence fence as a resource
+name, the contract still has no numeric fields, and a factor must still cite a
+detector observation rather than a policy section. A passage cannot become a factor.
+
+Which passages were shown is recorded on the :class:`RootCause`, so a client can see
+which rule the reasoning rested on and an eval can check the rule exists.
 """
 
 from __future__ import annotations
+
+from collections.abc import Sequence
 
 from costsentinel.agents.base import Node, NodeUpdate, audit, with_audit
 from costsentinel.config import Settings
 from costsentinel.domain.analysis import ContributingFactor, RootCause
 from costsentinel.domain.common import Provenance, ProvenanceSource, Verification
 from costsentinel.domain.governance import AuditEventType
+from costsentinel.domain.memory import SemanticChunk
 from costsentinel.domain.signals import WasteSignal
 from costsentinel.domain.state import ScanState
 from costsentinel.llm.base import LLM, EvidenceBlock, EvidenceField, Prompt
 from costsentinel.llm.contracts import RootCauseAnalysis, RootCauseExplanation
 from costsentinel.llm.fake import LABEL_WASTE_SIGNAL
 from costsentinel.llm.routing import TASK_ROOT_CAUSE
+from costsentinel.memory.base import MemoryStore
+from costsentinel.memory.corpus import citations, retrieve
+from costsentinel.memory.embedding import Embedder
+from costsentinel.memory.null import NullMemoryStore
 from costsentinel.observability.logging import get_logger
 
 ACTOR = "root_cause_analyst"
@@ -49,6 +66,10 @@ Rules you must follow:
 - Do not state, estimate or infer any monetary amount. Costs are computed elsewhere.
   If you mention a cost, copy it verbatim from the evidence.
 - Explain the cause, not the remedy. Remediation is another agent's job.
+- guidance blocks, where present, are the client's own policy and general cost
+  guidance. You may use them to explain why something matters or what rule applies.
+  They are not observations: never cite a guidance block as a factor's
+  evidence_name, and never treat a sentence in one as a fact about this estate.
 """.strip()
 
 _OUTPUT_CONTRACT = (
@@ -78,6 +99,39 @@ def _signal_evidence(signal: WasteSignal) -> EvidenceBlock:
         EvidenceField(name=f"observation.{obs.name}", value=obs.value) for obs in signal.evidence
     ]
     return EvidenceBlock(label=LABEL_WASTE_SIGNAL, fields=tuple(fields))
+
+
+#: Evidence label for a retrieved guidance passage. Distinct from the signal label
+#: so the model can tell a rule from an observation, which is the whole point.
+LABEL_GUIDANCE = "guidance"
+
+#: How many passages to show per signal. Three is enough to cover the client policy
+#: section and a general one; more crowds the prompt with near-misses, and a lexical
+#: embedder's fourth hit is usually noise.
+GUIDANCE_LIMIT = 3
+
+
+def _guidance_query(signal: WasteSignal) -> str:
+    """What to retrieve guidance for.
+
+    Built from the waste kind and resource kind rather than the resource *name*. A
+    name is arbitrary -- "vm-analytics-01" retrieves nothing useful -- and including
+    it would also let a resource name steer retrieval, which is a small
+    prompt-injection surface for no benefit.
+    """
+    return f"{signal.kind.value.replace('_', ' ')} {signal.resource_kind.replace('_', ' ')}"
+
+
+def _guidance_evidence(chunks: Sequence[SemanticChunk]) -> EvidenceBlock | None:
+    """Render retrieved passages as one evidence block, or ``None`` if none matched."""
+    if not chunks:
+        return None
+    fields: list[EvidenceField] = []
+    for index, passage in enumerate(chunks, start=1):
+        fields.append(EvidenceField(name=f"guidance.{index}.source", value=passage.citation))
+        fields.append(EvidenceField(name=f"guidance.{index}.kind", value=passage.kind.value))
+        fields.append(EvidenceField(name=f"guidance.{index}.text", value=passage.text))
+    return EvidenceBlock(label=LABEL_GUIDANCE, fields=tuple(fields))
 
 
 def _narrative_provenance(llm_name: str, signal_id: str) -> Provenance:
@@ -128,9 +182,25 @@ def _fallback_narrative(signal: WasteSignal) -> str:
     )
 
 
-def make_root_cause_analyst(*, llm: LLM, settings: Settings) -> Node:
-    """Build the Root-Cause Analyst node."""
+def make_root_cause_analyst(
+    *,
+    llm: LLM,
+    settings: Settings,
+    memory: MemoryStore | None = None,
+    embedder: Embedder | None = None,
+) -> Node:
+    """Build the Root-Cause Analyst node.
+
+    Args:
+        llm: Structured reasoning.
+        settings: Resolved configuration.
+        memory: Semantic memory to ground explanations in. Defaults to the no-op
+            store, which retrieves nothing -- so a graph built without memory
+            produces exactly the explanations it did before memory existed.
+        embedder: Query embedder. Required only when ``memory`` is enabled.
+    """
     _ = settings
+    store = memory or NullMemoryStore()
 
     def root_cause_analyst(state: ScanState) -> NodeUpdate:
         """Diagnose every signal, keeping only evidence-grounded factors."""
@@ -150,10 +220,30 @@ def make_root_cause_analyst(*, llm: LLM, settings: Settings) -> Node:
                 )
             }
 
+        guidance: dict[str, tuple[SemanticChunk, ...]] = {}
+        if store.is_enabled and embedder is not None:
+            guidance = {
+                signal.signal_id: retrieve(
+                    store,
+                    embedder,
+                    _guidance_query(signal),
+                    client=state.client,
+                    limit=GUIDANCE_LIMIT,
+                )
+                for signal in state.signals
+            }
+
+        evidence: list[EvidenceBlock] = []
+        for signal in state.signals:
+            evidence.append(_signal_evidence(signal))
+            block = _guidance_evidence(guidance.get(signal.signal_id, ()))
+            if block is not None:
+                evidence.append(block)
+
         prompt = Prompt(
             instruction=_INSTRUCTION,
             output_contract=_OUTPUT_CONTRACT,
-            evidence=tuple(_signal_evidence(signal) for signal in state.signals),
+            evidence=tuple(evidence),
         )
         analysis = llm.structured(task=TASK_ROOT_CAUSE, prompt=prompt, schema=RootCauseAnalysis)
 
@@ -179,6 +269,7 @@ def make_root_cause_analyst(*, llm: LLM, settings: Settings) -> Node:
                         # failing to narrate it.
                         confidence=signal.confidence,
                         analysed_at=signal.detected_at,
+                        guidance_citations=citations(guidance.get(signal.signal_id, ())),
                     )
                 )
                 continue
@@ -192,6 +283,7 @@ def make_root_cause_analyst(*, llm: LLM, settings: Settings) -> Node:
                     factors=factors,
                     confidence=signal.confidence,
                     analysed_at=signal.detected_at,
+                    guidance_citations=citations(guidance.get(signal.signal_id, ())),
                 )
             )
 
@@ -205,6 +297,7 @@ def make_root_cause_analyst(*, llm: LLM, settings: Settings) -> Node:
                     "root_cause": "diagnosed",
                     "factors": str(len(cause.factors)),
                     "cited_evidence": ",".join(cause.cited_evidence),
+                    "guidance": ",".join(cause.guidance_citations),
                     "model": llm.name,
                 },
                 offset=offset,
@@ -220,6 +313,8 @@ def make_root_cause_analyst(*, llm: LLM, settings: Settings) -> Node:
                 "signals": len(state.signals),
                 "root_causes": len(root_causes),
                 "dropped_factors": len(errors) - len(state.errors),
+                "guidance_passages": sum(len(found) for found in guidance.values()),
+                "memory": store.name,
                 "model": llm.name,
             },
         )

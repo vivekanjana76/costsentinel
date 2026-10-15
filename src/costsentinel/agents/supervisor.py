@@ -8,7 +8,7 @@ retry, escalation and approval routing somewhere a reviewer can read in one sitt
 Four decisions live here:
 
 * **short-circuit** -- an estate with no signals goes straight to the report, rather
-  than running four nodes over an empty list to produce the same empty report;
+  than running five nodes over an empty list to produce the same empty report;
 * **retry** -- a node that produced nothing usable is retried up to a bounded
   number of attempts, with the attempt counted in ``state.retries``;
 * **escalate** -- when retries are exhausted, the run proceeds with what it has and
@@ -209,6 +209,23 @@ def _decide(state: ScanState) -> SupervisorDecision:
             reason=(
                 f"{len(state.recommendations)} recommendation(s) must be classified "
                 f"before anything is reported as actionable"
+            ),
+        )
+
+    # Classified, but memory has not been asked yet. The consult step reorders and
+    # annotates against what this client already decided, and it has to run before
+    # the report rather than after -- the report is the thing the client reads.
+    #
+    # Routed on ``memory_consulted`` rather than on whether any recalls exist,
+    # because finding nothing is a legitimate outcome and testing for recalls would
+    # loop forever on a client with no history.
+    if not state.memory_consulted:
+        return _record(
+            action=RouteAction.PROCEED,
+            to_node="memory_consult",
+            reason=(
+                f"{len(state.recommendations)} recommendation(s) are classified; "
+                f"consulting what this client previously decided before reporting"
             ),
         )
 

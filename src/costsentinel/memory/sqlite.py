@@ -120,11 +120,43 @@ class SqliteMemoryStore:
         self._db.row_factory = sqlite3.Row
         self._accesses: list[MemoryAccess] = []
         self._closed = False
+        self._read_failed = False
         self._setup()
+
+    def _read(self, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
+        """Run one query, returning no rows if the database cannot be read.
+
+        Reads degrade for the same reason writes do, and it took a test to notice:
+        a closed or corrupt store was raising out of the middle of a sweep, which
+        would cost a client their report over a memory lookup. A read that cannot
+        happen is indistinguishable, to every caller here, from a read that found
+        nothing -- and finding nothing is already a supported outcome.
+
+        The failure is still recorded as a failure rather than as a clean miss. The
+        two look the same to a caller and must not look the same in the metrics: one
+        is an estate nobody has scanned, the other is a broken store.
+        """
+        try:
+            return self._db.execute(sql, params).fetchall()
+        except sqlite3.Error as exc:
+            _log.warning(
+                "memory read failed; continuing as though it found nothing",
+                extra={"store": self.name, "error": str(exc)},
+            )
+            self._read_failed = True
+            return []
+
+    def _take_read_failure(self) -> bool:
+        """Whether the most recent read failed, clearing the flag."""
+        failed = self._read_failed
+        self._read_failed = False
+        return failed
 
     def _setup(self) -> None:
         with self._db:
             self._db.executescript(_SCHEMA)
+            # Direct, not through ``_read``: a schema check that degraded to "found
+            # nothing" would silently re-initialise a store it could not read.
             row = self._db.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()
             if row is None:
                 self._db.execute("INSERT INTO schema_meta (version) VALUES (?)", (SCHEMA_VERSION,))
@@ -272,10 +304,10 @@ class SqliteMemoryStore:
     def outcomes_for(self, client: str) -> Sequence[RecommendationOutcome]:
         """Every outcome recorded for one client, newest first."""
         started = time.perf_counter()
-        rows = self._db.execute(
+        rows = self._read(
             "SELECT payload FROM episodic_outcomes WHERE client = ? ORDER BY decided_at DESC",
             (client,),
-        ).fetchall()
+        )
         outcomes = tuple(
             parsed
             for parsed in (_load(RecommendationOutcome, row["payload"]) for row in rows)
@@ -287,25 +319,28 @@ class SqliteMemoryStore:
             hit=bool(outcomes),
             count=len(outcomes),
             started=started,
+            succeeded=not self._take_read_failure(),
         )
         return outcomes
 
     def outcome_for(self, recommendation_id: str) -> RecommendationOutcome | None:
         """The outcome recorded against one recommendation, or ``None``."""
-        row = self._db.execute(
-            "SELECT payload FROM episodic_outcomes WHERE recommendation_id = ?",
-            (recommendation_id,),
-        ).fetchone()
+        row = _first(
+            self._read(
+                "SELECT payload FROM episodic_outcomes WHERE recommendation_id = ?",
+                (recommendation_id,),
+            )
+        )
         return _load(RecommendationOutcome, row["payload"]) if row is not None else None
 
     def entries_for(self, client: str, *, limit: int = 500) -> Sequence[EpisodicEntry]:
         """Recommendations this client has previously been shown, newest first."""
         started = time.perf_counter()
-        rows = self._db.execute(
+        rows = self._read(
             "SELECT payload FROM episodic_entries WHERE client = ? "
             "ORDER BY recorded_at DESC LIMIT ?",
             (client, max(1, limit)),
-        ).fetchall()
+        )
         entries = tuple(
             parsed
             for parsed in (_load(EpisodicEntry, row["payload"]) for row in rows)
@@ -317,23 +352,26 @@ class SqliteMemoryStore:
             hit=bool(entries),
             count=len(entries),
             started=started,
+            succeeded=not self._take_read_failure(),
         )
         return entries
 
     def entry_for(self, recommendation_id: str) -> EpisodicEntry | None:
         """One previously recorded recommendation by id, or ``None``."""
-        row = self._db.execute(
-            "SELECT payload FROM episodic_entries WHERE recommendation_id = ?",
-            (recommendation_id,),
-        ).fetchone()
+        row = _first(
+            self._read(
+                "SELECT payload FROM episodic_entries WHERE recommendation_id = ?",
+                (recommendation_id,),
+            )
+        )
         return _load(EpisodicEntry, row["payload"]) if row is not None else None
 
     def runs_for(self, client: str, *, limit: int = 50) -> Sequence[EpisodicRecord]:
         """Run histories for one client, newest first."""
-        rows = self._db.execute(
+        rows = self._read(
             "SELECT payload FROM episodic_runs WHERE client = ? ORDER BY recorded_at DESC LIMIT ?",
             (client, max(1, limit)),
-        ).fetchall()
+        )
         return tuple(
             parsed
             for parsed in (_load(EpisodicRecord, row["payload"]) for row in rows)
@@ -392,14 +430,12 @@ class SqliteMemoryStore:
         """
         started = time.perf_counter()
         if client is None:
-            rows = self._db.execute(
-                "SELECT payload FROM semantic_chunks WHERE client IS NULL"
-            ).fetchall()
+            rows = self._read("SELECT payload FROM semantic_chunks WHERE client IS NULL")
         else:
-            rows = self._db.execute(
+            rows = self._read(
                 "SELECT payload FROM semantic_chunks WHERE client IS NULL OR client = ?",
                 (client,),
-            ).fetchall()
+            )
 
         scored: list[SemanticHit] = []
         for row in rows:
@@ -419,12 +455,13 @@ class SqliteMemoryStore:
             hit=bool(hits),
             count=len(hits),
             started=started,
+            succeeded=not self._take_read_failure(),
         )
         return hits
 
     def chunk_count(self) -> int:
         """How many passages are stored."""
-        row = self._db.execute("SELECT COUNT(*) AS n FROM semantic_chunks").fetchone()
+        row = _first(self._read("SELECT COUNT(*) AS n FROM semantic_chunks"))
         return int(row["n"]) if row is not None else 0
 
     # --- lifecycle -------------------------------------------------------
@@ -468,6 +505,11 @@ class SqliteMemoryStore:
                 detail=detail,
             )
         )
+
+
+def _first(rows: list[sqlite3.Row]) -> sqlite3.Row | None:
+    """The first row, or ``None``."""
+    return rows[0] if rows else None
 
 
 def _load[ModelT: (EpisodicEntry, EpisodicRecord, RecommendationOutcome, SemanticChunk)](

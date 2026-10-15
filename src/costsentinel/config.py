@@ -249,13 +249,15 @@ class Settings(BaseSettings):
         default=EmbedderBackend.FAKE, validation_alias=_env("EMBEDDER_BACKEND")
     )
     embedding_dimensions: int = Field(
-        default=256,
+        default=4096,
         ge=16,
-        le=4096,
+        le=8192,
         validation_alias=_env("EMBEDDING_DIMENSIONS"),
         description=(
-            "Vector width for the fake embedder, and the expected width of a real "
-            "one. Changing it invalidates every stored chunk, which the embedder "
+            "Vector width. One setting rather than two, because it is also the "
+            "pgvector column width, which has to match whatever embedder is "
+            "actually in use. Set it to your real embedder's width when using one. "
+            "Changing it invalidates every stored chunk, which the embedder "
             "identifier on each chunk is there to make visible."
         ),
     )

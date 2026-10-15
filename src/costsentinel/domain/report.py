@@ -65,6 +65,24 @@ class ReportFinding(Frozen):
     annual_saving: MoneyAmount
     savings_basis: str
     savings_is_estimated: bool
+    memory_note: str = Field(
+        default="",
+        description=(
+            "What this client previously decided about this advice, with the date "
+            "and their stated reason. Empty when nothing matched. Affects the rank "
+            "and this line only; every figure above it is unchanged."
+        ),
+    )
+    base_rank: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Where this finding ranked on merit alone, before memory was consulted. "
+            "Carried so a client can see that an ordering changed and why -- an "
+            "order that moved for reasons nobody can see is worse than no "
+            "reordering at all."
+        ),
+    )
 
 
 class ApprovalQueueItem(Frozen):
@@ -157,6 +175,14 @@ class ClientReport(Frozen):
             "Why this report may be incomplete, from the supervisor's escalations. "
             "Stated plainly rather than omitted, so a thin report is not mistaken "
             "for a clean estate."
+        ),
+    )
+    memory_recall: str = Field(
+        default="",
+        description=(
+            "One line on how much of this report the client has seen before. Empty "
+            "when memory is off or nothing matched -- which is also what a first "
+            "sweep of a new estate correctly produces."
         ),
     )
     notes: tuple[str, ...] = ()

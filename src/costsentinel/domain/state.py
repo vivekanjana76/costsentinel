@@ -27,6 +27,7 @@ from costsentinel.domain.governance import (
     AuditEvent,
     SupervisorDecision,
 )
+from costsentinel.domain.memory import MemoryMetrics, MemoryRecall
 from costsentinel.domain.observability import RunMetrics
 from costsentinel.domain.recommendations import ActionType, PricedOption, Recommendation
 from costsentinel.domain.report import ClientReport
@@ -69,6 +70,24 @@ class ScanState(BaseModel):
     classifications: tuple[ActionClassification, ...] = ()
     approval_requests: tuple[ApprovalRequest, ...] = ()
     decisions: tuple[ApprovalDecision, ...] = ()
+
+    # --- memory ----------------------------------------------------------
+    recalls: tuple[MemoryRecall, ...] = Field(
+        default=(),
+        description=(
+            "What episodic memory had to say about each recommendation. Affects "
+            "ordering and annotation only; no monetary figure is derived from it."
+        ),
+    )
+    memory_consulted: bool = Field(
+        default=False,
+        description=(
+            "Whether the consult step has run. The supervisor routes on this rather "
+            "than on whether any recalls were produced, because finding nothing is a "
+            "legitimate outcome and would otherwise loop."
+        ),
+    )
+    memory_metrics: MemoryMetrics | None = None
 
     # --- output ----------------------------------------------------------
     report: ClientReport | None = None
@@ -121,6 +140,10 @@ class ScanState(BaseModel):
     def root_cause_for(self, signal_id: str) -> RootCause | None:
         """The diagnosis for one signal, or ``None`` if none was produced."""
         return next((r for r in self.root_causes if r.signal_id == signal_id), None)
+
+    def recall_for(self, recommendation_id: str) -> MemoryRecall | None:
+        """What memory had to say about one recommendation, or ``None``."""
+        return next((r for r in self.recalls if r.recommendation_id == recommendation_id), None)
 
     def ranking_for(self, recommendation_id: str) -> RankingScore | None:
         """The computed ranking breakdown for one recommendation, or ``None``."""

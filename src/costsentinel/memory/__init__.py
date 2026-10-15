@@ -17,6 +17,22 @@ from costsentinel.memory.base import (
     MemoryStoreError,
     OutcomeAlreadyRecordedError,
 )
+from costsentinel.memory.corpus import (
+    CORPUS,
+    POLICY_CLIENT,
+    build_chunks,
+    citations,
+    load_documents,
+    retrieve,
+    seed,
+)
+from costsentinel.memory.decisions import (
+    UnknownRecommendationError,
+    clients_with_history,
+    decided_entries,
+    pending_entries,
+    record_decision,
+)
 from costsentinel.memory.embedding import (
     MIN_TOKEN_LENGTH,
     AzureOpenAIEmbedder,
@@ -25,12 +41,16 @@ from costsentinel.memory.embedding import (
     get_embedder,
     tokenise,
 )
+from costsentinel.memory.episodic import build_outcome, build_record, persist
 from costsentinel.memory.null import NullMemoryStore
+from costsentinel.memory.recall import consult, recall_summary
 from costsentinel.memory.similarity import cosine_similarity
 from costsentinel.memory.sqlite import SCHEMA_VERSION, SqliteMemoryStore
 
 __all__ = [
+    "CORPUS",
     "MIN_TOKEN_LENGTH",
+    "POLICY_CLIENT",
     "SCHEMA_VERSION",
     "AzureOpenAIEmbedder",
     "Embedder",
@@ -41,9 +61,24 @@ __all__ = [
     "NullMemoryStore",
     "OutcomeAlreadyRecordedError",
     "SqliteMemoryStore",
+    "UnknownRecommendationError",
+    "build_chunks",
+    "build_outcome",
+    "build_record",
+    "citations",
+    "clients_with_history",
+    "consult",
     "cosine_similarity",
+    "decided_entries",
     "get_embedder",
     "get_memory",
+    "load_documents",
+    "pending_entries",
+    "persist",
+    "recall_summary",
+    "record_decision",
+    "retrieve",
+    "seed",
     "tokenise",
 ]
 

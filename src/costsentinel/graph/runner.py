@@ -29,6 +29,12 @@ from costsentinel.guardrails.policy import PolicyStore
 from costsentinel.llm import get_llm
 from costsentinel.llm.base import LLM
 from costsentinel.llm.traced import TracedLLM
+from costsentinel.memory import get_memory
+from costsentinel.memory.base import MemoryStore
+from costsentinel.memory.corpus import seed
+from costsentinel.memory.embedding import get_embedder
+from costsentinel.memory.episodic import persist
+from costsentinel.memory.null import NullMemoryStore
 from costsentinel.observability.logging import configure_logging, get_logger
 from costsentinel.observability.tracing import NoOpTracer, Tracer, get_tracer, timed
 from costsentinel.providers import get_provider
@@ -69,6 +75,7 @@ def run_client_scan(
     settings: Settings,
     checkpointer: BaseCheckpointSaver[str] | None,
     policy: PolicyStore | None = None,
+    memory: MemoryStore | None = None,
     run_id: str | None = None,
     requested_by: str = "system",
     tracer: Tracer | None = None,
@@ -90,12 +97,19 @@ def run_client_scan(
     thread_id = run_id or new_run_id()
     active_tracer = tracer or NoOpTracer()
     traced = TracedLLM(llm, tracer=active_tracer, settings=settings)
+    store = memory or NullMemoryStore()
+    # Derived from settings rather than taken as an argument. The embedder is a
+    # function of configuration, not a collaborator a caller chooses, and adding an
+    # eleventh injected dependency here would be a ratchet rather than a seam.
+    embedder = get_embedder(settings)
 
     graph = build_graph(
         provider=provider,
         llm=traced,
         settings=settings,
         policy=policy,
+        memory=store,
+        embedder=embedder,
         checkpointer=checkpointer,
     )
     initial = ScanState(run_id=thread_id, client=client, requested_by=requested_by)
@@ -110,6 +124,7 @@ def run_client_scan(
             "provider": provider.name,
             "model": llm.name,
             "tracer": active_tracer.name,
+            "memory": store.name,
         },
     )
 
@@ -162,6 +177,11 @@ def run_client_scan(
         )
         raise ScanFailedError(msg)
 
+    # After the report, not before: a half-written history is worse than none,
+    # because the next sweep reads it as fact. A failure here is logged and
+    # returns False -- the client still gets their report.
+    persist(store, state)
+
     return state.report, metrics
 
 
@@ -176,6 +196,7 @@ def run_scan(
     run_id_factory: Callable[[], str] = new_run_id,
     tracer: Tracer | None = None,
     subscription_ids: Sequence[str] | None = None,
+    memory: MemoryStore | None = None,
 ) -> ScanResult:
     """Run a sweep and return one report per client in scope.
 
@@ -196,12 +217,23 @@ def run_scan(
         subscription_ids: Subscriptions a ``MODE=real`` run may read. Ignored by the
             mock provider, and required by the real one -- a sweep reads what the
             operator named, never everything a credential can reach.
+        memory: Episodic and semantic memory. Defaults to the configured store,
+            which is local SQLite unless told otherwise. One store is shared across
+            every client in the sweep; its reads are client-scoped, so sharing it
+            cannot leak one client's history into another's report.
     """
     resolved = settings or get_settings()
     configure_logging(resolved)
     active_provider = provider or get_provider(resolved, subscription_ids=subscription_ids)
     active_llm = llm or get_llm(resolved)
     active_tracer = tracer or get_tracer(resolved)
+    active_memory = memory or get_memory(resolved)
+    owns_memory = memory is None
+    active_embedder = get_embedder(resolved)
+    # Seeded on first use rather than by a separate command: a semantic store that
+    # only works after somebody remembered to run an ingest step is a store that is
+    # empty when it matters. Idempotent, and skipped when already populated.
+    seed(active_memory, active_embedder)
 
     targets = clients_in_scope(active_provider, client)
     reports: list[ClientReport] = []
@@ -216,6 +248,7 @@ def run_scan(
                 settings=resolved,
                 checkpointer=checkpointer,
                 policy=policy,
+                memory=active_memory,
                 run_id=run_id_factory(),
                 requested_by=requested_by,
                 tracer=active_tracer,
@@ -232,8 +265,13 @@ def run_scan(
             "total_tokens": sum(m.total_usage.total_tokens for m in metrics),
             "mode": resolved.mode.value,
             "tracer": active_tracer.name,
+            "memory": active_memory.name,
         },
     )
+    # Only closed if this function opened it. A caller that passed a store in -- the
+    # ``decide`` CLI, a test, a long-lived service -- still needs it afterwards.
+    if owns_memory:
+        active_memory.close()
     return ScanResult(reports=tuple(reports), metrics=tuple(metrics))
 
 

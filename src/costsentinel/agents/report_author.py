@@ -19,6 +19,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from costsentinel.agents.base import Node, NodeUpdate, audit, with_audit
+from costsentinel.agents.memory_consult import summarise_recalls
 from costsentinel.agents.savings import total_savings
 from costsentinel.config import Settings
 from costsentinel.domain.common import (
@@ -305,6 +306,9 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
                 f"{len(state.errors)} processing note(s) were recorded during this "
                 f"sweep; see the run's audit trail."
             )
+        recall_line = summarise_recalls(state)
+        if recall_line:
+            notes.append(recall_line)
 
         report = ClientReport(
             report_id=f"rpt-{state.run_id}",
@@ -334,6 +338,7 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
             waste_breakdown=_waste_breakdown(findings),
             approval_queue=queue,
             incomplete_reasons=state.escalations,
+            memory_recall=recall_line,
             notes=tuple(notes),
         )
 
@@ -408,6 +413,7 @@ def _finding(state: ScanState, recommendation: Recommendation, note: str) -> Rep
     classification = state.classification_for(recommendation.recommendation_id)
     cause = state.root_cause_for(recommendation.signal_id)
     score = state.ranking_for(recommendation.recommendation_id)
+    recall = state.recall_for(recommendation.recommendation_id)
     current_cost = (
         signal.monthly_cost
         if signal
@@ -443,4 +449,6 @@ def _finding(state: ScanState, recommendation: Recommendation, note: str) -> Rep
         annual_saving=recommendation.savings.annual,
         savings_basis=recommendation.savings.basis,
         savings_is_estimated=recommendation.savings.is_estimated,
+        memory_note=recall.annotation if recall else "",
+        base_rank=recall.base_rank if recall else None,
     )

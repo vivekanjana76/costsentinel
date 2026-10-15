@@ -63,6 +63,16 @@ class RootCause(Frozen):
     factors: tuple[ContributingFactor, ...] = ()
     confidence: Confidence
     analysed_at: datetime = Field(default_factory=utc_now)
+    guidance_citations: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Semantic-memory passages this explanation was shown, by citation. "
+            "Recorded so a client can see which policy or guidance the reasoning "
+            "rested on -- and so an eval can check that a cited rule exists. "
+            "Retrieved guidance is evidence like any other: it may ground a "
+            "narrative and cannot introduce a quantity."
+        ),
+    )
 
     @property
     def cited_evidence(self) -> tuple[str, ...]:

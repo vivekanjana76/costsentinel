@@ -109,16 +109,33 @@ def tokenise(text: str) -> list[str]:
     ]
 
 
+#: Default width for the fake embedder, and the reason it is this wide.
+#:
+#: Hashed bag-of-words lives or dies on collisions. A reference section in the
+#: committed corpus holds 37-86 distinct tokens; at 256 buckets those fill most of
+#: the vector, so *every* query overlaps *every* document and the similarity scores
+#: compress into a band too narrow to threshold. Measured on the real corpus: at 256
+#: dimensions a relevant query scores 0.27 and nonsense scores 0.15, which cannot be
+#: separated. At 4096, relevant stays at 0.24 and nonsense drops to 0.00.
+#:
+#: This was found by a test asserting that an irrelevant query retrieves nothing,
+#: which failed at the original width. The threshold was guessed; the width is now
+#: measured.
+DEFAULT_FAKE_DIMENSIONS = 4096
+
+
 class FakeEmbedder:
     """Deterministic hashed bag-of-words. The default, and the only one CI uses."""
 
-    def __init__(self, dimensions: int = 256) -> None:
+    def __init__(self, dimensions: int = DEFAULT_FAKE_DIMENSIONS) -> None:
         """Fix the vector width.
 
         Args:
             dimensions: Vector width. Recorded in :attr:`name`, because a stored
                 chunk embedded at a different width cannot be compared to a query
-                and should be visibly, not silently, incompatible.
+                and should be visibly, not silently, incompatible. See
+                :data:`DEFAULT_FAKE_DIMENSIONS` for why the default is as large as
+                it is.
         """
         self._dimensions = max(16, dimensions)
 
@@ -138,22 +155,30 @@ class FakeEmbedder:
         Sub-linear term weighting (``1 + log(count)``) so a word repeated twenty
         times does not swamp the vector, which is the one place a naive bag of words
         gives obviously wrong retrieval.
+
+        Built sparsely: the weights and the norm are computed over the buckets that
+        actually have tokens, and the dense vector is materialised once at the end.
+        The obvious implementation loops over all 4096 buckets three times, which
+        makes embedding cost scale with the vector width rather than with the length
+        of the text -- fine in isolation, and a seven-fold slowdown of the whole test
+        suite under coverage instrumentation, which is how it was noticed.
         """
         counts: dict[int, float] = {}
         for token in tokenise(text):
             bucket = self._bucket(token)
             counts[bucket] = counts.get(bucket, 0.0) + 1.0
 
-        vector = [0.0] * self._dimensions
-        for bucket, count in counts.items():
-            vector[bucket] = 1.0 + math.log(count)
-
-        norm = math.sqrt(sum(value * value for value in vector))
+        weights = {bucket: 1.0 + math.log(count) for bucket, count in counts.items()}
+        norm = math.sqrt(sum(weight * weight for weight in weights.values()))
         if norm == 0.0:
             # No usable tokens. A zero vector scores 0.0 against everything, which
             # is the honest answer for a query with no content.
-            return tuple(vector)
-        return tuple(value / norm for value in vector)
+            return (0.0,) * self._dimensions
+
+        vector = [0.0] * self._dimensions
+        for bucket, weight in weights.items():
+            vector[bucket] = weight / norm
+        return tuple(vector)
 
     def embed_batch(self, texts: Sequence[str]) -> tuple[tuple[float, ...], ...]:
         """Embed several strings."""
