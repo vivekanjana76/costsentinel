@@ -17,11 +17,15 @@ Three things are asserted here:
 
 from __future__ import annotations
 
+import contextlib
+import importlib.util
+import io
 import json
 import re
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -54,6 +58,20 @@ def _guard(*paths: Path | str) -> subprocess.CompletedProcess[str]:
         text=True,
         check=False,
     )
+
+
+def _guard_module() -> ModuleType:
+    """Import the guard script as a module, by path.
+
+    ``scripts/`` is not an importable package, so this loads the file directly
+    rather than mutating ``sys.path``. A path-based load is visible to a reader and
+    to a type checker; a ``sys.path`` insert is visible to neither.
+    """
+    spec = importlib.util.spec_from_file_location("costsentinel_guard", GUARD)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 # ---------------------------------------------------------------------------
@@ -178,22 +196,27 @@ def test_the_price_catalogues_azure_meter_ids_are_not_flagged() -> None:
 )
 def test_the_deliberately_fake_shapes_are_allowed(guid: str) -> None:
     """No real Azure tenant issues any of these, which is why they are safe."""
-    sys.path.insert(0, str(GUARD.parent))
-    try:
-        from check_no_real_data import looks_synthetic
-    finally:
-        sys.path.pop(0)
-    assert looks_synthetic(guid)
+    assert _guard_module().looks_synthetic(guid) is True
+
+
+@pytest.mark.parametrize(
+    "guid",
+    [
+        REALISTIC_ID,
+        "3b1f0c7e-9a24-4e81-bd55-6f2a81c40d93",
+        # One hex digit short of all-the-same, so the blunt rule must not match it.
+        "11111111-1111-1111-1111-11111111111a",
+    ],
+)
+def test_a_random_hex_id_is_not_treated_as_synthetic(guid: str) -> None:
+    assert _guard_module().looks_synthetic(guid) is False
 
 
 def test_running_the_guard_with_no_paths_and_nothing_staged_is_a_pass() -> None:
     """So the hook is silent on a commit that touches nothing it cares about."""
-    sys.path.insert(0, str(GUARD.parent))
-    try:
-        from check_no_real_data import main as guard_main
-    finally:
-        sys.path.pop(0)
-    assert guard_main([]) in (0, 1)  # depends on what is staged; it must not raise
+    # Whatever is staged right now, it must not raise -- the hook runs on every
+    # commit and a crashing hook is a hook somebody disables.
+    assert _guard_module().main([]) in (0, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +444,14 @@ def test_a_completed_real_run_writes_a_file_and_says_so(
 SECURITY = Path("SECURITY.md")
 
 
+def _scan_help() -> str:
+    """The ``scan`` subcommand's help text."""
+    parser = build_parser()
+    with contextlib.suppress(SystemExit), contextlib.redirect_stdout(io.StringIO()) as out:
+        parser.parse_args(["scan", "--help"])
+    return out.getvalue()
+
+
 def test_security_md_exists_and_is_linked_from_the_readme() -> None:
     assert SECURITY.is_file()
     assert "SECURITY.md" in Path("README.md").read_text(encoding="utf-8")
@@ -474,18 +505,13 @@ def test_the_runbooks_commands_use_flags_that_exist() -> None:
     Found one -- ``--regions`` where the script takes ``--region`` -- which is why
     this is asserted rather than proofread.
     """
-    parser = build_parser()
-    scan_flags = {
-        option
-        for action in parser._subparsers._group_actions
-        for subparser in getattr(action, "choices", {}).values()
-        for option in subparser._actions
-        for option in option.option_strings
-    }
+    # Read the flags out of the help text rather than argparse internals: the help
+    # is what an operator actually sees, and it is a supported surface.
+    scan_help = _scan_help()
     text = SECURITY.read_text(encoding="utf-8")
     for flag in ("--real", "--subscription", "--out"):
-        assert flag in text
-        assert flag in scan_flags
+        assert flag in text, f"SECURITY.md should document {flag}"
+        assert flag in scan_help, f"the scan command has no {flag}"
 
     refresh = re.findall(r"refresh_prices\.py ([^\n]*)", text)
     assert refresh
