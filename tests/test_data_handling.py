@@ -412,3 +412,84 @@ def test_a_completed_real_run_writes_a_file_and_says_so(
 
     (written,) = list(destination.glob("scan-*.json"))
     assert json.loads(written.read_text(encoding="utf-8"))["reports"]
+
+
+# ---------------------------------------------------------------------------
+# SECURITY.md must stay true
+# ---------------------------------------------------------------------------
+
+SECURITY = Path("SECURITY.md")
+
+
+def test_security_md_exists_and_is_linked_from_the_readme() -> None:
+    assert SECURITY.is_file()
+    assert "SECURITY.md" in Path("README.md").read_text(encoding="utf-8")
+
+
+def test_the_runbook_carries_the_three_warnings() -> None:
+    """These are the ones that matter, so they are not left to a reader's judgement."""
+    text = SECURITY.read_text(encoding="utf-8")
+    assert "Pilot on a personal or sandbox subscription" in text
+    assert "Obtain written approval before any client estate" in text
+    assert "Never commit the output" in text
+
+
+def test_the_runbook_states_the_read_only_guarantee_and_the_auth_model() -> None:
+    text = SECURITY.read_text(encoding="utf-8")
+    assert "az login" in text
+    assert "DefaultAzureCredential" in text
+    assert "no client-secret setting" in text.lower()
+    assert "MODE=real" in text
+    assert "--subscription" in text
+
+
+def test_the_runbook_lists_exactly_the_roles_the_tools_declare() -> None:
+    """A permissions table that drifts from the code sends somebody to the wrong admin.
+
+    So the roles the registry actually asks for are checked against the document
+    rather than trusted to have been copied correctly.
+    """
+    from costsentinel.tools.registry import required_permissions
+
+    text = SECURITY.read_text(encoding="utf-8")
+    roles = {permission.split(" on ")[0] for permission in required_permissions()}
+    assert roles
+    for role in roles:
+        assert role in text, f"SECURITY.md does not mention the {role!r} role"
+    # The registry is where "no elevated role" is actually enforced, and
+    # tests/test_readonly.py asserts it there. Here we only check the document says
+    # so, because a reader who grants Contributor "to be safe" has defeated it.
+    assert "none is `Contributor` or `Owner`" in text
+
+
+def test_the_runbook_names_a_vulnerability_contact() -> None:
+    text = SECURITY.read_text(encoding="utf-8")
+    assert "Reporting a vulnerability" in text
+    assert "@" in text.split("Reporting a vulnerability", 1)[1]
+
+
+def test_the_runbooks_commands_use_flags_that_exist() -> None:
+    """A runbook with a wrong flag is worse than none: it fails mid-procedure.
+
+    Found one -- ``--regions`` where the script takes ``--region`` -- which is why
+    this is asserted rather than proofread.
+    """
+    parser = build_parser()
+    scan_flags = {
+        option
+        for action in parser._subparsers._group_actions
+        for subparser in getattr(action, "choices", {}).values()
+        for option in subparser._actions
+        for option in option.option_strings
+    }
+    text = SECURITY.read_text(encoding="utf-8")
+    for flag in ("--real", "--subscription", "--out"):
+        assert flag in text
+        assert flag in scan_flags
+
+    refresh = re.findall(r"refresh_prices\.py ([^\n]*)", text)
+    assert refresh
+    for invocation in refresh:
+        for token in invocation.split():
+            if token.startswith("--"):
+                assert token in {"--verify", "--dry-run", "--region", "--out"}, token
