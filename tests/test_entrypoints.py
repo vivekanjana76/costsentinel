@@ -102,9 +102,27 @@ def test_secrets_are_not_exposed_by_repr(tmp_path: Path) -> None:
     """No secrets in logs, which includes an accidental settings dump."""
     from pydantic import SecretStr
 
-    configured = Settings(state_dir=tmp_path, azure_client_secret=SecretStr("super-secret"))
+    configured = Settings(state_dir=tmp_path, azure_openai_api_key=SecretStr("super-secret"))
     assert "super-secret" not in repr(configured)
     assert "super-secret" not in str(configured.model_dump())
+
+
+def test_there_is_no_azure_client_secret_setting() -> None:
+    """CostSentinel never reads an Azure client secret.
+
+    Authentication is ``DefaultAzureCredential`` only, so a service-principal secret
+    is Azure's own env chain to read, not ours. A secret this code never touches is
+    one it cannot log, trace or commit -- which is why the field is absent rather
+    than present and unused.
+    """
+    assert "azure_client_secret" not in Settings.model_fields
+
+
+def test_a_real_run_has_no_implicit_subscription_scope(tmp_path: Path) -> None:
+    configured = Settings(state_dir=tmp_path)
+    assert configured.subscription_scope == ()
+    named = Settings(state_dir=tmp_path, azure_subscription_ids=" sub-a , sub-b ,, ")
+    assert named.subscription_scope == ("sub-a", "sub-b")
 
 
 def test_headroom_factor_must_exceed_one(tmp_path: Path) -> None:
@@ -142,9 +160,13 @@ def test_factory_passes_the_seed_through(tmp_path: Path) -> None:
 
 
 def test_real_mode_fails_fast_with_a_clear_message(settings: Settings) -> None:
-    """Not implemented until Phase 2 -- and it says so rather than half-working."""
+    """A real run with no subscription scope is refused, and says what to pass.
+
+    Refused before any Azure import, so the message is the same whether or not the
+    optional ``azure`` extra is installed -- which is what makes it actionable.
+    """
     real = settings.model_copy(update={"mode": RunMode.REAL})
-    with pytest.raises(ProviderNotConfiguredError, match="Phase 3"):
+    with pytest.raises(ProviderNotConfiguredError, match="explicit subscription scope"):
         get_provider(real)
 
 
@@ -164,6 +186,32 @@ def test_logging_emits_structured_json(
     assert payload["client"] == "acme"
     assert payload["level"] == "info"
     assert payload["logger"] == LOGGER_NAME
+
+
+def test_logging_follows_a_replaced_stderr(settings: Settings) -> None:
+    """The handler resolves ``sys.stderr`` at write time, not at install time.
+
+    A handler that captured the stream when it was built would keep writing to the
+    old object after anything replaced it -- a wrapper process, a supervisor
+    reopening stderr on log rotation, a redirect. A cost tool whose audit trail can
+    go quietly missing is worse than one that is loud. Found by a test that failed
+    only when another test configured logging first.
+    """
+    import io
+    import sys
+
+    configure_logging(settings)
+    original = sys.stderr
+    replacement = io.StringIO()
+    sys.stderr = replacement
+    try:
+        logging.getLogger(LOGGER_NAME).info("after the swap", extra={"run_id": "run-2"})
+    finally:
+        sys.stderr = original
+
+    payload = json.loads(replacement.getvalue().strip().splitlines()[-1])
+    assert payload["message"] == "after the swap"
+    assert payload["run_id"] == "run-2"
 
 
 def test_logging_configuration_is_idempotent(settings: Settings) -> None:
@@ -286,7 +334,7 @@ def test_cli_reports_a_backend_failure_as_exit_1(
     real = settings.model_copy(update={"mode": RunMode.REAL})
     monkeypatch.setattr("costsentinel.cli.get_settings", lambda: real)
     assert main(["scan"]) == 1
-    assert "Phase 3" in capsys.readouterr().err
+    assert "explicit subscription scope" in capsys.readouterr().err
 
 
 def test_render_json_round_trips(settings: Settings) -> None:
@@ -301,7 +349,7 @@ def test_money_serialises_as_a_decimal_string(settings: Settings) -> None:
     payload = json.loads(render_json(result))
     amount = payload["reports"][0]["totals"]["projected_monthly_savings"]["amount"]
     assert isinstance(amount, str)
-    assert amount == "208.70"
+    assert amount == "149.58"
 
 
 def test_summarise_handles_an_empty_sweep() -> None:
@@ -349,7 +397,7 @@ def test_post_scan_narrowed_to_one_client(client: TestClient) -> None:
     report = body["reports"][0]
     assert report["client"] == CLIENT_NORTHWIND
     assert report["totals"]["findings_count"] == 8
-    assert report["totals"]["projected_monthly_savings"]["amount"] == "1350.41"
+    assert report["totals"]["projected_monthly_savings"]["amount"] == "1421.97"
     assert {f["resource_name"] for f in report["findings"]} == {
         "vm-analytics-01",
         "vm-batch-02",
@@ -386,7 +434,7 @@ def test_post_scan_returns_503_when_a_backend_is_unavailable(settings: Settings)
     with TestClient(app) as test_client:
         response = test_client.post("/scan", json={})
     assert response.status_code == 503
-    assert "Phase 3" in response.json()["detail"]
+    assert "explicit subscription scope" in response.json()["detail"]
 
 
 def test_openapi_schema_is_served(client: TestClient) -> None:

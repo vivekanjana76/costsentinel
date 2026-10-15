@@ -38,17 +38,22 @@ from costsentinel.llm.fake import (
 from costsentinel.llm.gemini import GeminiLLM
 from costsentinel.llm.routing import (
     ALL_TASKS,
+    FAKE_MODEL,
     TASK_JUDGE,
     TASK_PLANNING,
     TASK_REPORT_PROSE,
     TASK_ROOT_CAUSE,
+    UNCONFIGURED_MODEL,
     ModelRoute,
+    model_for,
     resolve_route,
     tier_for,
 )
+from costsentinel.llm.structured import retrying, validate
 
 __all__ = [
     "ALL_TASKS",
+    "FAKE_MODEL",
     "LABEL_RANKED",
     "LABEL_RECOMMENDATION",
     "LABEL_TOTALS",
@@ -58,6 +63,7 @@ __all__ = [
     "TASK_PLANNING",
     "TASK_REPORT_PROSE",
     "TASK_ROOT_CAUSE",
+    "UNCONFIGURED_MODEL",
     "AzureOpenAILLM",
     "EvidenceBlock",
     "EvidenceField",
@@ -79,8 +85,11 @@ __all__ = [
     "RootCauseExplanation",
     "RootCauseFactor",
     "get_llm",
+    "model_for",
     "resolve_route",
+    "retrying",
     "tier_for",
+    "validate",
 ]
 
 
@@ -89,7 +98,8 @@ def get_llm(settings: Settings) -> LLM:
 
     Args:
         settings: Resolved configuration. ``LLM_BACKEND=fake`` (the default) yields
-            the deterministic fake; the real backends arrive in Phase 3.
+            the deterministic fake, which is the only backend CI ever uses;
+            ``azure_openai`` and ``gemini`` yield the real adapters.
 
     Returns:
         An object satisfying :class:`LLM`.

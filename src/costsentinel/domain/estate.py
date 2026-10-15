@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 
 from pydantic import Field
@@ -19,6 +19,7 @@ from costsentinel.domain.common import (
     MoneyAmount,
     Percentage,
     Provenance,
+    ProvenanceSource,
     utc_now,
 )
 
@@ -99,6 +100,14 @@ class Resource(Frozen):
     attached_to: str | None = None
     tags: Mapping[str, str] = Field(default_factory=dict)
     created_at: datetime | None = None
+    capacity_gb: Decimal | None = Field(
+        default=None,
+        gt=Decimal(0),
+        description=(
+            "Provisioned or stored size, for resources billed per GB. The quantity "
+            "comes from the provider; the rate comes from the price catalogue."
+        ),
+    )
     monthly_cost: MoneyAmount
     provenance: Provenance
 
@@ -169,6 +178,51 @@ class ResourceMetrics(Frozen):
     provenance: Provenance
 
 
+class PriceUnit(StrEnum):
+    """How a catalogue rate becomes a monthly figure.
+
+    The distinction matters because two of these cannot be resolved by the catalogue
+    alone. A per-GB rate needs a capacity and a reservation total needs a term, and
+    the capacity belongs to the resource rather than to the price -- which is why a
+    rate times a provider-supplied quantity is a real price, and a rate times an
+    assumed quantity is not.
+    """
+
+    PER_HOUR = "per_hour"
+    PER_MONTH = "per_month"
+    PER_GB_MONTH = "per_gb_month"
+    PER_TERM = "per_term"
+
+    @property
+    def needs_capacity(self) -> bool:
+        """Whether a quantity from the provider is required to price this."""
+        return self is PriceUnit.PER_GB_MONTH
+
+
+class MeterReference(Frozen):
+    """The Azure meter a committed price came from.
+
+    Carried alongside every price so any figure CostSentinel reports can be checked
+    against Azure by hand. Without it, "the catalogue says so" is the end of the
+    audit trail, which is not good enough for a number that drives spend decisions.
+    """
+
+    meter_id: str
+    meter_name: str
+    product_name: str
+    sku_name: str
+    unit_of_measure: str
+    unit_price: Decimal = Field(ge=Decimal(0))
+    effective_start_date: str = ""
+
+    def describe(self) -> str:
+        """One line a reviewer can take to the Azure pricing page."""
+        return (
+            f"{self.product_name} / {self.meter_name} ({self.sku_name}) "
+            f"at {self.unit_price} per {self.unit_of_measure}, meter {self.meter_id}"
+        )
+
+
 class SkuPrice(Frozen):
     """A priced SKU from the provider's catalogue.
 
@@ -189,6 +243,17 @@ class SkuPrice(Frozen):
     applies_to: ResourceKind
     family: str
     region: str
+    unit: PriceUnit = PriceUnit.PER_MONTH
+    meter: MeterReference | None = None
+    rate_provenance: Provenance | None = Field(
+        default=None,
+        description=(
+            "Provenance of the rate itself. Separate from the monthly figure's, "
+            "because a per-GB rate is perfectly well known even when no monthly "
+            "figure can be computed from it without a capacity."
+        ),
+    )
+    term_months: int | None = Field(default=None, ge=1)
     vcpu: int | None = Field(default=None, ge=1)
     memory_gb: Decimal | None = Field(default=None, gt=Decimal(0))
     monthly_cost: MoneyAmount
@@ -197,6 +262,38 @@ class SkuPrice(Frozen):
     def has_capacity(self) -> bool:
         """Whether this SKU can take part in capacity-based rightsizing."""
         return self.vcpu is not None
+
+    def monthly_for(self, capacity_gb: Decimal | None) -> MoneyAmount:
+        """The monthly cost of one resource on this SKU.
+
+        For a flat, hourly or reservation rate the capacity is irrelevant and the
+        pre-computed monthly figure stands. For a per-GB rate the capacity is the
+        quantity, and an absent capacity yields an explicit unknown rather than a
+        guess -- a storage account whose size the provider did not report has an
+        unknown cost, not a zero one.
+        """
+        if not self.unit.needs_capacity:
+            return self.monthly_cost
+        if self.meter is None:  # pragma: no cover -- per-GB entries always carry a meter
+            return MoneyAmount.undetermined(f"{self.sku} has no meter to price from")
+        if capacity_gb is None:
+            return MoneyAmount.undetermined(
+                f"{self.sku} is billed per GB and no capacity was reported for this resource"
+            )
+        rate = self.rate_provenance or self.monthly_cost.provenance
+        return MoneyAmount.of(
+            (self.meter.unit_price * capacity_gb).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+            currency=self.monthly_cost.currency,
+            provenance=Provenance(
+                source=ProvenanceSource.AZURE_RETAIL_PRICES,
+                retrieved_at=rate.retrieved_at,
+                reference=(
+                    f"{self.meter.unit_price} per {self.meter.unit_of_measure} "
+                    f"x {capacity_gb} GB; meter {self.meter.meter_id}"
+                ),
+                verification=rate.verification,
+            ),
+        )
 
 
 class Reservation(Frozen):

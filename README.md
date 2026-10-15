@@ -103,6 +103,24 @@ uv run costsentinel scan --client northwind-energy
 No `.env` is needed. Copy `.env.example` to `.env` only when you want to change the
 defaults; `MODE=mock` and `LLM_BACKEND=fake` are the defaults and require nothing.
 
+### Scanning a real Azure estate
+
+Read [SECURITY.md](SECURITY.md) first. The short version:
+
+```bash
+uv sync --extra real
+az login
+uv run costsentinel scan --real --subscription <subscription-id>
+```
+
+The run is read-only -- there is no write operation anywhere in the codebase -- and
+it writes its report to `var/real-runs/`, which is gitignored. It needs `Reader` and
+`Cost Management Reader` on the named subscriptions and nothing more, and it refuses
+to run without an explicit `--subscription`: there is no wildcard.
+
+Pilot on a personal or sandbox subscription, get written approval before any client
+estate, and never commit the output.
+
 ### Lint and type-check
 
 ```bash
@@ -195,7 +213,17 @@ tests/
 
 ## Safety posture
 
-- Nothing destructive runs. There is no execution path at all.
+See [SECURITY.md](SECURITY.md) for the full picture, the permissions a real run
+needs, and how to report a vulnerability.
+
+- Nothing destructive runs. There is no execution path at all. Read-only is
+  structural, not configured: `ToolOperation` has one member, the MCP server serves
+  exactly what the registry holds, and no Azure SDK able to mutate a resource is
+  installed. `tests/test_readonly.py` asserts all three.
+- Real Azure access is `DefaultAzureCredential` only. There is no client-secret
+  setting, so there is no secret for this codebase to log, trace or commit.
+- A real run's output is gitignored and a pre-commit hook refuses to commit it,
+  along with any subscription id that does not look deliberately synthetic.
 - Every action is classified; the built-in action-class floor cannot be loosened by
   configuration.
 - LLM output and cloud resource metadata are both treated as untrusted: validated

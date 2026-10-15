@@ -1,6 +1,6 @@
 # CostSentinel — Roadmap
 
-**Current phase: 2**
+**Current phase: 4**
 
 Phases are sequential. Do not start work in a later phase before the current phase
 is complete and its exit criteria are met. If an idea arrives mid-phase, record it
@@ -8,14 +8,17 @@ under "Parked ideas" at the bottom and stay on the current slice.
 
 Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
-> **Phase order changed after Phase 1.** The specialist graph and observability were
-> originally Phase 3, and the MCP Azure tool server was Phase 2. They are swapped:
-> the graph work is entirely mock-runnable and delivers the product's visible value
-> with no cloud dependency, whereas the MCP server is the first thing that needs real
-> Azure credentials and network access. Building the graph first keeps the
-> zero-credential invariant in place for longer, and means that when the MCP boundary
-> does land there is a complete six-specialist graph to point at it rather than a
-> four-node slice. Recorded as ARCHITECTURE.md D34.
+> **Phase order has changed twice.** After Phase 1 the specialist graph and the MCP
+> Azure tool server were swapped, because the graph is entirely mock-runnable and the
+> MCP server is the first thing needing real credentials (ARCHITECTURE.md D34). After
+> Phase 2, statistical cost-anomaly detection and the real-model hardening work were
+> split out of the MCP phase into their own Phase 4, and Phases 4-10 renumbered to
+> 5-11. The reason is that Phase 3 is a *capability unlock with a safety surface* --
+> real prices, real reads, real models, and the guarantees that make a real run safe
+> to point at someone's estate. Anomaly detection is ordinary feature work that
+> happens to want real cost history, and bundling it would have meant shipping a
+> safety-critical phase and a feature phase as one reviewable unit
+> (ARCHITECTURE.md D49).
 
 ---
 
@@ -94,48 +97,89 @@ not install it, and the suite passes without it.
 
 ---
 
-## Phase 3 — MCP Azure tool server and real backends
+## Phase 3 — Real estate, read-only
 
-**Goal:** all cloud access moves behind a typed, read-only MCP tool boundary, with a
-real Azure implementation alongside the mock, and the real LLM backends behind the
-routing seam Phase 2 built.
+**Goal:** unlock real Azure, read-only, and ship the guarantees that make a real run
+safe to point at someone's estate. This is the first phase that needs credentials;
+everything before it runs offline.
 
-This is the first phase that needs credentials. Everything before it runs offline.
+Milestone: *Phase 3 - Real estate, read-only*.
 
-- [ ] FastMCP server exposing Azure tools with typed schemas
-- [ ] Tool wrappers: Cost Management (actuals, forecast), Resource Graph (inventory),
-      Advisor (hints), Monitor (metrics)
-- [ ] `MockAzureProvider` re-exposed through the identical tool interface, so agents
-      cannot distinguish mock from real
-- [ ] Read-only enforcement at the tool boundary (no write verb may be registered in
-      this phase)
-- [ ] Caching, retry with backoff, and rate limiting applied once at the boundary
-- [ ] Real `AzureProvider` using `azure-identity` + the management SDKs, read-only
-- [ ] Credential handling via `DefaultAzureCredential`, env-configured, never in code
-- [ ] Integration tests against the MCP server using the mock backend
-- [ ] `MODE=real` smoke path, manually verified, excluded from CI
-- [ ] Real LLM adapters implemented behind the Phase 2 routing seam: Azure OpenAI
-      primary, Gemini fallback. Moved here from the original Phase 3 because they
-      need credentials and CI must stay offline.
-- [ ] Statistical cost-anomaly detection over the cost series, emitting
-      `CostAnomaly`. Moved here because real cost history is what makes the
-      thresholds calibratable.
-- [ ] `Dockerfile` and `docker-compose.yml` (CLAUDE.md section 4). Deliberately
-      deferred from Phase 1: compose is specified as app + postgres-with-pgvector,
-      and Postgres has nothing to do until memory lands in Phase 4. This phase adds
-      the app image; Phase 4 adds the Postgres service.
+- [x] Real prices for every catalogue SKU in both regions, fetched from the public
+      Azure Retail Prices API, with each price tracing to a named meter (#15)
+- [x] FastMCP tool server over Resource Graph, Cost Management, Advisor and Monitor,
+      typed in and out, with a verified / unknown / failed status on every response
+      and **no write verb anywhere in the surface** (#16)
+- [x] Read-only `AzureProvider` backed by those tools, authenticated with
+      `DefaultAzureCredential`, selected only when `MODE=real` (#17)
+- [x] Azure OpenAI and Gemini adapters implemented behind the existing routing seam
+      (#18)
+- [x] A mechanical read-only assertion: no mutating tool, method, or even importable
+      mutating client exists in the real surface (#19)
+- [x] A guard that refuses to commit a real-run artefact, and gitignores for real
+      output and `.env` (#20)
+- [x] `SECURITY.md`: the real-scan runbook, the pilot-on-a-sandbox warning, the
+      get-approval-first instruction, and the never-commit-real-output rule (#21)
+- [x] `costsentinel scan --real --subscription <id>`, guarded so CI never runs it
+      (#22)
+- [x] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.3.0 (#23)
 
-**Exit criteria:** the Phase 1 graph runs unchanged against the MCP boundary in mock
-mode; CI still needs no secrets; a real-mode read-only sweep works against one live
-subscription.
+**Exit criteria:** 671 tests green at 96.5% coverage, with `domain`, `agents`,
+`guardrails` and `graph` at 98-100%; `ruff check`, `ruff format --check` and `pyright`
+clean; every committed price traces to a named Azure meter and nothing in the
+repository claims a synthetic price; the read-only guarantee asserted by 17 mechanical
+tests rather than by review; CI installs no optional extra and no credential, and a
+test asserts the workflow never invokes the real path.
 
-**New dependencies to flag:** `fastmcp`, `azure-identity`, `azure-mgmt-*`,
-`azure-mgmt-costmanagement`, `azure-mgmt-resourcegraph`, `openai` (Azure OpenAI) and
-`google-genai`.
+**One criterion is not yet met, deliberately.** "A real read-only sweep of one
+personal or sandbox subscription produces the same report shape as a mock run" has not
+been executed, because doing it requires an Azure tenant and a human decision about
+which subscription to point at. Everything it depends on is in place and tested
+offline: the provider satisfies the same protocol, the graph is unchanged, the CLI
+path works up to the point of needing a credential, and `SECURITY.md` section 5 is the
+runbook. The first real run is the operator's call, not the build's -- and it is
+exactly the step this phase was built to make safe rather than to take on somebody's
+behalf.
+
+**Deliberately *not* in this phase:** any write, delete or mutate path (Phase 11);
+statistical cost-anomaly detection and real-model hardening (Phase 4, split out of
+this one).
+
+**New dependencies, all optional extras so CI stays lean and offline:** `fastmcp`,
+`azure-identity`, `azure-mgmt-resourcegraph`, `azure-mgmt-costmanagement`,
+`azure-mgmt-monitor`, `azure-mgmt-advisor`, `openai` and `google-genai`. Each is
+imported lazily and absent from the default install, so the suite and the demo run
+without them.
 
 ---
 
-## Phase 4 — Semantic and episodic memory
+## Phase 4 — Cost anomalies and real-model hardening
+
+**Goal:** the work that only becomes meaningful once real cost history and real models
+are in hand. Split out of the original Phase 3 so that the safety-critical capability
+unlock and this ordinary feature work are separately reviewable.
+
+- [ ] Statistical cost-anomaly detection over the cost series, emitting `CostAnomaly`.
+      Needs real cost history to calibrate thresholds against, which is why it waited.
+- [ ] Anomaly root-cause correlation: tie a spend spike to the resource or service
+      that caused it
+- [ ] Egress and data-transfer anomaly detection
+- [ ] Real-model hardening: retry and fallback from the primary backend to the
+      secondary on failure or schema violation, with the fallback recorded in the trace
+- [ ] A token-spend guardrail per sweep, so a large estate cannot run up an unbounded
+      model bill
+- [ ] Prompt-injection red-teaming against the real backends, using hostile resource
+      names and tags drawn from the evidence path
+- [ ] Calibrate detector thresholds and the ranking weights against observed real
+      estates, replacing the Phase 2 defaults
+
+**Exit criteria:** a spend spike in a real subscription is detected, attributed and
+reported; a primary-backend failure falls back to the secondary without failing the
+sweep; a hostile resource name cannot alter a recommendation.
+
+---
+
+## Phase 5 — Semantic and episodic memory
 
 **Goal:** the system remembers reference knowledge and prior outcomes, and uses both
 to rank better.
@@ -159,7 +203,7 @@ migrations.
 
 ---
 
-## Phase 5 — Evaluation harness and datasets
+## Phase 6 — Evaluation harness and datasets
 
 **Goal:** the product's claims are measured, and a safety regression fails the build.
 
@@ -183,7 +227,7 @@ subset on every commit; an intentionally mis-classified destructive action fails
 
 ---
 
-## Phase 6 — Reporting
+## Phase 7 — Reporting
 
 **Goal:** output a client would actually accept as a deliverable.
 
@@ -195,6 +239,13 @@ subset on every commit; an intentionally mis-classified destructive action fails
 - [ ] Groundedness assertion in tests: every number in the rendered report traces to
       a state field
 - [ ] CLI `costsentinel report` to render a stored run
+- [ ] **Residual spend per finding:** for a conservative action, report what is
+      *still* being spent after it. Scaling an idle SQL database down from 4 vCore to
+      2 leaves the smaller tier running, and a report that shows only the saving
+      invites a client to think the problem is solved. Each finding should state the
+      remaining monthly cost alongside the saving, and the report should total it, so
+      "we recovered X and are still paying Y for something nobody uses" is visible.
+      Deterministic arithmetic, like every other figure.
 - [ ] **Portfolio roll-up:** a provider-level executive view totalling savings,
       findings and approval backlog *across all clients*, as a deliberate
       exception to the per-client reporting rule. It is for the managed-service
@@ -211,7 +262,7 @@ template engine (`jinja2`).
 
 ---
 
-## Phase 7 — The approval gate and its adapters
+## Phase 8 — The approval gate and its adapters
 
 **Goal:** a gated action halts the graph until a human decides, wherever that human
 already works.
@@ -241,7 +292,7 @@ verification library.
 
 ---
 
-## Phase 8 — A2A layer
+## Phase 9 — A2A layer
 
 **Goal:** specialists are discoverable and invocable by external agents, without
 routing around governance.
@@ -260,7 +311,7 @@ typed result; an external attempt to execute a gated action is refused.
 
 ---
 
-## Phase 9 — Dashboard
+## Phase 10 — Dashboard
 
 **Goal:** an operator view across the estate.
 
@@ -278,7 +329,7 @@ action entirely from the dashboard.
 
 ---
 
-## Phase 10 — Execution and hardening
+## Phase 11 — Execution and hardening
 
 **Goal:** approved changes are actually applied, safely.
 
@@ -301,6 +352,50 @@ a complete audit chain from signal to execution, and the outcome recorded.
   inventory and governance spine.
 - **Change-risk mission:** pre-change blast-radius assessment using the same
   specialists, policy store and approval gate.
+
+---
+
+## Later features, scheduled
+
+- **Config-tunable ranking weights per client** (Phase 5, with the policy overlays).
+  The Phase 2 weights -- 0.60 savings, 0.25 safety, 0.15 confidence -- are a product
+  judgement baked into a module constant. Different clients have genuinely different
+  appetites: a government production estate may want safety weighted far higher than a
+  development sandbox. The weights should move into the client policy overlay
+  alongside the action-class tightening, with the built-in values as the default and
+  the effective weights reported on every finding so a client can see what was applied
+  to them. The ranking must stay deterministic and the weights must stay data, never
+  model output.
+
+- **Report residual spend alongside the saving, for every conservative action**
+  (Phase 7, with reporting). A finding currently says "resize this VM, saves
+  $140/month". For a conservative action it does not say what remains: downsizing
+  `Standard_D8s_v5` to `Standard_D4s_v5` saves half and leaves the other half
+  running. A client reading a report with a $12,000 annual savings headline cannot
+  tell whether that is most of the waste or a third of it, which makes the headline
+  simultaneously true and misleading.
+
+  The report should carry, per finding and per client total: the spend today, the
+  saving if the recommendation is accepted, and the **residual spend** that remains
+  afterwards -- plus, where a more aggressive action exists, what that residual would
+  be under it. That last part is what turns the number into a decision: "we are
+  recommending the reversible change; the irreversible one would save this much more".
+
+  All three figures are differences between catalogue prices and provider quantities,
+  so they stay deterministic and go through `MoneyAmount` like any other cost. Where
+  the more aggressive alternative is a `block`-class action, the residual must be
+  stated without the action being proposed -- the point is to inform the client, not
+  to route around the approval gate. Needs the reporting layer in place first, because
+  it is a presentation change to a number the Savings Estimator can already compute.
+
+- **A real-run acceptance checklist** (Phase 4, alongside threshold calibration).
+  Phase 3 made a real read-only run safe but did not execute one. The first real sweep
+  against a sandbox subscription will surface a predictable class of gap -- a SKU the
+  catalogue does not price, a resource type `sku_mapping` does not translate, an
+  untagged subscription, a region nobody refreshed prices for. Each of those currently
+  degrades to an explicit unknown, which is correct behaviour and poor experience. The
+  checklist should turn the first run into a diagnostic: what fraction of resources
+  priced, which SKUs and regions were missed, and the exact command to fix each gap.
 
 ---
 

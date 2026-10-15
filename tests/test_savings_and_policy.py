@@ -143,7 +143,7 @@ def test_target_from_reservation_carries_utilisation() -> None:
         region="eastus",
         term_months=36,
         quantity=4,
-        monthly_amortised_cost=MoneyAmount.of(Decimal("420.48"), provenance=PROVENANCE),
+        monthly_amortised_cost=MoneyAmount.of(Decimal("221.44"), provenance=PROVENANCE),
         utilisation_pct=Decimal("34.5"),
         provenance=PROVENANCE,
     )
@@ -169,16 +169,16 @@ def test_peak_signal_depends_on_the_resource_kind() -> None:
 
 def test_deleting_an_orphaned_disk_saves_its_whole_cost() -> None:
     target = _target(
-        name="disk-orphan", kind=ResourceKind.MANAGED_DISK, sku="Premium_LRS_P15", cost="38.42"
+        name="disk-orphan", kind=ResourceKind.MANAGED_DISK, sku="Premium_LRS_P15", cost="38.01"
     )
     estimate = estimate_savings(
         ActionType.DELETE_ORPHANED_MANAGED_DISK, target, None, [], headroom_factor=HEADROOM
     )
-    assert estimate.monthly.amount == Decimal("38.42")
-    assert estimate.annual.amount == Decimal("38.42") * 12
+    assert estimate.monthly.amount == Decimal("38.01")
+    assert estimate.annual.amount == Decimal("38.01") * 12
     assert not estimate.is_estimated  # observed, not modelled
     assert estimate.monthly.provenance.source is ProvenanceSource.CALCULATION
-    assert "38.42" in estimate.basis
+    assert "38.01" in estimate.basis
 
 
 def test_releasing_a_public_ip_saves_its_whole_cost() -> None:
@@ -192,16 +192,17 @@ def test_releasing_a_public_ip_saves_its_whole_cost() -> None:
 
 
 def test_deleting_a_stale_snapshot_saves_its_whole_cost() -> None:
+    """0.132 USD per GB per month in eastus, times a 512 GB snapshot."""
     target = _target(
         name="snap-old",
         kind=ResourceKind.SNAPSHOT,
-        sku="Standard_LRS_Snapshot_512",
-        cost="24.58",
+        sku="Premium_LRS_Snapshot",
+        cost="67.58",
     )
     estimate = estimate_savings(
         ActionType.DELETE_STALE_SNAPSHOT, target, None, [], headroom_factor=HEADROOM
     )
-    assert estimate.monthly.amount == Decimal("24.58")
+    assert estimate.monthly.amount == Decimal("67.58")
     assert not estimate.is_estimated
 
 
@@ -292,7 +293,7 @@ def test_resize_saving_is_the_catalogue_price_difference() -> None:
 
 def test_sql_scale_down_saving_is_the_tier_difference() -> None:
     target = _target(
-        name="sql-idle", kind=ResourceKind.SQL_DATABASE, sku="GP_Gen5_4", cost="147.30"
+        name="sql-idle", kind=ResourceKind.SQL_DATABASE, sku="GP_Gen5_4", cost="444.47"
     )
     estimate = estimate_savings(
         ActionType.SCALE_DOWN_SQL_DATABASE,
@@ -301,13 +302,14 @@ def test_sql_scale_down_saving_is_the_tier_difference() -> None:
         _prices(),
         headroom_factor=HEADROOM,
     )
-    assert estimate.monthly.amount == Decimal("147.30") - Decimal("73.65")
+    # Real eastus Gen5 General Purpose rates: 4 vCore 444.47, 2 vCore 222.24.
+    assert estimate.monthly.amount == Decimal("444.47") - Decimal("222.24")
     assert estimate.is_estimated
 
 
 def test_app_service_scale_down_uses_utilisation_not_cpu() -> None:
     """The plan is sized on instance utilisation, so that is the governing signal."""
-    target = _target(name="app-plan", kind=ResourceKind.APP_SERVICE_PLAN, sku="P1v3", cost="219.00")
+    target = _target(name="app-plan", kind=ResourceKind.APP_SERVICE_PLAN, sku="P1v3", cost="113.15")
     estimate = estimate_savings(
         ActionType.SCALE_DOWN_APP_SERVICE_PLAN,
         target,
@@ -315,7 +317,8 @@ def test_app_service_scale_down_uses_utilisation_not_cpu() -> None:
         _prices(),
         headroom_factor=HEADROOM,
     )
-    assert estimate.monthly.amount == Decimal("219.00") - Decimal("109.50")
+    # Real eastus Linux Premium v3 rates: P1v3 113.15, P0v3 56.58.
+    assert estimate.monthly.amount == Decimal("113.15") - Decimal("56.58")
     assert "P0v3" in estimate.basis
 
 
@@ -401,7 +404,7 @@ def test_no_rightsize_target_for_a_sku_without_capacity() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _reservation_target(utilisation: str | None, cost: str | None = "420.48") -> SavingsTarget:
+def _reservation_target(utilisation: str | None, cost: str | None = "221.44") -> SavingsTarget:
     return SavingsTarget(
         identifier="rsv-1",
         name="nw-compute-dsv5-3y",
@@ -419,7 +422,10 @@ def _reservation_target(utilisation: str | None, cost: str | None = "420.48") ->
 
 
 def test_reservation_waste_is_the_unconsumed_share() -> None:
-    """420.48 at 34.5% utilised leaves 65.5% being paid for and not used."""
+    """221.44 at 34.5% utilised leaves 65.5% being paid for and not used.
+
+    221.44 is four D4s_v5 instances at the real 3-year reserved rate of 55.36 each.
+    """
     estimate = estimate_savings(
         ActionType.EXCHANGE_UNUSED_RESERVATION,
         _reservation_target("34.5"),
@@ -427,15 +433,15 @@ def test_reservation_waste_is_the_unconsumed_share() -> None:
         [],
         headroom_factor=HEADROOM,
     )
-    assert estimate.monthly.amount == Decimal("275.41")
-    assert estimate.annual.amount == Decimal("275.41") * 12
+    assert estimate.monthly.amount == Decimal("145.04")
+    assert estimate.annual.amount == Decimal("145.04") * 12
     # Estimated, because recovering it depends on the exchange terms.
     assert estimate.is_estimated
     assert "already committed" in estimate.basis
 
 
 def test_reservation_waste_is_unknown_without_utilisation_or_cost() -> None:
-    for utilisation, cost in (("34.5", None), (None, "420.48")):
+    for utilisation, cost in (("34.5", None), (None, "221.44")):
         estimate = estimate_savings(
             ActionType.EXCHANGE_UNUSED_RESERVATION,
             _reservation_target(utilisation, cost),

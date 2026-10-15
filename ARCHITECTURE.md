@@ -240,15 +240,58 @@ entire pipeline, the tests and the evals exercise real code paths with zero
 credentials. Determinism comes from a fixed seed, so a given seed always yields
 identical output; tests assert this.
 
-**A real `AzureProvider`** arrives in Phase 2 behind the MCP tool server. It is
-read-only through Phase 4. Write operations are gated behind both the approval gate
-and an explicit opt-in config flag.
+**`AzureLiveProvider`** (Phase 3) satisfies the same protocol against a live estate,
+reaching Azure only through the MCP tool surface. It inherits read-only-ness rather
+than restating it: there is no Azure client in the provider module to misuse. Three
+properties are worth naming.
+
+*Unknown is not zero.* A failed inventory read raises rather than returning an empty
+estate; a failed cost read yields an empty series whose provenance says why, not a
+zero-cost one; an unmeasured resource returns `None` so detectors read "cannot
+conclude" rather than "idle". Those are the two ways a cost tool lies to a client
+without anybody noticing.
+
+*Scope is explicit.* Construction refuses an empty subscription list, and reading a
+subscription outside the named scope raises. On a managed-services tenant, the
+default anybody would reach for — everything the credential can see — means reading
+other clients' estates because somebody forgot a flag.
+
+*Translation is exact or absent.* Azure does not report the thing it bills you for: a
+managed disk reports `Premium_LRS` and a size where the meter is `P15 LRS Disk`, a
+public IP's meter depends on SKU and allocation method together, a storage account
+reports redundancy and access tier separately. `providers/sku_mapping.py` does that
+translation deterministically and returns `None` whenever it cannot be exact, so the
+resource is priced as unknown rather than matched to the nearest meter. A plausible
+wrong number in a client report is worse than an admitted gap.
+
+The client boundary comes from a subscription tag (`AZURE_CLIENT_TAG`, default
+`client`), because Azure has no notion of CostSentinel's client. An untagged
+subscription is attributed to `unassigned` — a visible gap to fix, rather than a
+guess that quietly folds it into somebody else's report.
+
+Write operations remain absent entirely. They are a Phase 11 concern and will arrive
+behind both the approval gate and an explicit opt-in flag.
 
 ### 4.1 Selection
 
 `Settings.mode` selects the implementation through a single factory
 (`providers.get_provider`). `MODE=mock` is the default everywhere, including CI. No
-code outside the factory may name a concrete provider class.
+code outside the factory may name a concrete provider class. The real branch imports
+the Azure SDKs inside the function rather than at module scope, so importing the
+package never requires the optional `azure` extra — which CI does not install.
+
+### 4.2 Authentication
+
+`DefaultAzureCredential` and nothing else: an existing `az login`, a managed
+identity, or a workload identity. There is deliberately no client-secret setting and
+no `Settings` field for one; a test asserts its absence. A secret this codebase never
+reads is a secret it cannot write to a log, attach to a trace, or carry into a
+commit. `DefaultAzureCredential` has its own environment chain, so a service
+principal still works — Azure's library reads those variables, not CostSentinel.
+
+The credential is acquired eagerly at client construction, so a missing or expired
+login fails with one legible message rather than surfacing as six tool failures
+halfway through a sweep.
 
 ---
 
@@ -417,13 +460,55 @@ incident.
 
 These are two different seams and are deliberately not conflated.
 
-**MCP — how CostSentinel reaches tools (inbound capability).** A FastMCP server
-exposes Azure Cost Management, Resource Graph, Advisor and Monitor as typed tools.
-The boundary matters because it is where the real/mock swap lives, where
-read-only-ness is enforced, and where rate limiting, caching and retry are applied
-once rather than per agent. The mock provider mirrors the identical tool interface,
-so agents cannot tell the difference and tests exercise the real call path. Agents
-never import an Azure SDK directly.
+**MCP — how CostSentinel reaches tools (inbound capability).** Implemented in Phase
+3. A FastMCP server (`tools/server.py`) exposes six typed, read-only tools:
+
+| Tool | Azure service | Role required |
+| --- | --- | --- |
+| `azure_list_subscriptions` | Resource Graph | Reader (subscription or management group) |
+| `azure_query_resources` | Resource Graph | Reader |
+| `azure_get_cost_series` | Cost Management | Cost Management Reader |
+| `azure_get_resource_metrics` | Monitor | Monitoring Reader |
+| `azure_list_advisor_cost_recommendations` | Advisor | Reader |
+| `azure_list_reservations` | Reservations | Reader on the reservation order, or Billing Reader |
+
+The package is layered so that `schemas`, `registry`, `azure` (the handlers) and
+`invoker` import without FastMCP or any Azure SDK. Only `clients.py` and `server.py`
+touch the optional extras, and both import them lazily. That is what lets the entire
+tool surface be covered offline, and it is why the real provider needs no running MCP
+server to work locally — both it and the server dispatch through the same
+`ToolInvoker`, so there is exactly one code path and the read-only guarantee holds for
+both.
+
+**The read-only guarantee is structural, in three independent ways.**
+
+1. `ToolOperation` has exactly one member. There is no value a caller could pass to
+   declare a mutating tool, so a write tool cannot be registered — it is absent
+   rather than disabled. A boolean `read_only=True` would have been a convention; a
+   single-member enum is a constraint.
+2. The server registers exactly what the registry holds, by iterating it. There is no
+   decorator-based registration, so enumerating the registry enumerates the whole
+   surface — which is also what the `--real` banner prints, so the banner cannot
+   drift from what is actually exposed.
+3. No Azure SDK capable of mutating a resource is installed or imported anywhere in
+   `src`. The capability is not present to misuse.
+
+`tests/test_readonly.py` asserts all three mechanically, including that no tool name,
+handler name or client method contains a mutating verb. A guarantee that depends on
+nobody making a mistake is not a guarantee.
+
+**Honesty model.** Every tool response carries a `ToolStatus` of `verified`,
+`unknown` or `failed`, and a non-verified response must state a reason. `failed`
+carries no data at all, enforced by a validator. The distinction between an empty
+list of resources and a failed inventory query is the difference between "this
+subscription is clean" and "we could not look" — conflating them is how a tool
+quietly tells a client their estate is fine. `unknown` is not a soft failure: it
+means the call succeeded and Azure does not know, which is itself a fact worth
+carrying.
+
+The mock provider mirrors the same `AzureProvider` interface, so agents cannot tell
+the difference and tests exercise the real call path. Agents never import an Azure
+SDK directly.
 
 **A2A — how other agents reach CostSentinel (outbound capability).** Agent2Agent v1
 Agent Cards publish each specialist as a discoverable, invocable agent, so an Azure
@@ -767,3 +852,163 @@ detector needed a remediation that could carry a real saving -- a waste kind who
 option is "tell someone" produces an unknown figure and is of little use to a client.
 Each new action has a floor, a full set of preconditions, and inherits the
 production-tightening rule where it is a deletion.
+
+### Phase 3 decisions
+
+**D49. The phase was split: real-estate unlock now, statistical anomaly detection
+later.** *Alternatives:* keep the original plan, which bundled cost-anomaly detection
+and real-model work into the same phase as the real provider. *Why:* they answer
+different questions. "Can CostSentinel safely read a live estate?" is a safety and
+plumbing question with a binary answer, and everything in it — real prices, the tool
+server, the read-only provider, the data-handling guard — is a prerequisite for anyone
+using this at all. "Can CostSentinel tell a spend spike from a Tuesday?" is a
+modelling question that needs real cost series to calibrate against, which only exist
+*after* this phase. Sequencing them the other way round would have meant calibrating a
+detector against synthetic data and then recalibrating it. Statistical anomaly
+detection and real-model hardening are now Phase 4.
+
+**D50. Read-only is enforced three ways, not one.** *Alternatives:* a single
+mechanism — a `read_only` flag on each tool, or a code-review rule. *Why:* each of the
+three fails differently, and the combination has no single point of failure. A flag can
+be set wrong; a single-member enum cannot be. A registry can drift from what is
+served; iterating it to register cannot. Both could be subverted by someone importing
+an Azure management client directly; not having the dependency makes that impossible.
+The cost is three tests instead of one, which is the cheapest insurance in the
+repository.
+
+**D51. The real provider reaches Azure only through a `ToolInvoker`.** *Alternatives:*
+let the provider hold Azure clients directly and keep the MCP server as a separate
+wrapper over the same handlers. *Why:* two wrappers over one set of handlers means two
+places where read-only-ness has to hold, two caching policies, and two chances for
+them to diverge. Going through the invoker means the provider module contains no Azure
+client at all, so its read-only-ness is inherited rather than asserted separately —
+and it needs no running MCP server for a local run.
+
+**D52. An `unknown` or `failed` tool response becomes an explicitly unknown domain
+value, never a zero or an empty list.** *Why:* this is the single most consequential
+rule in the real provider. A failed inventory read that returned `()` would report a
+clean subscription; a failed cost read that returned a zero series would tell a client
+their estate is free. Both are worse than an error, because an error gets
+investigated. A failed inventory read therefore raises, a failed cost read yields an
+empty series whose provenance names the failure, and an unmeasured resource returns
+`None` so the detectors read "cannot conclude".
+
+**D53. A real run refuses to start without an explicit subscription scope.**
+*Alternatives:* default to every subscription the credential can enumerate. *Why:* on
+a managed-services tenant that default means reading other clients' estates because
+somebody forgot a flag, and there is no way to undo having read them. The refusal
+happens at provider construction and again in the CLI before any Azure import, so the
+message is identical with or without the optional extra. `--subscription` also wins
+over `AZURE_SUBSCRIPTION_IDS`, so a shell with a stale variable cannot widen the scope
+of a deliberate command.
+
+**D54. The resource SKU and the catalogue SKU are different things, and the
+translation lives in one tested module.** *Alternatives:* price from the SKU Azure
+reports, or match the nearest-priced meter. *Why:* Azure does not report the thing it
+bills you for. A managed disk reports `Premium_LRS` and a size; the meter is `P15 LRS
+Disk`, and which tier depends on the size, billed at the band the *provisioned* size
+falls into rather than pro rata. Pricing from the reported SKU would be wrong; nearest
+match would be plausibly wrong, which is worse. `providers/sku_mapping.py` does the
+translation deterministically and returns `None` whenever it cannot be exact, so the
+resource is priced as unknown.
+
+**D55. A real reservation's amortised cost is the published *list* reserved price, and
+the provenance says so.** *Why:* Azure exposes no API for what a customer actually
+paid for a commitment. The list rate times the quantity is the closest defensible
+figure, and a negotiated discount makes it an overstatement. Stating that in the
+provenance — and marking the figure unverified — is the alternative to presenting it
+as the contract value. The rate itself is real and names its meter; only the claim
+"this is what you pay" would have been invented.
+
+**D56. The client boundary comes from a subscription tag, and an untagged subscription
+is named rather than guessed.** *Alternatives:* infer the client from the subscription
+display name, or from the management-group hierarchy. *Why:* Azure has no notion of
+CostSentinel's client, so something has to carry it, and a tag is the one thing a
+managed-service provider can set uniformly across tenants they do not own. Inferring
+from a display name would be a string heuristic deciding who sees whose cost data. An
+untagged subscription becomes `unassigned`, which shows up as a gap to fix rather than
+quietly joining a client's numbers.
+
+**D57. Prices for a real run come from the committed catalogue, not from Azure at
+runtime.** *Alternatives:* fetch Retail Prices during a sweep. *Why:* a sweep's
+figures should be reproducible, and a price change should be a reviewable commit
+rather than a silent difference between two runs of the same command. It also keeps
+the live dependencies of a real run down to the four read APIs. The cost is that a
+region the catalogue does not cover prices as unknown until somebody runs
+`scripts/refresh_prices.py` — which the error message says.
+
+**D58. Azure OpenAI authenticates with `DefaultAzureCredential` before an API key.**
+*Alternatives:* require a key, which is the more commonly documented path. *Why:* one
+`az login` then serves both the estate read and the model calls, and a key that is
+never stored cannot be rotated late, committed, or read out of a log. A key is still
+accepted because plenty of deployments only offer one. The decision is extracted into
+`client_kwargs()` so it is tested without the SDK installed, because it is a security
+property rather than a detail.
+
+**D59. There is no client-secret setting at all.** *Alternatives:* keep
+`AZURE_CLIENT_SECRET` in `Settings` as an option. *Why:* a secret this codebase never
+reads cannot be logged, traced, serialised into a settings dump, or carried into a
+commit — and the field existing invites somebody to put one there. Removing it loses
+nothing, because `DefaultAzureCredential` reads its own environment chain, so a
+service principal still works; Azure's library handles it, not us. A test asserts the
+field's absence.
+
+**D60. Both real backends share one validation gate and one retry.** *Alternatives:*
+trust each SDK's own structured-output parse. *Why:* both SDKs will hand back
+something shaped roughly like the requested schema, and trusting either would mean two
+places where model output becomes a domain object. `llm/structured.py` revalidates
+whatever came back, so "a model cannot produce a number" stays checkable at one seam.
+Nothing is salvaged from a partial parse. A schema failure is retried once with the
+validation error fed back as an instruction — retrying is only worth doing if the
+second attempt knows what was wrong — and the correction goes in the instruction
+rather than into an evidence block, because the fence is reserved for untrusted values
+and widening it would weaken it. A transport failure is raised, not retried:
+CostSentinel cannot tell a transient 503 from a misconfigured endpoint, and hammering
+the latter is worse than failing.
+
+**D61. Real model token rates come from configuration, and an unconfigured rate makes
+the run cost unknown.** *Alternatives:* ship the published list prices as defaults,
+which is what Phase 2 did as an acknowledged placeholder. *Why:* with real backends
+live, that placeholder would have produced a per-run cost computed from a made-up rate
+and presented as calculated — a straightforward golden rule 5 violation, in the one
+place where the system reports on itself. Rates now come from
+`LLM_PRICE_{SMALL,LARGE}_{PROMPT,COMPLETION}`, and `RunMetrics.total_cost` already
+propagates an unknown. The fake backend stays priced at zero, because that is a
+measured fact rather than an unknown standing in as zero: it makes no call.
+
+**D62. An unconfigured real model resolves to a conspicuous `unconfigured`
+identifier.** *Why:* a trace saying `unconfigured` is a configuration bug somebody can
+find. A plausible-looking default model name would hide one. Relatedly, the small tier
+falls back to the large deployment so a single-deployment setup needs no second
+variable, but nothing falls back the other way — quietly sending synthesis work to a
+small model would degrade a report with no sign of why.
+
+**D63. A real run writes its report to a gitignored directory, not to stdout.**
+*Alternatives:* print JSON as a mock run does, and leave redirection to the operator.
+*Why:* this repository is public and a real report contains a client's subscription
+ids, resource names and actual spend. The irreversible mistake available here is that
+data reaching a commit, a ticket or a pasted terminal buffer, so the shape of the
+command makes the safe thing the default one. Only a digest, the path and a warning go
+to the terminal. A mock run is unchanged.
+
+**D64. The commit guard matches ids in context rather than any GUID.** *Alternatives:*
+flag every GUID-shaped string in a staged file, which was the first implementation.
+*Why:* it flagged every Azure meter id in the committed price catalogue — public
+pricing data every customer sees. A check that cries wolf on correct files gets
+disabled, and a disabled check protects nothing, so the narrower rule is the safer one
+in practice. It matches after `/subscriptions/`, beside a `subscription_id` key, after
+`--subscription`, and treats nil-prefixed and single-character-repeated GUIDs as the
+deliberately synthetic forms this repository is allowed to contain. The false positive
+is pinned as a test.
+
+**D65. The commit guard runs first among the pre-commit hooks.** *Why:* it is the only
+failure in that list that cannot be undone. A lint error, a type error or a failing
+test costs a minute. A real subscription id in a commit is permanent, and a force-push
+does not help once somebody has a clone.
+
+**D66. The JSON log handler resolves `sys.stderr` at write time.** *Alternatives:*
+leave `logging.StreamHandler`'s default, which captures the stream at construction.
+*Why:* found by a test that failed only when another test configured logging first,
+but it is not a test artefact. A wrapper process, a supervisor reopening stderr on log
+rotation, or a redirect would all silently lose CostSentinel's log lines — and a cost
+tool whose audit trail can go quietly missing is worse than one that is loud.

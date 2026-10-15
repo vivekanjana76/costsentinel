@@ -14,6 +14,7 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from costsentinel import __version__
 from costsentinel.config import Settings, get_settings
 from costsentinel.domain.report import ScanResult
 from costsentinel.graph.runner import ScanFailedError, run_scan
@@ -23,7 +24,12 @@ from costsentinel.observability.logging import configure_logging
 from costsentinel.providers.base import ProviderError
 
 API_TITLE = "CostSentinel"
-API_VERSION = "0.1.0"
+
+#: Derived rather than restated. A hardcoded copy here had already drifted a
+#: release behind the tag, which means the API was reporting a version that did
+#: not exist -- not fatal, but exactly the kind of quiet untruth this codebase is
+#: supposed to avoid.
+API_VERSION = __version__
 
 
 class ScanRequest(BaseModel):

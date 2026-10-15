@@ -50,6 +50,27 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str, sort_keys=True)
 
 
+class _CurrentStderrHandler(logging.StreamHandler[Any]):
+    """A stream handler that resolves ``sys.stderr`` at write time.
+
+    ``logging.StreamHandler`` captures the stream object when it is constructed, so
+    a handler installed before anything replaced ``sys.stderr`` keeps writing to the
+    old object afterwards. That is not only a test problem: a wrapper process, a
+    supervisor that reopens stderr on log rotation, or a context manager that
+    redirects output would all silently lose CostSentinel's log lines, and a cost
+    tool whose audit trail can go quietly missing is worse than one that is loud.
+    """
+
+    @property
+    def stream(self) -> Any:
+        """The current ``sys.stderr``."""
+        return sys.stderr
+
+    @stream.setter
+    def stream(self, value: Any) -> None:
+        """Ignored: the stream is always the current ``sys.stderr``."""
+
+
 def configure_logging(settings: Settings) -> logging.Logger:
     """Install the JSON handler on CostSentinel's logger and return it.
 
@@ -60,7 +81,7 @@ def configure_logging(settings: Settings) -> logging.Logger:
     logger.setLevel(_LEVELS[settings.log_level])
     logger.propagate = False
     if not logger.handlers:
-        handler = logging.StreamHandler(stream=sys.stderr)
+        handler = _CurrentStderrHandler()
         handler.setFormatter(JsonFormatter())
         logger.addHandler(handler)
     return logger

@@ -175,6 +175,7 @@ def run_scan(
     requested_by: str = "system",
     run_id_factory: Callable[[], str] = new_run_id,
     tracer: Tracer | None = None,
+    subscription_ids: Sequence[str] | None = None,
 ) -> ScanResult:
     """Run a sweep and return one report per client in scope.
 
@@ -192,10 +193,13 @@ def run_scan(
         run_id_factory: Supplies each run's id. Injectable so a test can pin it.
         tracer: Where traces go. Defaults to the configured tracer, which is a no-op
             unless Langfuse is set up.
+        subscription_ids: Subscriptions a ``MODE=real`` run may read. Ignored by the
+            mock provider, and required by the real one -- a sweep reads what the
+            operator named, never everything a credential can reach.
     """
     resolved = settings or get_settings()
     configure_logging(resolved)
-    active_provider = provider or get_provider(resolved)
+    active_provider = provider or get_provider(resolved, subscription_ids=subscription_ids)
     active_llm = llm or get_llm(resolved)
     active_tracer = tracer or get_tracer(resolved)
 

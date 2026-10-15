@@ -32,9 +32,18 @@ htmlcov/
 # Runtime state: LangGraph checkpoints, generated reports, scorecards
 .costsentinel/
 var/
+out/
 *.sqlite
 *.sqlite3
 *.db
+
+# Real-run output. A live scan writes here by default (see cli.py and SECURITY.md).
+# This is real client cost data: never commit it. scripts/check_no_real_data.py is
+# the second layer, because `git add -f` gets past a gitignore and git history is
+# permanent.
+var/real-runs/
+*.real.json
+*.real.md
 
 # Editors / OS
 .vscode/

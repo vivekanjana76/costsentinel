@@ -6,8 +6,15 @@ whole pipeline -- including the Phase 5 eval harness -- exercises real code path
 with zero credentials.
 
 Every price comes from the committed catalogue snapshot
-(:mod:`costsentinel.providers.catalogue`), so a resource's reported cost and the
-catalogue price a rightsizing decision quotes can never drift apart.
+(:mod:`costsentinel.providers.catalogue`), which holds **real** Azure Retail Prices
+figures with the meter each came from. So a resource's reported cost and the
+catalogue price a rightsizing decision quotes can never drift apart, and both are
+checkable against Azure by hand.
+
+The estate itself is synthetic -- the resource names, ids, tags, utilisation and
+capacities are invented, and deliberately so, since this is a public repository. What
+is real is the *rates*: the quantities come from here and the prices come from
+Azure.
 
 The estate deliberately contains clearly wasteful resources alongside healthy ones,
 so both recall *and* precision are testable. Wasteful:
@@ -110,6 +117,7 @@ class _ResSpec(NamedTuple):
     attached_to_kind: ResourceKind = ResourceKind.VIRTUAL_MACHINE
     tags: tuple[tuple[str, str], ...] = ()
     age_days: int = 0
+    capacity_gb: str | None = None
     cpu_avg_pct: str | None = None
     cpu_max_pct: str | None = None
     network_in_gb: str | None = None
@@ -128,7 +136,6 @@ class _RsvSpec(NamedTuple):
     reserved_kind: ResourceKind
     term_months: int
     quantity: int
-    monthly_amortised: str
     utilisation_pct: str | None
     expires_in_days: int
 
@@ -201,6 +208,7 @@ _RESOURCES: tuple[_ResSpec, ...] = (
         resource_group="rg-core-prod",
         state=ResourceState.AVAILABLE,
         sku="Standard_GRS_Cool",
+        capacity_gb="1024",
         tags=(("env", "prod"), ("retention", "7y")),
         age_days=901,
     ),
@@ -250,7 +258,8 @@ _RESOURCES: tuple[_ResSpec, ...] = (
         subscription_index=0,
         resource_group="rg-core-prod",
         state=ResourceState.AVAILABLE,
-        sku="Standard_LRS_Snapshot_512",
+        sku="Premium_LRS_Snapshot",
+        capacity_gb="512",
         tags=(("env", "prod"), ("note", "taken before the 2025 platform upgrade")),
         age_days=603,
     ),
@@ -310,6 +319,7 @@ _RESOURCES: tuple[_ResSpec, ...] = (
         resource_group="rg-analytics-dev",
         state=ResourceState.AVAILABLE,
         sku="Standard_LRS_Hot",
+        capacity_gb="256",
         tags=(("env", "dev"),),
         age_days=287,
     ),
@@ -320,7 +330,8 @@ _RESOURCES: tuple[_ResSpec, ...] = (
         subscription_index=1,
         resource_group="rg-analytics-dev",
         state=ResourceState.AVAILABLE,
-        sku="Standard_LRS_Snapshot_128",
+        sku="Premium_LRS_Snapshot",
+        capacity_gb="128",
         tags=(("env", "dev"), ("project", "churn-model-poc")),
         age_days=412,
     ),
@@ -331,7 +342,8 @@ _RESOURCES: tuple[_ResSpec, ...] = (
         subscription_index=1,
         resource_group="rg-analytics-dev",
         state=ResourceState.AVAILABLE,
-        sku="Standard_LRS_Snapshot_128",
+        sku="Premium_LRS_Snapshot",
+        capacity_gb="128",
         tags=(("env", "dev"), ("schedule", "nightly")),
         age_days=12,
     ),
@@ -424,21 +436,19 @@ _RESERVATIONS: tuple[_RsvSpec, ...] = (
         reserved_kind=ResourceKind.VIRTUAL_MACHINE,
         term_months=36,
         quantity=4,
-        monthly_amortised="420.48",
         utilisation_pct="34.5",
         expires_in_days=488,
     ),
     _RsvSpec(
         # Well used: a precision counter-example.
         reservation_id="rsv-00000000-0000-4000-8000-0000000000c2",
-        name="nw-sql-gen5-1y",
+        name="nw-compute-dsv5-1y",
         client=CLIENT_NORTHWIND,
         subscription_index=0,
-        reserved_sku="GP_Gen5_4",
-        reserved_kind=ResourceKind.SQL_DATABASE,
+        reserved_sku="Standard_D4s_v5",
+        reserved_kind=ResourceKind.VIRTUAL_MACHINE,
         term_months=12,
-        quantity=1,
-        monthly_amortised="110.48",
+        quantity=2,
         utilisation_pct="96.2",
         expires_in_days=211,
     ),
@@ -451,7 +461,6 @@ _RESERVATIONS: tuple[_RsvSpec, ...] = (
         reserved_kind=ResourceKind.VIRTUAL_MACHINE,
         term_months=12,
         quantity=2,
-        monthly_amortised="236.80",
         utilisation_pct="88.0",
         expires_in_days=96,
     ),
@@ -563,11 +572,15 @@ class MockAzureProvider:
         )
 
     def _resource_monthly(self, spec: _ResSpec, region: str) -> MoneyAmount:
-        """Price a resource from the catalogue.
+        """Price a resource from the catalogue, in its own region.
 
-        A SKU the catalogue does not price yields an explicitly unknown cost rather
-        than a guess -- the honest answer, and the behaviour downstream nodes are
-        built to tolerate.
+        A SKU the catalogue does not price *in that region* yields an explicitly
+        unknown cost rather than a price borrowed from somewhere else. Not every SKU
+        is sold in every region, and pretending otherwise would quietly invent a
+        figure.
+
+        For a per-GB SKU the rate comes from the catalogue and the capacity from this
+        provider, which is the division of labour the whole pricing model rests on.
         """
         if spec.sku is None:
             return MoneyAmount.undetermined(f"{spec.name} has no SKU to price")
@@ -576,7 +589,9 @@ class MockAzureProvider:
             return MoneyAmount.undetermined(
                 f"no catalogue price for sku {spec.sku!r} as {spec.kind.value} in {region}"
             )
-        return priced.monthly_cost
+        return priced.monthly_for(
+            Decimal(spec.capacity_gb) if spec.capacity_gb is not None else None
+        )
 
     def _build_resource(self, spec: _ResSpec) -> Resource:
         sub = _SUBSCRIPTIONS[spec.subscription_index]
@@ -602,8 +617,41 @@ class MockAzureProvider:
             attached_to=attached_to,
             tags=dict(spec.tags),
             created_at=self._as_of - timedelta(days=spec.age_days),
+            capacity_gb=Decimal(spec.capacity_gb) if spec.capacity_gb is not None else None,
             monthly_cost=self._resource_monthly(spec, sub.region),
             provenance=self._provenance("mock:resourcegraph.resources"),
+        )
+
+    def _reservation_monthly(self, spec: _RsvSpec, sub: _SubSpec | None) -> MoneyAmount:
+        """Amortised monthly cost of a commitment, from the real reserved meter.
+
+        What a given customer actually paid is contract data with no public API, but
+        a reservation bought at list price costs the published reserved rate. So the
+        rate comes from the catalogue and the quantity from this provider, exactly as
+        for a per-GB resource -- which keeps the last invented price out of the
+        repository.
+        """
+        region = sub.region if sub else self._catalogue.regions[0]
+        priced = self._catalogue.reserved_price_for(spec.reserved_sku, spec.term_months, region)
+        if priced is None or priced.monthly_cost.amount is None:
+            return MoneyAmount.undetermined(
+                f"no reserved price for {spec.reserved_sku} over {spec.term_months} "
+                f"months in {region}"
+            )
+        rate = priced.rate_provenance or priced.monthly_cost.provenance
+        return MoneyAmount.of(
+            _money(priced.monthly_cost.amount * spec.quantity),
+            currency=priced.monthly_cost.currency,
+            provenance=Provenance(
+                source=ProvenanceSource.AZURE_RETAIL_PRICES,
+                retrieved_at=rate.retrieved_at,
+                reference=(
+                    f"{priced.monthly_cost.display()} per instance per month over a "
+                    f"{spec.term_months}-month term x {spec.quantity} instance(s); "
+                    f"{priced.meter.describe() if priced.meter else 'no meter'}"
+                ),
+                verification=rate.verification,
+            ),
         )
 
     def _build_reservation(self, spec: _RsvSpec) -> Reservation:
@@ -617,14 +665,10 @@ class MockAzureProvider:
             scope_subscription_id=sub.subscription_id if sub else None,
             reserved_sku=spec.reserved_sku,
             reserved_kind=spec.reserved_kind,
-            region=sub.region if sub else self._catalogue.base_region,
+            region=sub.region if sub else self._catalogue.regions[0],
             term_months=spec.term_months,
             quantity=spec.quantity,
-            monthly_amortised_cost=MoneyAmount.of(
-                _money(Decimal(spec.monthly_amortised)),
-                currency=Currency.USD,
-                provenance=self._provenance(f"mock:reservations.detail/{spec.name}"),
-            ),
+            monthly_amortised_cost=self._reservation_monthly(spec, sub),
             utilisation_pct=(
                 Decimal(spec.utilisation_pct) if spec.utilisation_pct is not None else None
             ),

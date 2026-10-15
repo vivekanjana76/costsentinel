@@ -8,7 +8,107 @@ CostSentinel is pre-1.0, so the public API may change between minor versions.
 
 ## [Unreleased]
 
-Nothing yet. Next up is Phase 3: the MCP Azure tool server and the real backends.
+Nothing yet. Next up is Phase 4: statistical cost-anomaly detection and real-model
+hardening.
+
+## [0.3.0] - 2026-10-15
+
+Phase 3: the real-estate, read-only unlock. The first release that can read a live
+Azure subscription -- and the first that needed a safety surface to make doing so
+defensible. CI is still fully offline, installs no optional extra and no credential,
+and runs the entire suite against the deterministic mock estate.
+
+### Added
+
+- **Real prices for every catalogue SKU**, pulled from the public Azure Retail Prices
+  API for `eastus` and `qatarcentral`. Each of the 27 committed prices names the Azure
+  meter it came from, and provenance is now `verified`. Nothing in the repository
+  claims a synthetic price any more. Savings assertions were re-baselined to the real
+  figures.
+- **A read-only MCP tool server** (`fastmcp`) over Resource Graph, Cost Management,
+  Advisor, Monitor and Reservations: six typed tools, Pydantic in and out, with a
+  `verified` / `unknown` / `failed` status on every response. A `failed` response
+  carries no data, enforced by a validator -- because an empty resource list and a
+  failed inventory query mean very different things to a cost report.
+- **`AzureLiveProvider`**, satisfying the same `AzureProvider` protocol as the mock, so
+  the Phase 2 graph runs against a live estate unchanged. It reaches Azure only through
+  the tool surface, so it holds no Azure client of its own.
+- **`providers/sku_mapping.py`**, which translates what Azure reports into what Azure
+  bills. A managed disk reports `Premium_LRS` and a size where the meter is a `P15`
+  tier; a public IP's meter depends on SKU and allocation method together. Returns
+  `None` whenever it cannot be exact, so the resource is priced as unknown rather than
+  matched to the nearest meter.
+- **Azure OpenAI and Gemini backends**, opt-in via `LLM_BACKEND`, with model names from
+  the environment and the routed model recorded in the trace. Both share one validation
+  gate and one schema-failure retry that feeds the validation error back.
+- **`costsentinel scan --real --subscription <id>`**: a local, read-only sweep via
+  `DefaultAzureCredential`. Refuses to run without an explicit scope, prints the
+  identity, scope, roles and every tool it may call before reading anything, and writes
+  its report to a gitignored directory rather than stdout.
+- **`SECURITY.md`**: the real-scan runbook, the permissions table, the three warnings
+  (pilot on a sandbox, get written approval before any client estate, never commit the
+  output), and how to report a vulnerability.
+- **`scripts/check_no_real_data.py`**, wired as the first pre-commit hook: refuses a
+  file under a real-output directory, a `.env`, a subscription or tenant id that does
+  not look deliberately synthetic, and a real-provider provenance marker in a data
+  file.
+- **17 mechanical read-only assertions** (`tests/test_readonly.py`) and **45
+  data-handling assertions** (`tests/test_data_handling.py`), including a test that
+  runs the commit guard over every tracked file so it stays honest in both directions.
+
+### Changed
+
+- **Read-only is now structural in three independent ways**: `ToolOperation` has a
+  single member so a write tool cannot be declared; the MCP server registers exactly
+  what the registry holds so it cannot drift; and no Azure SDK able to mutate a
+  resource is installed or imported. Each fails differently, so the combination has no
+  single point of failure.
+- **Real model token rates come from configuration.** The published list prices shipped
+  in v0.2.0 as an acknowledged placeholder would, with real backends live, have
+  produced a per-run cost computed from a made-up rate and labelled as calculated. Set
+  `LLM_PRICE_{SMALL,LARGE}_{PROMPT,COMPLETION}` to get a figure; unset, the run reports
+  its model cost as unknown. The fake backend stays priced at zero, which is a measured
+  fact rather than an unknown standing in as zero.
+- **The version is stated once.** `pyproject.toml`, `__version__` and the API all now
+  derive from one value, with tests asserting they agree and that the CHANGELOG has an
+  entry for it.
+- `run_scan` takes `subscription_ids`, so the CLI, the API and the tests still share
+  one code path.
+
+### Removed
+
+- **The `AZURE_CLIENT_SECRET` setting.** Authentication is `DefaultAzureCredential`
+  only. A secret this codebase never reads cannot be logged, traced, serialised into a
+  settings dump or carried into a commit, and the field existing invited somebody to
+  put one there. A service principal still works -- `DefaultAzureCredential` reads its
+  own environment chain. A test asserts the field's absence.
+
+### Fixed
+
+- **The JSON log handler captured `sys.stderr` at install time**, so once anything
+  replaced the stream the log lines went to the old object. Found by a test that failed
+  only when another test configured logging first, but a wrapper process, a supervisor
+  reopening stderr on log rotation, or a redirect would all have silently lost
+  CostSentinel's audit trail. The handler now resolves the stream at write time.
+- **The commit guard's first implementation flagged every Azure meter id** in the
+  committed price catalogue -- public pricing data every customer sees. A check that
+  cries wolf on correct files gets disabled, so the rule now matches ids in context.
+  The false positive is pinned as a test.
+- **A read-only test had a bug in itself**: `startswith("azure.mgmt.resource")` matched
+  the read-only Resource Graph client. Module-boundary matching now.
+
+### Notes
+
+- **No real sweep has been executed.** Everything a real run needs is in place and
+  tested offline, but pointing it at a subscription requires an Azure tenant and a
+  human decision about which one. That is the operator's call; `SECURITY.md` section 5
+  is the runbook. ROADMAP Phase 4 carries a real-run acceptance checklist for the
+  predictable gaps a first run will surface.
+- A real reservation's amortised cost is the published **list** reserved price times
+  the quantity, marked unverified, because Azure exposes no API for what a customer
+  actually paid. A negotiated discount makes it an overstatement, and the provenance
+  says so.
+- 671 tests, 96.5% coverage; `domain`, `agents`, `guardrails` and `graph` at 98-100%.
 
 ## [0.2.0] - 2026-10-10
 
@@ -106,6 +206,7 @@ Phase 1: the scaffold and a thin vertical slice.
 - Landed as an honest commit series dated when it was actually committed; it predates
   the issue-driven workflow and has no backing issues.
 
-[Unreleased]: https://github.com/vivekanjana76/costsentinel/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/vivekanjana76/costsentinel/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/vivekanjana76/costsentinel/releases/tag/v0.1.0
