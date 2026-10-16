@@ -8,9 +8,96 @@ CostSentinel is pre-1.0, so the public API may change between minor versions.
 
 ## [Unreleased]
 
-Nothing yet. Next up is Phase 4: durable episodic and semantic memory, so CostSentinel
-stops re-pitching advice a client already declined. The anomaly and real-model
-hardening work moved to Phase 5 -- see the reordering note in ROADMAP.md.
+Nothing yet. Next up is Phase 5: statistical cost-anomaly detection and real-model
+hardening.
+
+## [0.4.0] - 2026-10-16
+
+Phase 4: durable memory. CostSentinel stops re-pitching advice a client already
+declined. CI is unchanged -- no database, no network, no real embedder, no optional
+extra installed -- because the default memory store is local SQLite and the default
+embedder is deterministic.
+
+### Added
+
+- **A typed `MemoryStore` seam** with three implementations: `SqliteMemoryStore` (the
+  default, and the only one CI and the demo use), `NullMemoryStore`, and
+  `PostgresMemoryStore` behind `MEMORY_BACKEND=postgres`. The SQLite store is a real
+  store, not a stub: the same schema shape, client scoping, ordering and refusal
+  semantics as the Postgres one, differing only in where the vector comparison
+  happens.
+- **Episodic memory.** Every run's findings, recommendations and policy
+  classifications persist per subscription and client, correlated by `run_id`, with
+  timestamps and provenance. Savings are stored as the pre-rendered strings the client
+  saw at the time, never as figures, so a stale number cannot be summed into a later
+  total.
+- **`costsentinel decide <id> --accept|--reject|--defer --reason "..."`**, writing a
+  typed, validated, audited outcome. Plus `costsentinel decisions` to list what has
+  been decided and what is still decidable. This is deliberately *not* the approval
+  gate: it records a decision after a report has been read and authorises nothing,
+  which is what lets the learning loop be demonstrated before the Phase 8 adapters
+  exist.
+- **Semantic memory** over three committed synthetic documents -- an org FinOps
+  policy, a restatement of cost practice, and notes on Azure's billing shape -- chunked
+  by Markdown heading, behind a pluggable embedder with a deterministic `FakeEmbedder`.
+  The org policy is client-scoped and a test asserts another client never retrieves
+  it. The corpus contains no prices.
+- **A memory consult step** in the graph, between the Policy Guard and the Report
+  Author. It imports no language model and changes exactly two things: the integer
+  rank, and the annotations. A previously declined or deferred finding is annotated
+  with the date and the reason and ranked lower, carrying the rank it held on merit.
+  Nothing is ever removed -- a client declining advice does not make the waste
+  disappear.
+- **Grounded explanations.** The Root-Cause Analyst may retrieve policy and guidance
+  passages and show them to the model inside the existing evidence fence, labelled
+  distinctly from an observation. A passage can ground a narrative and cannot become a
+  cited factor.
+- **`docker-compose.yml` and a `Dockerfile`**, for local and real runs only. CLAUDE.md
+  has listed compose since Phase 1 and there was nothing to compose until now. The
+  stack changes the memory backend and nothing else -- still the mock estate and the
+  fake model -- so the learning loop can be watched across restarts without going near
+  a real subscription.
+- **Memory observability.** Every read and write carries its operation, client scope,
+  hit or miss, record count and latency, reaches the tracer as an event, and travels
+  on `RunMetrics` alongside the model calls.
+
+### Changed
+
+- **`MEMORY_BACKEND` defaults to `sqlite`,** so `memory_enabled` is now true on a
+  fresh clone. That does not weaken "requires no credentials": the default store and
+  embedder need none, and the defaults test asserts both together.
+- **The graph has a seventh node.** `SPECIALIST_NODES` now holds seven entries: the
+  six specialists from CLAUDE.md section 5 plus the consult step, which is a support
+  node rather than a seventh specialist.
+- **The fake embedder's default width is 4096,** measured rather than chosen. At 256
+  buckets a 45-token reference section fills most of the vector, so every query
+  overlaps every document and relevance cannot be thresholded.
+- **Embedding builds its vector sparsely,** so cost scales with text length rather
+  than with vector width.
+- The ruff `max-args` limit went from 9 to 10 for the runner, and stops there: when
+  the embedder would have made eleven, it was derived from settings instead.
+
+### Fixed
+
+- **Memory reads did not degrade the way writes did.** A closed or corrupt store
+  raised out of the middle of a sweep, which would cost a client their report over a
+  lookup. Reads now return nothing and record the failure as a failure rather than as
+  a clean miss -- the two look identical to a caller and must not look identical in the
+  metrics. Found by a test asserting a write failure does not cost the report, which
+  passed and then revealed the read path.
+- **The exception base shadowed a builtin.** `MemoryError` is a Python builtin, and
+  shadowing it had already turned one `raise` in the embedder into the wrong exception
+  type. Now `MemoryStoreError`.
+
+### Notes
+
+- New dependencies, both optional extras CI does not install: `psycopg` and `pgvector`
+  under `--extra memory`. New dev dependency: `pyyaml`, so the compose assertions parse
+  the file rather than grep it -- text matching would pass on a commented-out line,
+  which is exactly the mistake they exist to catch.
+- The test suite is slower: about 50 seconds without coverage, two and a half minutes
+  with. Volume rather than any single slow test; the slowest is under two seconds.
+- 805 tests, 94% coverage. `domain`, `agents`, `guardrails` and `graph` at 97-100%.
 
 ## [0.3.0] - 2026-10-15
 
@@ -207,7 +294,8 @@ Phase 1: the scaffold and a thin vertical slice.
 - Landed as an honest commit series dated when it was actually committed; it predates
   the issue-driven workflow and has no backing issues.
 
-[Unreleased]: https://github.com/vivekanjana76/costsentinel/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/vivekanjana76/costsentinel/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/vivekanjana76/costsentinel/releases/tag/v0.1.0

@@ -103,6 +103,39 @@ uv run costsentinel scan --client northwind-energy
 No `.env` is needed. Copy `.env.example` to `.env` only when you want to change the
 defaults; `MODE=mock` and `LLM_BACKEND=fake` are the defaults and require nothing.
 
+### The learning loop
+
+CostSentinel remembers what a client decided and does not re-pitch it. No database
+needed: the default store is a local SQLite file and the default embedder is
+deterministic.
+
+```bash
+# 1. Scan. The run's findings are written to episodic memory.
+uv run costsentinel scan --client northwind-energy --summary
+
+# 2. Record what the client said about one of them.
+uv run costsentinel decisions --client northwind-energy      # ids you can decide on
+uv run costsentinel decide <recommendation-id> --reject   --reason "owner confirmed this is a quarter-end batch host"
+
+# 3. Scan again. It comes back annotated and ranked lower.
+uv run costsentinel scan --client northwind-energy --summary
+```
+
+The second scan reports `1 previously declined`, and the finding carries
+`memory: Previously declined on <date>, reason: ... (was #1 on merit)`.
+
+**Memory reorders and annotates. It never recomputes.** Every monetary figure in the
+second report is byte-identical to the first, the same findings are present, and only
+the order and the annotations differ — a declined recommendation does not make the
+waste disappear, so it is demoted rather than dropped. A test asserts the whole
+property end to end.
+
+For a durable store shared across runs and operators:
+
+```bash
+docker compose up --build     # app plus postgres-with-pgvector
+```
+
 ### Scanning a real Azure estate
 
 Read [SECURITY.md](SECURITY.md) first. The short version:
@@ -198,16 +231,20 @@ src/costsentinel/
   providers/         AzureProvider protocol + MockAzureProvider
   llm/               LLM protocol, FakeLLM, real adapters, task routing
   providers/data/    committed price catalogue snapshot
-  agents/            the six specialists, the supervisor, detectors, savings, ranking
+  agents/            the six specialists, the supervisor, the memory consult step,
+                     detectors, savings, ranking
   graph/             graph assembly + checkpointer + sweep runner
   guardrails/        policy store, action classes, approval-gate seam
-  reports/           report rendering (Phase 6)
+  memory/            episodic + semantic stores, embedder, recall, decisions
+  memory/data/       committed synthetic policy and guidance corpus
+  reports/           report rendering (Phase 7)
   observability/     structured logging + the tracing seam
-  tools/ memory/ a2a/   seams for Phases 3, 4 and 8
+  tools/             read-only MCP Azure tool server
+  a2a/               Agent Cards (Phase 9)
   api/               FastAPI app
   cli.py             CLI entry point
 scripts/             refresh_prices.py (manual, never CI)
-evals/               labelled datasets + scorecard harness (Phase 5)
+evals/               labelled datasets + scorecard harness (Phase 6)
 tests/
 ```
 
@@ -224,6 +261,8 @@ needs, and how to report a vulnerability.
   setting, so there is no secret for this codebase to log, trace or commit.
 - A real run's output is gitignored and a pre-commit hook refuses to commit it,
   along with any subscription id that does not look deliberately synthetic.
+- Memory may change the order of findings and their annotations, and may never change
+  a number. Enforced by test, not by convention.
 - Every action is classified; the built-in action-class floor cannot be loosened by
   configuration.
 - LLM output and cloud resource metadata are both treated as untrusted: validated

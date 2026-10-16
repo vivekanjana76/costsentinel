@@ -1,6 +1,6 @@
 # CostSentinel — Roadmap
 
-**Current phase: 4** — durable memory, episodic and semantic.
+**Current phase: 5** — cost anomalies and real-model hardening.
 
 Phases are sequential. Do not start work in a later phase before the current phase
 is complete and its exit criteria are met. If an idea arrives mid-phase, record it
@@ -172,34 +172,43 @@ no database, and the embedder has a deterministic fake.
 
 Milestone: *Phase 4 - Durable memory*.
 
-- [ ] Typed memory-store interface covering both memory kinds, with an in-memory /
+- [x] Typed memory-store interface covering both memory kinds, with an in-memory /
       SQLite implementation as the default and the only one CI and the demo use (#25)
-- [ ] PostgreSQL + pgvector implementation, selected only when a database is
+- [x] PostgreSQL + pgvector implementation, selected only when a database is
       configured, with a thin integration test skipped unless a DB URL is present (#26)
-- [ ] `docker-compose.yml` earns its place: app plus postgres-with-pgvector, for
+- [x] `docker-compose.yml` earns its place: app plus postgres-with-pgvector, for
       real and local runs only, never CI (#27)
-- [ ] Episodic memory: persist findings, recommendations and policy classifications
+- [x] Episodic memory: persist findings, recommendations and policy classifications
       per subscription and client, correlated by `run_id`, with timestamps and
       provenance (#28)
-- [ ] `costsentinel decide <recommendation-id> --accept|--reject|--defer --reason`,
+- [x] `costsentinel decide <recommendation-id> --accept|--reject|--defer --reason`,
       writing a typed, validated, audited outcome into episodic memory (#29)
-- [ ] Semantic memory: a vector store over committed synthetic FinOps policy,
+- [x] Semantic memory: a vector store over committed synthetic FinOps policy,
       Well-Architected cost-pillar guidance and pricing/meter notes, behind a
       pluggable embedder with a deterministic `FakeEmbedder` (#30)
-- [ ] Memory consult step wired into the graph: previously declined recommendations
+- [x] Memory consult step wired into the graph: previously declined recommendations
       annotated and deprioritised, previously accepted patterns noted, and the
       Root-Cause Analyst able to ground an explanation in retrieved guidance (#31)
-- [ ] A determinism test: the same estate with and without a seeded rejection
+- [x] A determinism test: the same estate with and without a seeded rejection
       produces **identical** money figures and only reordered, annotated output (#32)
-- [ ] Memory reads and writes traced with hit/miss and latency, a no-op when tracing
+- [x] Memory reads and writes traced with hit/miss and latency, a no-op when tracing
       is unconfigured (#33)
-- [ ] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.4.0 (#34)
+- [x] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.4.0 (#34)
 
-**Exit criteria:** a recommendation declined through the `decide` CLI is demoted and
-annotated with its decline date and reason on the next sweep; the report says how many
-findings were previously declined; the full suite passes with no database, no network
-and no real embedder; and the determinism test proves memory changed only the ordering
-and the annotations, never a number.
+**Exit criteria (met):** a recommendation declined through the `decide` CLI is demoted
+and annotated with its decline date and reason on the next sweep, carrying the rank it
+held on merit; the report says how many findings were previously declined; 805 tests
+pass with no database, no network and no real embedder, at 94% coverage with `domain`,
+`agents`, `guardrails` and `graph` at 97-100%; `ruff check`, `ruff format --check` and
+`pyright` clean; and the determinism test proves memory changed only the ordering and
+the annotations, with every money figure byte-identical.
+
+**One thing to know about the test suite.** It now takes about 50 seconds without
+coverage and about two and a half minutes with it, up from well under a minute. The
+cause is volume rather than any single slow test -- the suite grew by 70 tests, many
+of which run complete sweeps -- and the slowest individual test is under two seconds.
+Worth watching rather than acting on; if it keeps climbing, the end-to-end determinism
+tests are the ones to consolidate.
 
 **Deliberately *not* in this phase:** the approval gate itself and its Teams and Slack
 adapters (Phase 8). `decide` is a recording CLI, not a gate -- it writes an outcome

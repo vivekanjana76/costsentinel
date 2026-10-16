@@ -77,21 +77,21 @@ short-circuit and the approval seam one mechanism instead of four.
     |      |  proceed / retry / escalate / short-circuit       |
     |      +-------------------------+-------------------------+
     |                                |
-    |   +------------+-----------+---+-------+-----------+
-    |   |            |           |           |           |
-    |   v            v           v           v           v
-    | +-------+ +----------+ +---------+ +---------+ +----------+
-    | |ANOMALY| |ROOT-CAUSE| | SAVINGS | |OPTIMIS. |  | POLICY  |
-    | | SCOUT | | ANALYST  | |ESTIMATOR| | PLANNER |  | GUARD   |
-    | |       | |          | |         | |         |  |         |
-    | | reads | | why it   | | prices  | | chooses |  | allow / |
-    | | the   | | exists,  | | EVERY   | | + ranks |  | review /|
-    | | estate| | grounded | | option  | | (det.)  |  | block   |
-    | +---+---+ +----+-----+ +----+----+ +----+----+ +----+-----+
-    |     |          |            |           |           |
-    +-----+----------+------------+-----------+-----------+
-                                                          |
-                                     review / block ------+
+    |   +--------+---------+---------+---------+---------+---------+
+    |   |        |         |         |         |         |         |
+    |   v        v         v         v         v         v         |
+    | +-------+ +--------+ +-------+ +-------+ +-------+ +--------+ |
+    | |ANOMALY| | ROOT-  | |SAVINGS| |OPTIM. | |POLICY | | MEMORY | |
+    | | SCOUT | | CAUSE  | | ESTIM.| |PLANNER| | GUARD | |CONSULT | |
+    | |       | |ANALYST | |       | |       | |       | |        | |
+    | | reads | | why it | |prices | |chooses| |allow /| |re-rank | |
+    | | the   | |exists, | | EVERY | |+ ranks| |review/| |+ annot.| |
+    | | estate| |grounded| |option | | (det.)| |block  | |(no $)  | |
+    | +---+---+ +---+----+ +---+---+ +---+---+ +---+---+ +---+----+ |
+    |     |         |          |         |         |        |       |
+    +-----+---------+----------+---------+---------+--------+-------+
+                                                   |
+                              review / block ------+
                                               |
                                               v
                                      +-----------------+
@@ -112,6 +112,11 @@ short-circuit and the approval seam one mechanism instead of four.
 
   Cross-cutting (every node): AuditEvent | trace span | checkpoint write
   Cross-cutting (every LLM call): routing decision | tokens | cost | latency
+  Cross-cutting (every memory access): operation | hit/miss | records | latency
+
+  MEMORY (Phase 4), read by two nodes and written once per run:
+    episodic  <- what this client was shown, and what they decided about it
+    semantic  <- org policy, cost guidance, pricing notes (retrieved as evidence)
 ```
 
 **Ordering note.** The Savings Estimator runs *before* the Optimization Planner, and
@@ -120,6 +125,15 @@ Two reasons: the planner then chooses knowing what each option is worth, as a hu
 would; and every monetary figure in the system is produced inside one node, so the
 no-invented-numbers guarantee has a single place to hold. Ranking then happens in the
 planner, because it is arithmetic over those prices.
+
+**The consult step is last before the report, and deliberately so.** Memory Consult
+runs after everything monetary has been computed, which is what makes "memory may
+reorder, never recompute" structural rather than a rule somebody has to remember: by
+the time it runs there is nothing left to compute, and it has no way to recompute it.
+It is not one of CLAUDE.md section 5's six specialists -- it is a support step that
+reorders and annotates what the six produced -- but it is a supervisor-routed node
+like any other, so its decision is in state, in the checkpoint and in the audit
+trail.
 
 ### 2.2 Specialist responsibilities
 
@@ -329,39 +343,178 @@ rather than failing deep inside a graph run.
 
 ## 6. Memory design
 
-Two memories, both on PostgreSQL with pgvector, deliberately separated because they
-answer different questions.
+Implemented in Phase 4. Two memories, deliberately separated because they answer
+different questions, behind one `MemoryStore` protocol with three implementations.
 
-### 6.1 Semantic memory — "what is true in general"
+**One rule governs both, and it is the invariant the phase rests on: memory may
+reorder and annotate; it may never recompute.** No type in `domain/memory.py` holds a
+`MoneyAmount`, no module under `memory/` imports one, and no attribute access there
+reaches a money field. A client's past decision is not evidence about what a resource
+costs this month; letting a rejection shrink a saving would make the headline depend
+on sentiment rather than on arithmetic over provider data. Two tests guard it, one
+structural (AST) and one end-to-end (a money fingerprint across two runs).
 
-A RAG corpus over durable reference knowledge:
+### 6.1 The store seam
 
-- Azure retail pricing and reservation / savings-plan terms
-- the Azure Well-Architected Framework cost-optimisation pillar
-- the provider's own FinOps policy pack
-- per-client contractual constraints (for example "never deallocate in PROD-GOV")
+```python
+class MemoryStore(Protocol):
+    @property
+    def is_enabled(self) -> bool: ...
+    # episodic
+    def record_run(self, record: EpisodicRecord) -> bool: ...
+    def record_outcome(self, outcome: RecommendationOutcome) -> bool: ...
+    def outcomes_for(self, client: str) -> Sequence[RecommendationOutcome]: ...
+    def entries_for(self, client: str, *, limit: int = 500) -> Sequence[EpisodicEntry]: ...
+    # semantic
+    def upsert_chunks(self, chunks: Sequence[SemanticChunk]) -> int: ...
+    def search(self, embedding, *, limit, client=None) -> Sequence[SemanticHit]: ...
+```
 
-Chunked, embedded, stored in a `semantic_chunks` table with an HNSW index on the
-embedding column. Retrieval is filtered by client and document class so one client's
-policy can never leak into another's reasoning — a hard multi-tenancy requirement in
-a managed-services context.
+Three properties are designed into the seam rather than left to callers.
 
-### 6.2 Episodic memory — "what happened here before"
+**Memory is optional, and absence is not an error.** `NullMemoryStore` exists so every
+caller holds a store unconditionally and no node needs an `if memory is not None`
+branch. The alternative puts the memory-is-off path in six places instead of one, and
+five of them are the ones nobody tests.
 
-An append-only record of outcomes, keyed by client, subscription and signal kind:
-past findings, the recommendations made, the approval decisions, and whether the
-change was ultimately accepted, rejected or reverted — with the stated reason.
+**Empty is not a failure.** Every read against an empty store returns an empty result.
+An estate nobody has scanned before misses on every lookup, which is correct and
+expected, and a first run on a new client must not be a different code path.
 
-Episodic memory is what makes the system *learn*. On a later sweep, the Optimization
-Planner retrieves prior outcomes for the same signal kind and scope, and suppresses
-or re-ranks accordingly: a recommendation this client has rejected three times with
-"that VM is sized for quarter-end batch" is demoted and annotated, not re-proposed
-cold. Retrieval is hybrid — exact match on (client, subscription, signal kind) plus
-vector similarity on the rejection rationale.
+**A failure degrades the sweep; it never fails it.** Writes return `False`; reads
+return nothing and record the failure as a *failure* rather than as a clean miss --
+the two look identical to a caller and must not look identical in the metrics. Losing
+a memory operation is an inconvenience; losing a client's report over one is not
+acceptable.
 
-Both memories are optional at runtime. With no database configured the system
-degrades to stateless operation, logs that it is doing so, and keeps working. Memory
-improves ranking; it is never required for correctness.
+Episodic methods take the client in their signature rather than filtering afterwards,
+which is how D12 reaches the storage layer: there is no method that returns another
+client's history.
+
+### 6.2 Two backends
+
+| | `SqliteMemoryStore` | `PostgresMemoryStore` |
+| --- | --- | --- |
+| Selected by | `MEMORY_BACKEND=sqlite` (default) | `MEMORY_BACKEND=postgres` + `DATABASE_URL` |
+| Needs | nothing beyond the standard library | `uv sync --extra memory`, a database |
+| Vector search | cosine in Python over candidate rows | pgvector's `<=>` operator |
+| Used by | CI, the demo, every test | a real deployment, `docker compose` |
+
+The SQLite store is a real store, not a stub: the same schema shape, the same client
+scoping, the same newest-first ordering, the same refusal to overwrite an outcome. The
+only difference is where the comparison happens. That matters because it means a test
+written against the default store is meaningful about the Postgres one's behaviour,
+and the pgvector store's integration test can confine itself to the two things that
+genuinely differ -- the SQL dialect and the vector operator -- and skip unless a
+database is present.
+
+`docker-compose.yml` runs the app against `pgvector/pgvector:pg16`. It changes the
+memory backend and nothing else: still `MODE=mock`, still the fake model and embedder,
+so the learning loop can be watched across restarts without going near a real
+subscription.
+
+### 6.3 Episodic memory — "what happened here before"
+
+Three records, all snapshots rather than references:
+
+- `EpisodicRecord` — one run, with its subscriptions and resource count.
+- `EpisodicEntry` — one recommendation as it stood when the run produced it.
+- `RecommendationOutcome` — what a human decided about it, with a mandatory reason.
+
+A saving enters history as the **pre-rendered display string** the client saw at the
+time, never as a figure. The resource may be gone next month and the price may have
+changed, and a history that silently re-resolved either would stop being a history.
+It also means a stale figure cannot be summed into a later total.
+
+The write happens once, after the report is composed, from the final state. A
+half-written history is worse than none, because the next sweep reads it as fact.
+
+Outcomes are recorded by `costsentinel decide`, which is **not** the approval gate.
+The gate (Phase 8) halts a run and authorises an action; `decide` records an outcome
+after a report has been read and authorises nothing. That separation is what lets the
+learning loop be demonstrated now rather than waiting for the Teams and Slack
+adapters. `Outcome` has three members where `Decision` has two, because "not now" is
+different information from "no": a deferral means the client has considered the advice
+and intends to act, so re-pitching it as new is a small insult and forgetting it is a
+lost saving.
+
+### 6.4 Semantic memory — "what is true in general"
+
+Three committed, synthetic documents: an org FinOps policy, a restatement of cost
+practice in our own words, and notes on how Azure's billing shape works. All three say
+they are synthetic in their first lines, none contains a price, and a test asserts the
+corpus passes the real-data guard. Nothing real is committed -- no client's actual
+policy, no vendor's copied text.
+
+Chunked by Markdown heading rather than by character count. A fixed-size window cuts a
+rule in half, and half a rule retrieved and cited is worse than no citation: "may be
+deleted only once two conditions hold" is actively misleading without the conditions.
+The heading is embedded with the body, so a section titled "Snapshots and backups"
+whose body never repeats the word is still reachable.
+
+The org policy is client-scoped and the other two are shared. Retrieval filters on
+that **in the query**, not afterwards: a query that could return another client's
+policy and then discard it is one refactor away from returning it.
+
+`FakeEmbedder` is the default and the only one CI uses, and it is not a stub. It hashes
+tokens into a fixed-width vector with sub-linear term weighting, so cosine similarity
+genuinely tracks shared vocabulary and a retrieval assertion is meaningful. It is
+lexical, not semantic -- it has no notion that "idle" and "unused" are related -- and
+the real embedder is opt-in for that. The point of the fake is that the plumbing
+(chunking, storage, ranking, citation, client scoping) is fully exercised offline, so
+switching on a real embedder changes one variable.
+
+Every chunk records which embedder produced it, because mixing vectors from two
+embedders in one store produces silently meaningless similarities.
+
+### 6.5 The consult step
+
+A graph node between the Policy Guard and the Report Author. It imports no language
+model and changes exactly two things: the integer `rank`, and the annotations the
+report carries.
+
+Matching has two tiers, and the distinction is load-bearing:
+
+- **exact** — same client, same resource, same action. Strong evidence; heavy penalty
+  (0.70 of the ranking composite withheld).
+- **pattern** — same client, same waste kind, same action, *different* resource. Weak
+  evidence, because the reason may have been specific to the other resource; light
+  penalty (0.20). Treating the two alike would let one "no" bury a whole category of
+  genuine waste, which is how a cost tool starts under-reporting.
+
+Acceptance is noted and moves nothing. The temptation is to promote it -- the client
+liked this sort of thing, so show more -- and that is resisted, because a client having
+agreed to something last month is not evidence that a different resource is more
+wasteful this month. Promoting on it would make the order reflect agreeableness rather
+than value.
+
+The penalty is multiplicative on the composite, so it stays inside 0-1 whatever the
+base was and means the same thing for a high-scoring finding as for a low one. It is
+never 1.0, so previously-declined findings keep a stable order among themselves.
+
+**Nothing is ever removed.** A client declining advice does not make the waste
+disappear, and a report that quietly dropped it would misstate the estate. The finding
+stays, annotated with the date and the reason, carrying the rank it held on merit so a
+client can read "this ranked second and was demoted to fifth because you declined it
+in September". An ordering that changed for reasons nobody can see is worse than no
+reordering at all.
+
+Retrieved guidance reaches the Root-Cause Analyst as evidence inside the existing
+fence, labelled distinctly from a signal so the model can tell a rule from an
+observation. That widens what an explanation may *rest on* and not what it may
+*assert*: the contract still has no numeric fields, and a factor must still cite a
+detector observation, so a passage cannot become a factor.
+
+### 6.6 Observability
+
+Every read and write is a `MemoryAccess` carrying the operation, the client scope,
+hit or miss, the record count and the latency. These reach the tracer as events rather
+than spans -- they are short, frequent and already timed, and a span per lookup would
+bury the model calls that actually cost something -- and travel on `RunMetrics`
+alongside the model calls rather than inside the report (D45).
+
+A miss and a failure stay distinguishable throughout. A memory layer whose hit rate
+nobody can see is a memory layer nobody can tune.
 
 ---
 
@@ -1012,3 +1165,157 @@ leave `logging.StreamHandler`'s default, which captures the stream at constructi
 but it is not a test artefact. A wrapper process, a supervisor reopening stderr on log
 rotation, or a redirect would all silently lose CostSentinel's log lines — and a cost
 tool whose audit trail can go quietly missing is worse than one that is loud.
+
+### Phase 4 decisions
+
+**D67. The memory layer moved ahead of anomaly detection.** *Alternatives:* keep the
+order set after Phase 3, with statistical cost-anomaly detection as Phase 4. *Why:*
+memory is what makes CostSentinel a system that learns rather than one that re-pitches
+the same declined advice every month, and that is the product's central claim — it
+should not sit behind a detector improvement. Anomaly detection also wants real cost
+history to calibrate thresholds against, which only accumulates once somebody is
+running real sweeps; memory needs nothing but its own store, so it can be built and
+proven offline today. Building them the other way round would have meant calibrating a
+detector against synthetic data and then recalibrating it.
+
+**D68. Memory may reorder and annotate; it may never recompute.** *Alternatives:* fold
+a confidence or value adjustment into the saving itself, so a declined finding reports
+a lower expected value. *Why:* a client's past decision is not evidence about what a
+resource costs this month. Letting a rejection shrink a saving would make the headline
+depend on sentiment, and the figure would no longer be arithmetic over provider data
+(golden rule 5). So the penalty applies to the dimensionless ranking composite, ranks
+are reassigned, and every monetary figure is byte-identical to a memory-less run. Two
+tests guard it: an AST check that `memory/recall.py` imports no money type and reaches
+no money attribute, and an end-to-end money fingerprint across two runs of the same
+estate, keyed by recommendation id rather than by rank — a rank-keyed comparison would
+compare different findings and pass for the wrong reason.
+
+**D69. The consult step runs after everything monetary, not before ranking.**
+*Alternatives:* consult memory before the Optimization Planner so the planner ranks
+with history in hand. *Why:* the planner's ranking is the merit ranking, and keeping
+it intact is what lets a report show both the merit score and the memory adjustment
+instead of one number nobody can decompose. It also makes D68 structural: by the time
+the consult step runs there is nothing left to compute, so it has no way to recompute
+it. The cost is that "rank" means two things in sequence, which the report resolves by
+carrying both.
+
+**D70. An exact match and a pattern match are different evidence, penalised
+differently.** *Alternatives:* one penalty for any prior decline. *Why:* declining to
+delete *this* disk is strong evidence against offering to delete *this* disk again,
+and weak evidence against offering to delete a different one, because the reason may
+have been specific to the resource. One penalty for both would let a single "no" bury
+a whole category of genuine waste, which is how a cost tool starts under-reporting.
+Both are surfaced to the client; only the exact match is demoted hard.
+
+**D71. Acceptance is noted and moves nothing.** *Alternatives:* promote a
+previously-accepted pattern, on the reasoning that the client likes this sort of
+advice. *Why:* ranking is supposed to reflect what is worth doing. A client having
+agreed to something last month is not evidence that a different resource is more
+wasteful this month, so promoting on it would make the order reflect agreeableness
+rather than value.
+
+**D72. Nothing is ever suppressed, only demoted and annotated.** *Alternatives:* drop
+a declined finding from the report entirely, which is what "do not re-pitch" naively
+suggests. *Why:* a client declining advice does not make the waste disappear. A report
+that quietly dropped it would misstate the estate and understate the spend, and the
+next person to look at that subscription would have no idea the cost was known about
+and accepted. The finding stays, carrying the date, the reason and the rank it held on
+merit.
+
+**D73. `decide` is a recording CLI, not the approval gate.** *Alternatives:* wait for
+Phase 8 and let the gate record outcomes as a side effect. *Why:* without something
+that writes an outcome, the learning loop cannot be demonstrated at all, and a memory
+layer nobody can exercise is a memory layer nobody trusts. The two remain genuinely
+distinct: the gate halts a run and *authorises an action*; `decide` records a decision
+after a report has been read and authorises nothing. `Outcome` accordingly has three
+members where `Decision` has two — "not now" is different information from "no", and
+treating a deferral as a rejection or as nothing at all both lose something.
+
+**D74. An outcome is never silently overwritten.** *Why:* a decision is a record of
+what a person said. Replacing one would lose the fact that they changed their mind,
+which is itself worth knowing, so the store raises with what was said the first time
+and the caller decides. The consult step reads the most recent decision, because what
+the client said last is what they think now.
+
+**D75. An outcome copies the resource, action and waste kind from what was proposed.**
+*Alternatives:* take them from the caller. *Why:* a typo would attach the rejection to
+the wrong resource, and the next sweep would suppress the wrong advice — a quiet,
+durable wrong answer. `decide` therefore resolves the recommendation id against the
+history first and refuses an unknown one, rather than recording an outcome that
+matches nothing forever while its author believes a decision exists.
+
+**D76. The default memory store is SQLite, not Postgres.** *Alternatives:* require the
+database the design has always named. *Why:* a learning loop nobody can run without
+provisioning a service is a learning loop nobody demonstrates, and CI must stay
+offline. The SQLite store is a real implementation rather than a stub — same schema
+shape, client scoping, ordering and refusal semantics — which is what makes a test
+written against it meaningful about the Postgres one. The pgvector store then earns a
+thin integration test covering only what genuinely differs: the SQL dialect and the
+vector operator.
+
+**D77. A memory failure degrades the sweep and never fails it, and a failed read is
+not a miss.** *Why:* losing a memory operation is an inconvenience; losing a client's
+report over one is not acceptable. Writes return `False`, reads return nothing. But
+the two failure modes must stay distinguishable in the metrics even though they look
+identical to a caller: an empty read is an estate nobody has scanned before, which is
+correct and expected, and a failed read is a broken store. *Found by a test* asserting
+a write failure does not cost the report — which passed, and then showed that reads
+were still raising out of the middle of a sweep.
+
+**D78. The semantic corpus is committed, synthetic, and contains no prices.**
+*Alternatives:* ship a copy of the Well-Architected cost pillar, or seed from a real
+client policy. *Why:* this is a public repository, so a client's actual policy cannot
+be here, and a vendor's documentation is not ours to copy. More subtly, a number in a
+retrieved passage is a number a model could copy into a narrative, which would
+side-step golden rule 5 through the one channel designed to be trusted — so the
+guidance explains Azure's billing *shape* and every actual rate stays in the price
+catalogue.
+
+**D79. Chunking is by Markdown heading, not by character count.** *Why:* a fixed-size
+window cuts a rule in half, and half a rule retrieved and cited is worse than no
+citation. "A disk may be deleted only once two conditions hold" is actively misleading
+without the conditions. A section is the unit a policy is written in, so it is the unit
+retrieved. The heading is embedded with the body, because a section titled "Snapshots
+and backups" whose body never repeats the word would otherwise be unreachable.
+
+**D80. Retrieved guidance is evidence, and cannot become a factor.** *Why:* grounding
+an explanation in policy widens what it may *rest on*, and must not widen what it may
+*assert*. A passage travels inside the same evidence fence as a resource name,
+labelled distinctly so the model can tell a rule from an observation, and a
+contributing factor must still cite a detector observation — so a sentence from the
+corpus cannot become a claim about the estate. Which passages were shown is recorded
+on the `RootCause`, so a client can see what the reasoning rested on and an eval can
+check the rule exists.
+
+**D81. The fake embedder's width is measured, not chosen.** *Alternatives:* a small
+vector, which is cheaper and was the first implementation at 256 dimensions. *Why:*
+hashed bag-of-words lives or dies on collisions. A reference section holds 37–86
+distinct tokens; at 256 buckets those fill most of the vector, every query overlaps
+every document, and the scores compress into a band too narrow to threshold —
+measured on the real corpus, a relevant query scored 0.27 and nonsense scored 0.15. At
+4096, relevant stays at 0.24 and nonsense drops to 0.00, and the relevance floor sits
+at 0.10 in the gap. *Found by a test* asserting an irrelevant query retrieves nothing,
+which failed at the original width; a second test now pins the collision measurement
+so shrinking the width fails loudly instead of quietly degrading retrieval.
+
+**D82. A relevance floor, so retrieval is honest rather than merely nearest.** *Why:*
+a vector store always returns its *k* nearest passages however unrelated they are. An
+explanation citing an unrelated policy section is worse than one citing nothing: it
+looks grounded and is not. The floor is a named constant and a keyword argument,
+because it is a property of the embedder as much as of the corpus and a real embedder
+may want a different value.
+
+**D83. The embedder is derived from configuration, not injected into the runner.**
+*Why:* `run_client_scan` was about to take an eleventh keyword-only dependency, having
+already gone from nine to ten this phase. The right response to that was not to raise
+the lint limit a third time but to notice that an embedder is a function of settings
+rather than a collaborator a caller chooses. The limit now stops at ten, with a note
+that the next thing wanting an eleventh argument should be bundled rather than
+accommodated.
+
+**D84. Embedding cost scales with text length, not vector width.** *Why:* the obvious
+implementation allocates a 4096-element list and loops over it three times per call,
+so a one-word query costs the same as a full document. Building the vector sparsely
+and materialising it once fixes that. *Found by* the test suite slowing down sharply
+under coverage instrumentation, which traces every one of those iterations — a real
+inefficiency that only became visible because something amplified it.
