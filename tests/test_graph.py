@@ -26,7 +26,7 @@ from costsentinel.domain.recommendations import ActionClass, ActionType
 from costsentinel.domain.report import ClientReport, ReportSeverity
 from costsentinel.domain.signals import WasteKind
 from costsentinel.domain.state import ScanState
-from costsentinel.graph.build import PHASE_2_NODES, SPECIALIST_NODES, build_graph
+from costsentinel.graph.build import ALL_NODES, SWEEP_NODES, build_graph
 from costsentinel.graph.checkpointer import sqlite_checkpointer
 from costsentinel.graph.runner import (
     ScanFailedError,
@@ -107,9 +107,12 @@ def test_graph_has_the_six_specialists_a_supervisor_and_the_consult_step(
     """
     graph = build_graph(provider=provider, llm=llm, settings=settings)
     nodes = set(graph.get_graph().nodes)
-    assert set(PHASE_2_NODES) <= nodes
-    assert len(SPECIALIST_NODES) == 7
-    assert "memory_consult" in SPECIALIST_NODES
+    assert set(ALL_NODES) <= nodes
+    assert len(SWEEP_NODES) == 7
+    assert "memory_consult" in SWEEP_NODES
+    # Six specialists plus one support node, which is why the tuple is no longer
+    # called SPECIALIST_NODES.
+    assert len(SWEEP_NODES) - 1 == 6
     assert "supervisor" in nodes
 
 
@@ -543,7 +546,7 @@ def test_every_node_contributes_to_the_audit_trail(
     assert state is not None
 
     actors = {event.actor for event in state.audit}
-    assert actors == set(PHASE_2_NODES)
+    assert actors == set(ALL_NODES)
 
     kinds = {event.event_type for event in state.audit}
     for expected in (
@@ -764,7 +767,7 @@ def test_every_node_writes_a_checkpoint(
         settings=settings,
         checkpointer=checkpointer,
     )
-    assert set(PHASE_2_NODES) <= set(written)
+    assert set(ALL_NODES) <= set(written)
 
 
 def test_unknown_run_has_no_checkpointed_state(

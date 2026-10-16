@@ -8,8 +8,9 @@ CostSentinel is pre-1.0, so the public API may change between minor versions.
 
 ## [Unreleased]
 
-Nothing yet. Next up is Phase 5: statistical cost-anomaly detection and real-model
-hardening.
+Nothing yet. Next up is Phase 5: the evaluation harness and scorecard, so the claims
+four phases of detectors have made are measured rather than asserted. The anomaly and
+real-model hardening work moved to Phase 6 -- see the reordering note in ROADMAP.md.
 
 ## [0.4.0] - 2026-10-16
 

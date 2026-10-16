@@ -244,7 +244,7 @@ src/costsentinel/
   api/               FastAPI app
   cli.py             CLI entry point
 scripts/             refresh_prices.py (manual, never CI)
-evals/               labelled datasets + scorecard harness (Phase 6)
+evals/               labelled datasets + scorecard harness (Phase 5)
 tests/
 ```
 
