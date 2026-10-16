@@ -21,15 +21,21 @@ mistake available here. See SECURITY.md before using it.
 from __future__ import annotations
 
 import argparse
+import getpass
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
-from costsentinel.config import RunMode, Settings, get_settings
+from costsentinel.config import MemoryBackend, RunMode, Settings, get_settings
+from costsentinel.domain.memory import Outcome
 from costsentinel.domain.report import ClientReport, ScanResult
 from costsentinel.graph.runner import run_scan
 from costsentinel.llm.base import LLMError
+from costsentinel.memory import get_memory
+from costsentinel.memory.base import MemoryStore, MemoryStoreError
+from costsentinel.memory.decisions import decided_entries, pending_entries, record_decision
+from costsentinel.providers import get_provider
 from costsentinel.providers.base import ProviderError, ProviderNotConfiguredError
 from costsentinel.tools import describe_surface
 
@@ -111,6 +117,54 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    decide = subcommands.add_parser(
+        "decide",
+        help="Record what a human decided about one recommendation.",
+        description=(
+            "Writes an accept, reject or defer outcome into episodic memory, so the "
+            "next sweep annotates and deprioritises advice this client has already "
+            "considered instead of re-pitching it as new. This is not the approval "
+            "gate: it records a decision after the fact and authorises nothing."
+        ),
+    )
+    decide.add_argument(
+        "recommendation_id",
+        help="The recommendation id from a report. Must be one that was proposed.",
+    )
+    outcome_group = decide.add_mutually_exclusive_group(required=True)
+    outcome_group.add_argument(
+        "--accept", action="store_true", help="The client agreed to this remediation."
+    )
+    outcome_group.add_argument("--reject", action="store_true", help="The client declined it.")
+    outcome_group.add_argument(
+        "--defer",
+        action="store_true",
+        help="The client intends to act later. Not the same as declining.",
+    )
+    decide.add_argument(
+        "--reason",
+        required=True,
+        help=(
+            "Why. Mandatory: an outcome with no reason can suppress a repeat but "
+            "cannot explain the suppression to the client next month."
+        ),
+    )
+    decide.add_argument(
+        "--by",
+        default=None,
+        help="Who decided. Defaults to the operating system user.",
+    )
+
+    decisions = subcommands.add_parser(
+        "decisions",
+        help="Show what has been decided, and what is still awaiting a decision.",
+    )
+    decisions.add_argument(
+        "--client",
+        default=None,
+        help="One client. Default: every client the provider can see.",
+    )
+
     subcommands.add_parser(
         "config",
         help="Show the active configuration and what it requires.",
@@ -144,16 +198,27 @@ def summarise_report(report: ClientReport) -> str:
         f"  findings             {totals.findings_count} "
         f"({totals.awaiting_approval_count} awaiting approval, "
         f"{totals.automatable_count} automatable)",
-        "",
     ]
-    lines += [
-        f"  {finding.rank}. {finding.resource_name}  "
-        f"[{finding.waste_kind.value}]  "
-        f"{finding.proposed_action.value}  "
-        f"({finding.action_class.value})  "
-        f"saves {finding.monthly_saving.display()}/month"
-        for finding in report.findings
-    ]
+    if report.memory_recall:
+        lines.append(f"  memory               {report.memory_recall}")
+    lines.append("")
+    for finding in report.findings:
+        lines.append(
+            f"  {finding.rank}. {finding.resource_name}  "
+            f"[{finding.waste_kind.value}]  "
+            f"{finding.proposed_action.value}  "
+            f"({finding.action_class.value})  "
+            f"saves {finding.monthly_saving.display()}/month"
+        )
+        if finding.memory_note:
+            # Indented under the finding, with the rank it held on merit, so the
+            # reordering is legible rather than mysterious.
+            moved = (
+                f" (was #{finding.base_rank} on merit)"
+                if finding.base_rank is not None and finding.base_rank != finding.rank
+                else ""
+            )
+            lines.append(f"       memory: {finding.memory_note}{moved}")
     if report.approval_queue:
         lines += ["", "  Awaiting approval:"]
         lines += [
@@ -182,7 +247,11 @@ def _config_text(settings: Settings) -> str:
         if settings.requires_no_credentials
         else "required for the selected backends"
     )
-    memory = "configured" if settings.memory_enabled else "disabled (Phase 4)"
+    memory = (
+        f"{settings.memory_backend.value} ({settings.memory_db_path})"
+        if settings.memory_backend is MemoryBackend.SQLITE
+        else settings.memory_backend.value
+    )
     tracing = "configured" if settings.tracing_enabled else "disabled (no-op)"
     return "\n".join(
         [
@@ -194,6 +263,7 @@ def _config_text(settings: Settings) -> str:
             f"log_level            {settings.log_level.value}",
             f"rightsize_headroom   {settings.rightsize_headroom_factor}x",
             f"memory               {memory}",
+            f"embedder             {settings.embedder_backend.value}",
             f"tracing              {tracing}",
             f"credentials          {credentials}",
             f"subscription_scope   {_scope_text(settings.subscription_scope)}",
@@ -274,6 +344,128 @@ def write_real_report(result: ScanResult, directory: Path, indent: int) -> Path:
     return path
 
 
+def _outcome_from(args: argparse.Namespace) -> Outcome:
+    """Which outcome the flags selected.
+
+    argparse enforces exactly one through a required mutually-exclusive group, so
+    there is no "none selected" case to handle here.
+    """
+    if args.accept:
+        return Outcome.ACCEPTED
+    if args.reject:
+        return Outcome.REJECTED
+    return Outcome.DEFERRED
+
+
+def _decided_by(args: argparse.Namespace) -> str:
+    """Who to attribute the decision to.
+
+    The OS user is a weak identity and deliberately so: this records who typed the
+    command on a machine somebody already has access to. Authenticated approver
+    identity is the approval gate's problem (Phase 8), and pretending otherwise here
+    would overstate what the record proves.
+    """
+    if args.by:
+        return str(args.by)
+    return getpass.getuser() or "unknown"
+
+
+def run_decide(args: argparse.Namespace, settings: Settings) -> int:
+    """Record one decision into episodic memory."""
+    store = get_memory(settings)
+    try:
+        outcome, event = record_decision(
+            store,
+            recommendation_id=args.recommendation_id,
+            outcome=_outcome_from(args),
+            reason=args.reason,
+            decided_by=_decided_by(args),
+        )
+    except MemoryStoreError as exc:
+        print(f"{PROGRAM}: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        store.close()
+
+    print(
+        f"Recorded: {outcome.recommendation_id} {outcome.outcome.value} by "
+        f"{outcome.decided_by} on {outcome.decided_at.date().isoformat()}."
+    )
+    print(f"  client            {outcome.client}")
+    print(f"  resource          {outcome.target_resource_name or outcome.target_resource_id}")
+    print(f"  action            {outcome.action.value}")
+    print(f"  monthly saving    {outcome.monthly_saving_display or 'unknown'}")
+    print(f"  reason            {outcome.reason}")
+    print(f"  audit event       {event.event_id}")
+    if outcome.outcome.discourages_repitch:
+        print(
+            "\nThe next scan for this client will annotate this finding with the "
+            "date and reason, and rank it below advice they have not already seen. "
+            "It is not removed: the waste has not gone away."
+        )
+    else:
+        print("\nThe next scan will note that this pattern was accepted.")
+    return 0
+
+
+def run_decisions(args: argparse.Namespace, settings: Settings) -> int:
+    """Show what has been decided and what is still awaiting a decision."""
+    store = get_memory(settings)
+    try:
+        if not store.is_enabled:
+            print(
+                f"{PROGRAM}: memory is switched off, so nothing has been recorded.",
+                file=sys.stderr,
+            )
+            return 1
+        clients = (
+            (args.client,)
+            if args.client
+            else tuple(sorted({s.client for s in get_provider(settings).list_subscriptions()}))
+        )
+        print(_decisions_text(store, clients))
+    except (ProviderError, MemoryStoreError) as exc:
+        print(f"{PROGRAM}: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        store.close()
+    return 0
+
+
+def _decisions_text(store: MemoryStore, clients: Sequence[str]) -> str:
+    lines: list[str] = []
+    for client in clients:
+        decided = decided_entries(store, client)
+        pending = pending_entries(store, client)
+        lines.append(f"{client}")
+        if not decided and not pending:
+            lines.append("  nothing recorded yet; run a scan first.")
+            lines.append("")
+            continue
+        if decided:
+            lines.append(f"  decided ({len(decided)}):")
+            lines += [
+                f"    {outcome.outcome.value:<8} {entry.recommendation_id}  "
+                f"{entry.target_resource_name}  {entry.action.value}  "
+                f"{outcome.decided_at.date().isoformat()}  {outcome.reason}"
+                for entry, outcome in decided
+            ]
+        if pending:
+            lines.append(f"  awaiting a decision ({len(pending)}):")
+            lines += [
+                f"    {entry.recommendation_id}  {entry.target_resource_name}  "
+                f"{entry.action.value}  saves {entry.monthly_saving_display or 'unknown'}/month"
+                for entry in pending
+            ]
+            lines.append("")
+            lines.append(
+                f"  Record one with: {PROGRAM} decide "
+                f'{pending[0].recommendation_id} --reject --reason "..."'
+            )
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point.
 
@@ -287,6 +479,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "config":
         print(_config_text(settings))
         return 0
+
+    if args.command == "decide":
+        return run_decide(args, settings)
+
+    if args.command == "decisions":
+        return run_decisions(args, settings)
 
     real = bool(args.real) or settings.mode is RunMode.REAL
     scope: tuple[str, ...] = ()

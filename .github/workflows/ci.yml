@@ -62,7 +62,7 @@ jobs:
   # CI to gate on it; the job is wired here so enabling it is a one-line change
   # once evals/harness exists.
   evals:
-    name: eval smoke (Phase 5)
+    name: eval smoke (Phase 6)
     runs-on: ubuntu-latest
     if: false
     steps:

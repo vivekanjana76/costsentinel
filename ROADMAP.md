@@ -1,6 +1,6 @@
 # CostSentinel — Roadmap
 
-**Current phase: 4**
+**Current phase: 5** — cost anomalies and real-model hardening.
 
 Phases are sequential. Do not start work in a later phase before the current phase
 is complete and its exit criteria are met. If an idea arrives mid-phase, record it
@@ -8,17 +8,22 @@ under "Parked ideas" at the bottom and stay on the current slice.
 
 Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
-> **Phase order has changed twice.** After Phase 1 the specialist graph and the MCP
-> Azure tool server were swapped, because the graph is entirely mock-runnable and the
-> MCP server is the first thing needing real credentials (ARCHITECTURE.md D34). After
-> Phase 2, statistical cost-anomaly detection and the real-model hardening work were
-> split out of the MCP phase into their own Phase 4, and Phases 4-10 renumbered to
-> 5-11. The reason is that Phase 3 is a *capability unlock with a safety surface* --
-> real prices, real reads, real models, and the guarantees that make a real run safe
-> to point at someone's estate. Anomaly detection is ordinary feature work that
-> happens to want real cost history, and bundling it would have meant shipping a
-> safety-critical phase and a feature phase as one reviewable unit
-> (ARCHITECTURE.md D49).
+> **Phase order has changed three times.** After Phase 1 the specialist graph and the
+> MCP Azure tool server were swapped, because the graph is entirely mock-runnable and
+> the MCP server is the first thing needing real credentials (ARCHITECTURE.md D34).
+> After Phase 2, statistical cost-anomaly detection and real-model hardening were
+> split out of the MCP phase into their own phase, because Phase 3 is a *capability
+> unlock with a safety surface* and bundling ordinary feature work with it would have
+> meant shipping both as one reviewable unit (D49).
+>
+> After Phase 3, **the memory layer and the anomaly phase swapped**: memory is now
+> Phase 4 and anomalies Phase 5 (ARCHITECTURE.md D67). Two reasons. Memory is what
+> makes CostSentinel a system that *learns* rather than one that re-pitches the same
+> rejected advice every month, and that is the product's central claim -- it should
+> not sit behind a detector improvement. And anomaly detection wants real cost history
+> to calibrate thresholds against, which only accumulates once somebody is running
+> real sweeps; memory needs nothing but its own store, so it can be built and proven
+> offline today. Nothing after Phase 5 was renumbered.
 
 ---
 
@@ -153,11 +158,76 @@ without them.
 
 ---
 
-## Phase 4 — Cost anomalies and real-model hardening
+## Phase 4 — Durable memory: episodic and semantic
+
+**Goal:** CostSentinel remembers. Every run's findings, recommendations and
+classifications persist per subscription and per client, a human's accept / reject /
+defer decision is recorded against a recommendation, and the next sweep uses both --
+so a client is not re-pitched advice they already declined, and an explanation can
+cite the policy or guidance it rests on.
+
+This is the phase that turns a stateless analyser into a system with a memory of the
+estate it looks after. Everything in it is provable offline: the default store needs
+no database, and the embedder has a deterministic fake.
+
+Milestone: *Phase 4 - Durable memory*.
+
+- [x] Typed memory-store interface covering both memory kinds, with an in-memory /
+      SQLite implementation as the default and the only one CI and the demo use (#25)
+- [x] PostgreSQL + pgvector implementation, selected only when a database is
+      configured, with a thin integration test skipped unless a DB URL is present (#26)
+- [x] `docker-compose.yml` earns its place: app plus postgres-with-pgvector, for
+      real and local runs only, never CI (#27)
+- [x] Episodic memory: persist findings, recommendations and policy classifications
+      per subscription and client, correlated by `run_id`, with timestamps and
+      provenance (#28)
+- [x] `costsentinel decide <recommendation-id> --accept|--reject|--defer --reason`,
+      writing a typed, validated, audited outcome into episodic memory (#29)
+- [x] Semantic memory: a vector store over committed synthetic FinOps policy,
+      Well-Architected cost-pillar guidance and pricing/meter notes, behind a
+      pluggable embedder with a deterministic `FakeEmbedder` (#30)
+- [x] Memory consult step wired into the graph: previously declined recommendations
+      annotated and deprioritised, previously accepted patterns noted, and the
+      Root-Cause Analyst able to ground an explanation in retrieved guidance (#31)
+- [x] A determinism test: the same estate with and without a seeded rejection
+      produces **identical** money figures and only reordered, annotated output (#32)
+- [x] Memory reads and writes traced with hit/miss and latency, a no-op when tracing
+      is unconfigured (#33)
+- [x] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.4.0 (#34)
+
+**Exit criteria (met):** a recommendation declined through the `decide` CLI is demoted
+and annotated with its decline date and reason on the next sweep, carrying the rank it
+held on merit; the report says how many findings were previously declined; 805 tests
+pass with no database, no network and no real embedder, at 94% coverage with `domain`,
+`agents`, `guardrails` and `graph` at 97-100%; `ruff check`, `ruff format --check` and
+`pyright` clean; and the determinism test proves memory changed only the ordering and
+the annotations, with every money figure byte-identical.
+
+**One thing to know about the test suite.** It now takes about 50 seconds without
+coverage and about two and a half minutes with it, up from well under a minute. The
+cause is volume rather than any single slow test -- the suite grew by 70 tests, many
+of which run complete sweeps -- and the slowest individual test is under two seconds.
+Worth watching rather than acting on; if it keeps climbing, the end-to-end determinism
+tests are the ones to consolidate.
+
+**Deliberately *not* in this phase:** the approval gate itself and its Teams and Slack
+adapters (Phase 8). `decide` is a recording CLI, not a gate -- it writes an outcome
+after the fact rather than halting a run. Separating them is what lets the learning
+loop be demonstrated now instead of waiting for the adapters.
+
+**New dependencies, all optional extras so CI stays offline:** `psycopg`, `pgvector`,
+and whatever the real embedder needs. The default store uses the standard library's
+`sqlite3`, so the demo path adds no dependency at all.
+
+---
+
+## Phase 5 — Cost anomalies and real-model hardening
 
 **Goal:** the work that only becomes meaningful once real cost history and real models
 are in hand. Split out of the original Phase 3 so that the safety-critical capability
-unlock and this ordinary feature work are separately reviewable.
+unlock and this ordinary feature work are separately reviewable, then deferred behind
+the memory layer because threshold calibration wants history that only real sweeps
+accumulate (ARCHITECTURE.md D67).
 
 - [ ] Statistical cost-anomaly detection over the cost series, emitting `CostAnomaly`.
       Needs real cost history to calibrate thresholds against, which is why it waited.
@@ -176,30 +246,6 @@ unlock and this ordinary feature work are separately reviewable.
 **Exit criteria:** a spend spike in a real subscription is detected, attributed and
 reported; a primary-backend failure falls back to the secondary without failing the
 sweep; a hostile resource name cannot alter a recommendation.
-
----
-
-## Phase 5 — Semantic and episodic memory
-
-**Goal:** the system remembers reference knowledge and prior outcomes, and uses both
-to rank better.
-
-- [ ] Postgres + pgvector in docker-compose
-- [ ] Schema and migrations for `semantic_chunks` and `episodic_outcomes`
-- [ ] Embedding seam with a deterministic fake embedder for tests
-- [ ] Semantic ingest: Azure pricing, the WAF cost pillar, the org FinOps policy
-- [ ] Client-filtered retrieval, with a test asserting no cross-client leakage
-- [ ] Episodic write path: findings, decisions, accept/reject/revert outcomes
-- [ ] Hybrid episodic retrieval: exact scope match plus vector similarity on rationale
-- [ ] Planner consumes episodic memory to suppress and re-rank prior rejections
-- [ ] Graceful degradation with no database configured, verified by test
-- [ ] Postgres checkpointer for compose deployments
-
-**Exit criteria:** a recommendation previously rejected by a client is demoted and
-annotated on the next sweep; the full suite still passes with no database present.
-
-**New dependencies to flag:** `psycopg`, `pgvector`, `sqlalchemy` or `alembic` for
-migrations.
 
 ---
 
@@ -357,7 +403,8 @@ a complete audit chain from signal to execution, and the outcome recorded.
 
 ## Later features, scheduled
 
-- **Config-tunable ranking weights per client** (Phase 5, with the policy overlays).
+- **Config-tunable ranking weights per client** (Phase 8, with the client policy
+  overlays the approval gate needs anyway).
   The Phase 2 weights -- 0.60 savings, 0.25 safety, 0.15 confidence -- are a product
   judgement baked into a module constant. Different clients have genuinely different
   appetites: a government production estate may want safety weighted far higher than a
@@ -388,7 +435,7 @@ a complete audit chain from signal to execution, and the outcome recorded.
   to route around the approval gate. Needs the reporting layer in place first, because
   it is a presentation change to a number the Savings Estimator can already compute.
 
-- **A real-run acceptance checklist** (Phase 4, alongside threshold calibration).
+- **A real-run acceptance checklist** (Phase 5, alongside threshold calibration).
   Phase 3 made a real read-only run safe but did not execute one. The first real sweep
   against a sandbox subscription will surface a predictable class of gap -- a SKU the
   catalogue does not price, a resource type `sku_mapping` does not translate, an

@@ -22,6 +22,7 @@ from costsentinel.domain.common import (
     Provenance,
     utc_now,
 )
+from costsentinel.domain.memory import MemoryMetrics
 
 _CENTS = Decimal("0.01")
 
@@ -134,6 +135,14 @@ class RunMetrics(Frozen):
     client: str
     calls: tuple[LLMCallMetrics, ...] = ()
     nodes: tuple[NodeMetrics, ...] = ()
+    memory: MemoryMetrics = Field(
+        default_factory=MemoryMetrics,
+        description=(
+            "Memory reads and writes during this run. Alongside the reports rather "
+            "than inside them (D45): how long a lookup took is an operational fact, "
+            "not something a client should read."
+        ),
+    )
     started_at: datetime = Field(default_factory=utc_now)
     total_latency_ms: int = Field(default=0, ge=0)
 

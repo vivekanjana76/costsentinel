@@ -320,6 +320,7 @@ def test_a_gated_action_routes_through_the_approval_seam(settings: Settings) -> 
         priced_options=(_option(),),
         recommendations=(_recommendation(),),
         classifications=(_classification(),),
+        memory_consulted=True,
     )
     decision = _decide(settings, state).supervisor_decisions[-1]
     assert decision.action is RouteAction.REQUIRE_APPROVAL
@@ -338,6 +339,7 @@ def test_a_recorded_decision_clears_the_approval_seam(settings: Settings) -> Non
         priced_options=(_option(),),
         recommendations=(_recommendation(),),
         classifications=(_classification(),),
+        memory_consulted=True,
         decisions=(
             ApprovalDecision(
                 recommendation_id="rec-1",
@@ -362,6 +364,7 @@ def test_an_allow_only_run_needs_no_approval(settings: Settings) -> None:
         priced_options=(_option(),),
         recommendations=(_recommendation(),),
         classifications=(_classification(action_class=ActionClass.ALLOW),),
+        memory_consulted=True,
     )
     decision = _decide(settings, state).supervisor_decisions[-1]
     assert decision.action is RouteAction.PROCEED
@@ -411,6 +414,7 @@ def test_a_finished_run_completes(settings: Settings) -> None:
         priced_options=(_option(),),
         recommendations=(_recommendation(),),
         classifications=(_classification(action_class=ActionClass.ALLOW),),
+        memory_consulted=True,
         report=report,
     )
     after = _decide(settings, state)

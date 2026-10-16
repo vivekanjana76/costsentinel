@@ -12,11 +12,13 @@ conditional edge::
                          |                         |
                          +-> root_cause_analyst ---+
                          |                         |
-                         +-> savings_estimator ----+--> back to supervisor
-                         |                         |
+                         +-> savings_estimator ----+
+                         |                         +--> back to supervisor
                          +-> optimization_planner -+
                          |                         |
                          +-> policy_guard ---------+
+                         |                         |
+                         +-> memory_consult -------+
                          |
                          +-> report_author -> END
 
@@ -39,6 +41,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from costsentinel.agents.anomaly_scout import make_anomaly_scout
+from costsentinel.agents.memory_consult import make_memory_consult
 from costsentinel.agents.optimization_planner import make_optimization_planner
 from costsentinel.agents.policy_guard import make_policy_guard
 from costsentinel.agents.report_author import make_report_author
@@ -49,6 +52,9 @@ from costsentinel.config import Settings
 from costsentinel.domain.state import ScanState
 from costsentinel.guardrails.policy import PolicyStore
 from costsentinel.llm.base import LLM
+from costsentinel.memory.base import MemoryStore
+from costsentinel.memory.embedding import Embedder
+from costsentinel.memory.null import NullMemoryStore
 from costsentinel.providers.base import AzureProvider
 
 NODE_SUPERVISOR = "supervisor"
@@ -57,6 +63,7 @@ NODE_ROOT_CAUSE_ANALYST = "root_cause_analyst"
 NODE_SAVINGS_ESTIMATOR = "savings_estimator"
 NODE_OPTIMIZATION_PLANNER = "optimization_planner"
 NODE_POLICY_GUARD = "policy_guard"
+NODE_MEMORY_CONSULT = "memory_consult"
 NODE_REPORT_AUTHOR = "report_author"
 
 #: The six specialists from CLAUDE.md section 5, in the order a full sweep visits
@@ -67,10 +74,17 @@ SPECIALIST_NODES: tuple[str, ...] = (
     NODE_SAVINGS_ESTIMATOR,
     NODE_OPTIMIZATION_PLANNER,
     NODE_POLICY_GUARD,
+    NODE_MEMORY_CONSULT,
     NODE_REPORT_AUTHOR,
 )
 
-#: Every node in the graph: the six specialists plus the supervisor.
+#: Every node in the graph: the specialists plus the supervisor.
+#:
+#: Memory Consult is listed among the specialists but is not one of CLAUDE.md
+#: section 5's six: it is a support step that reorders and annotates what the six
+#: produced. Kept in the same tuple because the thing tests and the diagram care
+#: about is "every node a sweep visits", and a second list would be a second thing
+#: to forget to update.
 PHASE_2_NODES: tuple[str, ...] = (NODE_SUPERVISOR, *SPECIALIST_NODES)
 
 #: Where the supervisor may send a run. Declaring the map explicitly means an
@@ -81,6 +95,7 @@ _ROUTES: dict[Hashable, str] = {
     NODE_SAVINGS_ESTIMATOR: NODE_SAVINGS_ESTIMATOR,
     NODE_OPTIMIZATION_PLANNER: NODE_OPTIMIZATION_PLANNER,
     NODE_POLICY_GUARD: NODE_POLICY_GUARD,
+    NODE_MEMORY_CONSULT: NODE_MEMORY_CONSULT,
     NODE_REPORT_AUTHOR: NODE_REPORT_AUTHOR,
     "__end__": END,
 }
@@ -92,6 +107,8 @@ def build_graph(
     llm: LLM,
     settings: Settings,
     policy: PolicyStore | None = None,
+    memory: MemoryStore | None = None,
+    embedder: Embedder | None = None,
     checkpointer: BaseCheckpointSaver[str] | None = None,
 ) -> CompiledStateGraph[ScanState, None, ScanState, ScanState]:
     """Assemble and compile the scan graph.
@@ -103,6 +120,12 @@ def build_graph(
             :class:`~costsentinel.llm.traced.TracedLLM` to get per-call metrics.
         settings: Resolved configuration.
         policy: The policy store. Defaults to the built-in one.
+        memory: Episodic and semantic memory. Defaults to the no-op store, so a
+            graph built without memory behaves exactly as it did before memory
+            existed -- the consult node still runs and records that it found
+            nothing, which keeps one code path rather than two.
+        embedder: Query embedder for semantic retrieval. Only the Root-Cause Analyst
+            uses it, and only when ``memory`` is enabled.
         checkpointer: Durable state store. ``None`` compiles an unpersisted graph,
             which is useful for a unit test of the node sequence but is not how a
             real sweep runs.
@@ -111,12 +134,16 @@ def build_graph(
         The compiled graph, ready to invoke with a :class:`ScanState`.
     """
     store = policy or PolicyStore()
+    recall = memory or NullMemoryStore()
 
     graph: StateGraph[ScanState, None, ScanState, ScanState] = StateGraph(ScanState)
 
     graph.add_node(NODE_SUPERVISOR, make_supervisor(settings=settings))
     graph.add_node(NODE_ANOMALY_SCOUT, make_anomaly_scout(provider=provider, settings=settings))
-    graph.add_node(NODE_ROOT_CAUSE_ANALYST, make_root_cause_analyst(llm=llm, settings=settings))
+    graph.add_node(
+        NODE_ROOT_CAUSE_ANALYST,
+        make_root_cause_analyst(llm=llm, settings=settings, memory=recall, embedder=embedder),
+    )
     graph.add_node(
         NODE_SAVINGS_ESTIMATOR,
         make_savings_estimator(provider=provider, settings=settings, policy=store),
@@ -126,6 +153,7 @@ def build_graph(
         make_optimization_planner(llm=llm, settings=settings, policy=store),
     )
     graph.add_node(NODE_POLICY_GUARD, make_policy_guard(settings=settings, policy=store))
+    graph.add_node(NODE_MEMORY_CONSULT, make_memory_consult(memory=recall, settings=settings))
     graph.add_node(NODE_REPORT_AUTHOR, make_report_author(llm=llm, settings=settings))
 
     graph.add_edge(START, NODE_SUPERVISOR)
@@ -140,6 +168,7 @@ def build_graph(
         NODE_SAVINGS_ESTIMATOR,
         NODE_OPTIMIZATION_PLANNER,
         NODE_POLICY_GUARD,
+        NODE_MEMORY_CONSULT,
     ):
         graph.add_edge(node, NODE_SUPERVISOR)
     graph.add_edge(NODE_REPORT_AUTHOR, END)

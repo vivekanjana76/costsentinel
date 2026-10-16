@@ -96,13 +96,20 @@ def northwind_report(
 # ---------------------------------------------------------------------------
 
 
-def test_graph_has_the_six_specialists_and_a_supervisor(
+def test_graph_has_the_six_specialists_a_supervisor_and_the_consult_step(
     provider: MockAzureProvider, llm: FakeLLM, settings: Settings
 ) -> None:
+    """Memory Consult joins the six, and is not one of them.
+
+    CLAUDE.md section 5 names six specialists. The consult step is a support node
+    that reorders and annotates what they produced, so the count asserted here is
+    six plus one rather than seven specialists.
+    """
     graph = build_graph(provider=provider, llm=llm, settings=settings)
     nodes = set(graph.get_graph().nodes)
     assert set(PHASE_2_NODES) <= nodes
-    assert len(SPECIALIST_NODES) == 6
+    assert len(SPECIALIST_NODES) == 7
+    assert "memory_consult" in SPECIALIST_NODES
     assert "supervisor" in nodes
 
 

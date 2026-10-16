@@ -21,6 +21,7 @@ from costsentinel.cli import build_parser, main, render_json, summarise
 from costsentinel.config import (
     LLMBackend,
     LogLevel,
+    MemoryBackend,
     RunMode,
     Settings,
     get_settings,
@@ -53,9 +54,17 @@ def test_defaults_require_no_credentials(monkeypatch: pytest.MonkeyPatch) -> Non
     assert fresh.llm_backend is LLMBackend.FAKE
     assert fresh.is_mock_mode
     assert fresh.uses_fake_llm
+    assert fresh.uses_fake_embedder
     assert fresh.requires_no_credentials
-    assert not fresh.memory_enabled
     assert not fresh.tracing_enabled
+
+    # Memory is on by default, and that does not weaken the claim above: the
+    # default store is local SQLite and the default embedder is the deterministic
+    # fake, so the learning loop works on a fresh clone with no credentials at all.
+    # It was off before Phase 4 only because it did not exist.
+    assert fresh.memory_enabled
+    assert fresh.memory_backend is MemoryBackend.SQLITE
+    assert fresh.database_url is None
 
 
 def test_mode_is_readable_from_the_bare_environment_name(

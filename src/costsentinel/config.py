@@ -36,6 +36,36 @@ class LLMBackend(StrEnum):
     GEMINI = "gemini"
 
 
+class MemoryBackend(StrEnum):
+    """Which store backs episodic and semantic memory.
+
+    ``SQLITE`` is the default and needs nothing: no service, no network, no
+    dependency beyond the standard library. That is what lets the learning loop be
+    demonstrated offline and tested in CI.
+
+    ``OFF`` is a first-class choice rather than an absence. A deployment that does
+    not want a history on disk should be able to say so, and every consulting node
+    already handles an empty store, so turning memory off is a configuration change
+    rather than a different code path.
+    """
+
+    SQLITE = "sqlite"
+    POSTGRES = "postgres"
+    OFF = "off"
+
+
+class EmbedderBackend(StrEnum):
+    """Which embedder turns text into a vector.
+
+    ``FAKE`` is deterministic and is what CI and the demo use. It is not a stub: it
+    hashes tokens into a fixed-width vector, so cosine similarity genuinely tracks
+    token overlap and retrieval results are both meaningful and assertable.
+    """
+
+    FAKE = "fake"
+    AZURE_OPENAI = "azure_openai"
+
+
 class LogLevel(StrEnum):
     """Structured-logging verbosity."""
 
@@ -189,8 +219,51 @@ class Settings(BaseSettings):
         default=None, ge=Decimal(0), validation_alias=_env("LLM_PRICE_LARGE_COMPLETION")
     )
 
-    # --- memory (Phase 4) ------------------------------------------------
-    database_url: SecretStr | None = Field(default=None, validation_alias=_env("DATABASE_URL"))
+    # --- memory ----------------------------------------------------------
+    memory_backend: MemoryBackend = Field(
+        default=MemoryBackend.SQLITE, validation_alias=_env("MEMORY_BACKEND")
+    )
+    memory_path: Path | None = Field(
+        default=None,
+        validation_alias=_env("MEMORY_PATH"),
+        description=(
+            "Where the SQLite memory database lives. Defaults to memory.sqlite "
+            "inside STATE_DIR. Set to a path to keep a history across runs."
+        ),
+    )
+    database_url: SecretStr | None = Field(
+        default=None,
+        validation_alias=_env("DATABASE_URL"),
+        description="Required for MEMORY_BACKEND=postgres. Never read from the repository.",
+    )
+    memory_recall_limit: int = Field(
+        default=500,
+        ge=1,
+        le=10_000,
+        validation_alias=_env("MEMORY_RECALL_LIMIT"),
+        description="How many historical recommendations a consult step reads per client.",
+    )
+
+    # --- embedding -------------------------------------------------------
+    embedder_backend: EmbedderBackend = Field(
+        default=EmbedderBackend.FAKE, validation_alias=_env("EMBEDDER_BACKEND")
+    )
+    embedding_dimensions: int = Field(
+        default=4096,
+        ge=16,
+        le=8192,
+        validation_alias=_env("EMBEDDING_DIMENSIONS"),
+        description=(
+            "Vector width. One setting rather than two, because it is also the "
+            "pgvector column width, which has to match whatever embedder is "
+            "actually in use. Set it to your real embedder's width when using one. "
+            "Changing it invalidates every stored chunk, which the embedder "
+            "identifier on each chunk is there to make visible."
+        ),
+    )
+    azure_openai_embedding_deployment: str | None = Field(
+        default=None, validation_alias=_env("AZURE_OPENAI_EMBEDDING_DEPLOYMENT")
+    )
 
     # --- observability (Phase 3) -----------------------------------------
     langfuse_host: str | None = Field(default=None, validation_alias=_env("LANGFUSE_HOST"))
@@ -226,8 +299,17 @@ class Settings(BaseSettings):
 
     @property
     def requires_no_credentials(self) -> bool:
-        """Whether this configuration can run with no secrets at all."""
-        return self.is_mock_mode and self.uses_fake_llm
+        """Whether this configuration can run with no secrets at all.
+
+        The default SQLite memory store needs none, so memory does not appear here;
+        a real embedder or a Postgres URL does.
+        """
+        return (
+            self.is_mock_mode
+            and self.uses_fake_llm
+            and self.uses_fake_embedder
+            and self.memory_backend is not MemoryBackend.POSTGRES
+        )
 
     def token_rates(self, tier: str) -> tuple[Decimal, Decimal] | None:
         """Configured prompt and completion rates per million tokens for one tier.
@@ -245,12 +327,24 @@ class Settings(BaseSettings):
 
     @property
     def memory_enabled(self) -> bool:
-        """Whether a memory database is configured (Phase 4).
+        """Whether memory persists anything at all.
 
         False means stateless operation: ranking is not improved by prior outcomes,
-        but correctness is unaffected (ARCHITECTURE.md D11).
+        but correctness is unaffected (ARCHITECTURE.md D11). Note this is *not* the
+        same as "a database is configured" -- the default SQLite store persists
+        happily with no database in sight.
         """
-        return self.database_url is not None
+        return self.memory_backend is not MemoryBackend.OFF
+
+    @property
+    def uses_fake_embedder(self) -> bool:
+        """Whether this run embeds with the deterministic fake."""
+        return self.embedder_backend is EmbedderBackend.FAKE
+
+    @property
+    def memory_db_path(self) -> Path:
+        """Where the SQLite memory database lives."""
+        return self.memory_path or (self.state_dir / "memory.sqlite")
 
     @property
     def tracing_enabled(self) -> bool:
