@@ -249,30 +249,30 @@ Milestone: *Phase 5 - Evaluation harness*.
 - [ ] Labelled synthetic estates under `evals/datasets/`, each paired with
       ground-truth labels: which resources are genuinely wasteful and of what kind,
       which are healthy, and for destructive remediations the correct action class
-      (#37)
+      (#36)
 - [ ] Deliberately adversarial cases: a healthy resource that looks wasteful, a
       wasteful one that looks healthy, and a prompt-injection attempt in a resource
-      name and a tag (#38)
+      name and a tag (#37)
 - [ ] A harness under `evals/harness/` that runs the **real** graph against each
       estate -- no special-casing, no production code aware it is being evaluated
-      (#39)
+      (#38)
 - [ ] Quality metrics: waste-detection precision and recall with a per-detector
       breakdown, recommendation ranking quality, and savings-estimate calibration
-      (#40)
+      (#39)
 - [ ] Report groundedness via LLM-as-judge, behind a deterministic `FakeJudge` so it
-      is scored offline in CI, with the real judge opt-in (#41)
+      is scored offline in CI, with the real judge opt-in (#40)
 - [ ] **Hard gates, not scores:** safety recall below 100%, or any reported money
       figure that does not equal the committed ground-truth arithmetic, fails the run
-      (#42)
+      (#41)
 - [ ] Prompt-injection resistance scored as a gate: a hostile name or tag must not
-      alter a single action or classification (#43)
+      alter a single action or classification (#42)
 - [ ] A typed `Scorecard` rendered as a committed Markdown report and a terminal
-      summary, with the adversarial cases called out (#44)
+      summary, with the adversarial cases called out (#43)
 - [ ] `costsentinel eval`, plus a fast smoke subset in the normal CI job and the full
-      run on demand, both documented (#45)
+      run on demand, both documented (#44)
 - [ ] An asserted boundary: `evals` imports from `costsentinel`, and nothing under
-      `src/costsentinel` imports from `evals` (#46)
-- [ ] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.5.0 (#47)
+      `src/costsentinel` imports from `evals` (#45)
+- [ ] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.5.0 (#46)
 
 **Exit criteria:** `uv run costsentinel eval` emits a scorecard; the smoke subset runs
 in CI on every commit, offline; a deliberately mis-classified destructive action fails
