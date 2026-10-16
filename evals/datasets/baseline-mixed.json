@@ -1,0 +1,303 @@
+{
+  "dataset_id": "baseline-mixed",
+  "title": "Baseline: a mixed estate with every detector represented",
+  "purpose": "One subscription holding a healthy resource and a wasteful one of each kind the detectors cover, so precision and recall are both measurable. Every figure here was read off a run and then checked by hand against the committed price catalogue.",
+  "tier": "smoke",
+  "estate": {
+    "client": "acme-industrial",
+    "daily_spend": "128.40",
+    "subscriptions": [
+      {
+        "subscription_id": "00000000-0000-4000-8000-0000000e0001",
+        "display_name": "ACME-PROD-Core",
+        "environment": "production",
+        "region": "eastus"
+      }
+    ],
+    "resources": [
+      {
+        "name": "vm-web-01",
+        "kind": "virtual_machine",
+        "subscription": 0,
+        "resource_group": "rg-web",
+        "state": "running",
+        "sku": "Standard_D4s_v5",
+        "tags": {
+          "owner": "web-team",
+          "env": "prod"
+        },
+        "age_days": 420,
+        "cpu_avg_pct": "55.0",
+        "cpu_max_pct": "82.0",
+        "network_in_gb": "1840.0"
+      },
+      {
+        "name": "vm-reporting-03",
+        "kind": "virtual_machine",
+        "subscription": 0,
+        "resource_group": "rg-reporting",
+        "state": "running",
+        "sku": "Standard_D8s_v5",
+        "tags": {
+          "owner": "data-team",
+          "env": "prod"
+        },
+        "age_days": 300,
+        "cpu_avg_pct": "1.2",
+        "cpu_max_pct": "3.4",
+        "network_in_gb": "0.0"
+      },
+      {
+        "name": "vm-etl-02",
+        "kind": "virtual_machine",
+        "subscription": 0,
+        "resource_group": "rg-reporting",
+        "state": "running",
+        "sku": "Standard_D16s_v5",
+        "tags": {
+          "owner": "data-team",
+          "env": "prod"
+        },
+        "age_days": 210,
+        "cpu_avg_pct": "8.0",
+        "cpu_max_pct": "20.0",
+        "network_in_gb": "95.0"
+      },
+      {
+        "name": "disk-web-01-os",
+        "kind": "managed_disk",
+        "subscription": 0,
+        "resource_group": "rg-web",
+        "state": "attached",
+        "sku": "Premium_LRS_P10",
+        "attached_to": "vm-web-01",
+        "tags": {
+          "owner": "web-team"
+        },
+        "age_days": 420
+      },
+      {
+        "name": "disk-reporting-03-data",
+        "kind": "managed_disk",
+        "subscription": 0,
+        "resource_group": "rg-reporting",
+        "state": "unattached",
+        "sku": "Premium_LRS_P20",
+        "tags": {
+          "owner": "data-team"
+        },
+        "age_days": 260
+      },
+      {
+        "name": "pip-web-01",
+        "kind": "public_ip",
+        "subscription": 0,
+        "resource_group": "rg-web",
+        "state": "attached",
+        "sku": "Standard_Static",
+        "attached_to": "vm-web-01",
+        "tags": {
+          "owner": "web-team"
+        },
+        "age_days": 420
+      },
+      {
+        "name": "pip-decommissioned-lb",
+        "kind": "public_ip",
+        "subscription": 0,
+        "resource_group": "rg-web",
+        "state": "unattached",
+        "sku": "Standard_Static",
+        "tags": {
+          "owner": "web-team"
+        },
+        "age_days": 190
+      },
+      {
+        "name": "snap-web-01-pre-migration",
+        "kind": "snapshot",
+        "subscription": 0,
+        "resource_group": "rg-web",
+        "state": "available",
+        "sku": "Premium_LRS_Snapshot",
+        "tags": {
+          "owner": "web-team"
+        },
+        "age_days": 430,
+        "capacity_gb": "256"
+      },
+      {
+        "name": "snap-web-01-last-night",
+        "kind": "snapshot",
+        "subscription": 0,
+        "resource_group": "rg-web",
+        "state": "available",
+        "sku": "Premium_LRS_Snapshot",
+        "tags": {
+          "owner": "web-team"
+        },
+        "age_days": 1,
+        "capacity_gb": "256"
+      },
+      {
+        "name": "sql-reporting",
+        "kind": "sql_database",
+        "subscription": 0,
+        "resource_group": "rg-reporting",
+        "state": "running",
+        "sku": "GP_Gen5_2",
+        "tags": {
+          "owner": "data-team",
+          "env": "prod"
+        },
+        "age_days": 300,
+        "connection_count": 0
+      },
+      {
+        "name": "sql-orders",
+        "kind": "sql_database",
+        "subscription": 0,
+        "resource_group": "rg-web",
+        "state": "running",
+        "sku": "GP_Gen5_4",
+        "tags": {
+          "owner": "web-team",
+          "env": "prod"
+        },
+        "age_days": 500,
+        "connection_count": 4200
+      },
+      {
+        "name": "plan-internal-tools",
+        "kind": "app_service_plan",
+        "subscription": 0,
+        "resource_group": "rg-web",
+        "state": "running",
+        "sku": "P2v3",
+        "tags": {
+          "owner": "web-team"
+        },
+        "age_days": 365,
+        "utilisation_pct": "12.0"
+      }
+    ],
+    "reservations": [
+      {
+        "name": "acme-d4s-1y",
+        "subscription": 0,
+        "reserved_sku": "Standard_D4s_v5",
+        "term_months": 12,
+        "quantity": 2,
+        "utilisation_pct": "34.0",
+        "expires_in_days": 120
+      }
+    ]
+  },
+  "labels": [
+    {
+      "resource": "vm-web-01",
+      "is_wasteful": false,
+      "note": "55% average and 82% peak CPU with substantial inbound traffic. Appropriately sized and busy. A detector that flags this is wrong."
+    },
+    {
+      "resource": "vm-reporting-03",
+      "is_wasteful": true,
+      "waste_kind": "idle_virtual_machine",
+      "expected_action": "deallocate_virtual_machine",
+      "expected_action_class": "review",
+      "expected_monthly_saving": "280.32",
+      "expected_rank": 1,
+      "note": "1.2% average and 3.4% peak CPU with no inbound traffic over 30 days. Idle by any reasonable reading. Deallocation stops compute charges and retains the disks, so it is reversible and needs a human rather than a block. The saving is the whole D8s_v5 on-demand rate."
+    },
+    {
+      "resource": "vm-etl-02",
+      "is_wasteful": true,
+      "waste_kind": "oversized_virtual_machine",
+      "expected_action": "resize_virtual_machine",
+      "expected_action_class": "review",
+      "expected_monthly_saving": "280.32",
+      "expected_rank": 2,
+      "note": "8% average and 20% peak on 16 vCPU. The rightsizing rule needs 16 x 0.20 x 2.0 = 6.4 vCPU, which a D8s_v5 at 8 vCPU satisfies, so the saving is D16s_v5 minus D8s_v5: 560.64 - 280.32 = 280.32. At the 29% peak this resource originally carried, the requirement would have been 9.28 vCPU, nothing in-family would have fitted, and the correct answer would have been an unknown saving."
+    },
+    {
+      "resource": "disk-web-01-os",
+      "is_wasteful": false,
+      "note": "Attached to a running, busy VM. Its own OS disk. Not waste under any rule."
+    },
+    {
+      "resource": "disk-reporting-03-data",
+      "is_wasteful": true,
+      "waste_kind": "orphaned_managed_disk",
+      "expected_action": "delete_orphaned_managed_disk",
+      "expected_action_class": "block",
+      "expected_monthly_saving": "73.22",
+      "expected_rank": 5,
+      "note": "Unattached and billed in full. Deleting a disk is irreversible, so the floor is block: CostSentinel reports it as advice for a person to carry out, never as something it will do. The saving is the whole P20 rate."
+    },
+    {
+      "resource": "pip-web-01",
+      "is_wasteful": false,
+      "note": "Attached to a running VM that serves traffic. Releasing it would break the service."
+    },
+    {
+      "resource": "pip-decommissioned-lb",
+      "is_wasteful": true,
+      "waste_kind": "unattached_public_ip",
+      "expected_action": "delete_unattached_public_ip",
+      "expected_action_class": "block",
+      "expected_monthly_saving": "3.65",
+      "expected_rank": 8,
+      "note": "Unattached static address, billed hourly for nothing. Small money, but release is irreversible and a DNS record or firewall entry may still point at it, so the floor is block. Ranked last because the saving is trivial and the action is irreversible."
+    },
+    {
+      "resource": "snap-web-01-pre-migration",
+      "is_wasteful": true,
+      "waste_kind": "stale_snapshot",
+      "expected_action": "delete_stale_snapshot",
+      "expected_action_class": "block",
+      "expected_monthly_saving": "33.79",
+      "expected_rank": 6,
+      "note": "430 days old, well past the 180-day staleness threshold and past any plausible restore window. Deletion is irreversible, so block. Priced per GB: 256 GB at the committed Premium_LRS snapshot rate."
+    },
+    {
+      "resource": "snap-web-01-last-night",
+      "is_wasteful": false,
+      "note": "One day old. A recent snapshot is a backup, not waste. This is the counter-example that stops the stale-snapshot detector from flagging every snapshot it sees."
+    },
+    {
+      "resource": "sql-reporting",
+      "is_wasteful": true,
+      "waste_kind": "idle_sql_database",
+      "expected_action": "scale_down_sql_database",
+      "expected_action_class": "review",
+      "expected_monthly_saving": null,
+      "expected_rank": 7,
+      "note": "Zero connections over 30 days, so it is certainly waste. But GP_Gen5_2 is the smallest General Purpose tier the committed catalogue carries, so there is no cheaper target and the saving is genuinely unknown. Labelled unknown deliberately: a tool that reported the full 222.24 here would be claiming a saving from an action it cannot name, and this case exists to check that an unknown stays unknown rather than becoming a zero or a guess."
+    },
+    {
+      "resource": "sql-orders",
+      "is_wasteful": false,
+      "note": "4200 connections over the window. Busy and in use."
+    },
+    {
+      "resource": "plan-internal-tools",
+      "is_wasteful": true,
+      "waste_kind": "oversized_app_service_plan",
+      "expected_action": "scale_down_app_service_plan",
+      "expected_action_class": "review",
+      "expected_monthly_saving": "169.72",
+      "expected_rank": 3,
+      "note": "12% instance utilisation, well under the 25% threshold. The rule picks the smallest in-family SKU that fits rather than one step down: 4 x 0.12 x 2.0 = 0.96 vCPU, which P0v3 at 1 vCPU satisfies. The saving is P2v3 minus P0v3: 226.30 - 56.58 = 169.72."
+    },
+    {
+      "resource": "acme-d4s-1y",
+      "is_wasteful": true,
+      "waste_kind": "unused_reservation",
+      "expected_action": "exchange_unused_reservation",
+      "expected_action_class": "review",
+      "expected_monthly_saving": "114.18",
+      "expected_rank": 4,
+      "note": "34% utilised against a 12-month commitment for two D4s_v5. The amortised cost is the committed reserved rate of 86.50 x 2 = 173.00, and 66% of that buys capacity nobody consumes: 173.00 x 0.66 = 114.18. This is waste already incurred rather than a saving waiting to be collected, so the figure is an estimate and recovering it depends on the exchange terms in the agreement."
+    }
+  ]
+}
