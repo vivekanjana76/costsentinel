@@ -9,6 +9,7 @@ than aspirational.
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -16,6 +17,7 @@ from pydantic import SecretStr
 
 from costsentinel.config import LLMBackend, Settings
 from costsentinel.domain.common import MoneyAmount
+from costsentinel.domain.memory import MemoryAccess, MemoryOperation
 from costsentinel.domain.observability import (
     LLMCallMetrics,
     ModelTier,
@@ -244,6 +246,7 @@ def test_the_noop_tracer_accepts_everything_and_records_nothing() -> None:
     span.finish()
     span.finish(error="boom")
     tracer.record_llm_call(_call("root_cause"))
+    tracer.record_memory_access(_access())
     tracer.end_run(run_id="run-1", metadata={})
 
 
@@ -291,6 +294,7 @@ class _FakeLangfuse:
         self.traces: list[dict[str, Any]] = []
         self.spans: list[dict[str, Any]] = []
         self.generations: list[dict[str, Any]] = []
+        self.events: list[dict[str, Any]] = []
         self.flushes = 0
         self.handles: list[_FakeHandle] = []
 
@@ -309,6 +313,9 @@ class _FakeLangfuse:
     def generation(self, **kwargs: Any) -> None:
         self.generations.append(kwargs)
 
+    def event(self, **kwargs: Any) -> None:
+        self.events.append(kwargs)
+
     def flush(self) -> None:
         self.flushes += 1
 
@@ -326,6 +333,10 @@ class _AngryLangfuse(_FakeLangfuse):
 
     def generation(self, **kwargs: Any) -> None:
         msg = "generation failed"
+        raise RuntimeError(msg)
+
+    def event(self, **kwargs: Any) -> None:
+        msg = "event failed"
         raise RuntimeError(msg)
 
     def flush(self) -> None:
@@ -590,3 +601,126 @@ def test_fake_usage_is_deterministic() -> None:
 
 def test_fake_usage_is_none_before_any_call() -> None:
     assert FakeLLM().last_usage() is None
+
+
+def _access(
+    *,
+    operation: MemoryOperation = MemoryOperation.READ_OUTCOMES,
+    hit: bool = True,
+    records: int = 3,
+    succeeded: bool = True,
+) -> MemoryAccess:
+    return MemoryAccess(
+        operation=operation,
+        store="in-memory",
+        client="acme",
+        hit=hit,
+        record_count=records,
+        latency_ms=7,
+        succeeded=succeeded,
+        detail="",
+    )
+
+
+def test_the_adapter_records_a_memory_access_as_an_event(settings: Settings) -> None:
+    """An event rather than a span.
+
+    These are short, frequent and already timed by the store; a span per lookup
+    would bury the model calls that actually cost something.
+    """
+    client = _FakeLangfuse()
+    tracer = LangfuseTracer(_configured(settings), client=client)
+    tracer.record_memory_access(_access())
+
+    recorded = client.events[0]
+    assert recorded["name"] == "memory.read_outcomes"
+    assert recorded["metadata"]["store"] == "in-memory"
+    assert recorded["metadata"]["client"] == "acme"
+    assert recorded["metadata"]["hit"] == "true"
+    assert recorded["metadata"]["records"] == "3"
+    assert recorded["metadata"]["latency_ms"] == "7"
+    assert recorded["metadata"]["succeeded"] == "true"
+    assert client.spans == []
+
+
+def test_a_miss_and_a_failure_are_distinguishable_in_the_trace(
+    settings: Settings,
+) -> None:
+    """One is an estate nobody has scanned; the other is a broken store."""
+    client = _FakeLangfuse()
+    tracer = LangfuseTracer(_configured(settings), client=client)
+    tracer.record_memory_access(_access(hit=False, records=0))
+    tracer.record_memory_access(_access(hit=False, records=0, succeeded=False))
+
+    miss, failure = client.events
+    assert miss["metadata"]["hit"] == "false"
+    assert miss["metadata"]["succeeded"] == "true"
+    assert failure["metadata"]["succeeded"] == "false"
+
+
+def test_the_no_op_tracer_accepts_a_memory_access() -> None:
+    """The graph calls it unconditionally, so it must never raise."""
+    tracer = NoOpTracer()
+    tracer.record_memory_access(_access())
+    assert isinstance(tracer, Tracer)
+
+
+def test_a_runs_memory_accesses_reach_its_metrics_and_the_tracer(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """The reason this is traced at all: a hit rate nobody can see cannot be tuned."""
+    from costsentinel.graph.runner import run_client_scan
+    from costsentinel.memory import SqliteMemoryStore
+    from costsentinel.providers.mock import CLIENT_NORTHWIND, MockAzureProvider
+
+    class _Recording(NoOpTracer):
+        def __init__(self) -> None:
+            self.accesses: list[MemoryAccess] = []
+
+        def record_memory_access(self, access: MemoryAccess) -> None:
+            self.accesses.append(access)
+
+    tracer = _Recording()
+    store = SqliteMemoryStore()
+    try:
+        _, metrics = run_client_scan(
+            client=CLIENT_NORTHWIND,
+            provider=MockAzureProvider(seed=1337),
+            llm=FakeLLM(),
+            settings=settings.model_copy(update={"state_dir": tmp_path}),
+            checkpointer=None,
+            memory=store,
+            tracer=tracer,
+            run_id="run-traced",
+        )
+    finally:
+        store.close()
+
+    assert metrics.memory.access_count > 0
+    # The consult step's reads and the post-report write both reach the tracer.
+    operations = {access.operation for access in tracer.accesses}
+    assert MemoryOperation.READ_OUTCOMES in operations
+    assert MemoryOperation.RECORD_RUN in operations
+    assert all(access.succeeded for access in tracer.accesses)
+    # A first sweep of a new estate misses on every read, which is correct.
+    assert metrics.memory.failure_count == 0
+
+
+def test_a_runs_memory_metrics_are_empty_when_memory_is_off(
+    settings: Settings, tmp_path: Path
+) -> None:
+    from costsentinel.graph.runner import run_client_scan
+    from costsentinel.memory import NullMemoryStore
+    from costsentinel.providers.mock import CLIENT_NORTHWIND, MockAzureProvider
+
+    _, metrics = run_client_scan(
+        client=CLIENT_NORTHWIND,
+        provider=MockAzureProvider(seed=1337),
+        llm=FakeLLM(),
+        settings=settings.model_copy(update={"state_dir": tmp_path}),
+        checkpointer=None,
+        memory=NullMemoryStore(),
+        run_id="run-nomemory",
+    )
+    assert metrics.memory.access_count == 0
+    assert metrics.memory.hit_rate() is None

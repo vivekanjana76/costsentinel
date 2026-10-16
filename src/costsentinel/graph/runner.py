@@ -20,6 +20,7 @@ from collections.abc import Callable, Sequence
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from costsentinel.config import Settings, get_settings
+from costsentinel.domain.memory import MemoryMetrics
 from costsentinel.domain.observability import RunMetrics
 from costsentinel.domain.report import ClientReport, ScanResult
 from costsentinel.domain.state import ScanState
@@ -143,10 +144,15 @@ def run_client_scan(
             final = graph.invoke(initial, config={"configurable": {"thread_id": thread_id}})
         state = ScanState.model_validate(final)
 
+        memory_metrics = state.memory_metrics or MemoryMetrics()
+        for access in memory_metrics.accesses:
+            active_tracer.record_memory_access(access)
+
         metrics = RunMetrics(
             run_id=thread_id,
             client=client,
             calls=traced.collected(),
+            memory=memory_metrics,
             total_latency_ms=timer.elapsed_ms,
         )
         _log.info(
@@ -162,6 +168,12 @@ def run_client_scan(
                 "model_latency_ms": metrics.model_latency_ms,
                 "total_latency_ms": metrics.total_latency_ms,
                 "routing": metrics.tier_counts(),
+                "memory_store": store.name,
+                "memory_accesses": memory_metrics.access_count,
+                "memory_hits": memory_metrics.hit_count,
+                "memory_misses": memory_metrics.miss_count,
+                "memory_failures": memory_metrics.failure_count,
+                "memory_latency_ms": memory_metrics.total_latency_ms,
             },
         )
     finally:
@@ -180,7 +192,10 @@ def run_client_scan(
     # After the report, not before: a half-written history is worse than none,
     # because the next sweep reads it as fact. A failure here is logged and
     # returns False -- the client still gets their report.
+    store.reset_accesses()
     persist(store, state)
+    for access in store.accesses():
+        active_tracer.record_memory_access(access)
 
     return state.report, metrics
 

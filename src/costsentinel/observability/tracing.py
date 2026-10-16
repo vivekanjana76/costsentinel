@@ -26,6 +26,7 @@ from types import TracebackType
 from typing import Any, Protocol, runtime_checkable
 
 from costsentinel.config import Settings
+from costsentinel.domain.memory import MemoryAccess
 from costsentinel.domain.observability import LLMCallMetrics
 from costsentinel.observability.logging import get_logger
 
@@ -80,6 +81,15 @@ class Tracer(Protocol):
         """Record one model call, including its routing choice and cost."""
         ...
 
+    def record_memory_access(self, access: MemoryAccess) -> None:
+        """Record one memory read or write, including whether it hit.
+
+        A memory layer whose hit rate nobody can see is a memory layer nobody can
+        tune, and "memory is on" is not the same claim as "memory is finding
+        anything".
+        """
+        ...
+
 
 class NullSpan:
     """A span that records nothing."""
@@ -117,6 +127,9 @@ class NoOpTracer:
 
     def record_llm_call(self, metrics: LLMCallMetrics) -> None:
         """Discard the call record."""
+
+    def record_memory_access(self, access: MemoryAccess) -> None:
+        """Discard the memory record."""
 
 
 class LangfuseSpan:
@@ -260,6 +273,31 @@ class LangfuseTracer:
             )
         except Exception as exc:
             _log.debug("generation record dropped", extra={"error": str(exc)})
+
+    def record_memory_access(self, access: MemoryAccess) -> None:
+        """Record one memory read or write as its own event.
+
+        An event rather than a span: these are short, frequent and already timed by
+        the store, and a span per lookup would bury the model calls that actually
+        cost something.
+        """
+        if self._client is None:
+            return
+        try:
+            self._client.event(
+                name=f"memory.{access.operation.value}",
+                metadata={
+                    "store": access.store,
+                    "client": access.client,
+                    "hit": str(access.hit).lower(),
+                    "records": str(access.record_count),
+                    "latency_ms": str(access.latency_ms),
+                    "succeeded": str(access.succeeded).lower(),
+                    "detail": access.detail,
+                },
+            )
+        except Exception as exc:
+            _log.debug("memory record dropped", extra={"error": str(exc)})
 
 
 def get_tracer(settings: Settings) -> Tracer:
