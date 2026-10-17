@@ -5,7 +5,7 @@
 
 **Verdict: PASS**
 
-- Generated: `2026-10-17T16:21:50+00:00`
+- Generated: `2026-10-17T16:25:39+00:00`
 - Datasets: 4 (all)
 - Judge: `fake-traceability-judge`
 
@@ -53,6 +53,15 @@ The aggregate tells you something is wrong. This tells you what.
 Listed individually and never folded into the aggregate: an adversarial
 failure hidden inside a 95% precision figure is a failure nobody sees.
 
+For a resource that is idle or stale *by design*, **handled correctly means
+not actionably recommended, and exempt is the correct outcome.** The
+disaster-recovery standby really is idle and the retained snapshot really is
+old; the right behaviour is to surface both, say which tag withholds the
+advice, and leave them out of the savings total. A label that expects an
+exemption is only satisfied when that exemption is visible -- scoring on
+absence alone would award full marks to a system that never noticed the
+standby at all, which is a different and worse system.
+
 3 of 3 handled correctly.
 
 | Dataset | Resource | Why it is hard | Outcome |
@@ -63,12 +72,12 @@ failure hidden inside a 95% precision figure is a failure nobody sees.
 
 Detail:
 
-- **`vm-dr-standby`** (looks_wasteful_is_healthy) — handled correctly. Expected not flagged; got not flagged.
-  - Labelled reasoning: 0.8% average and 2.1% peak CPU with no inbound traffic: on the numbers alone this is the most idle machine in the estate. It is also a disaster-recovery standby, tagged as one and named in a runbook, and being idle is the entire point of it. The committed FinOps policy says so explicitly: 'A disaster-recovery standby is idle by design.' A tool that recommends deallocating it is recommending the removal of a control, and the client will say so.
+- **`vm-dr-standby`** (looks_wasteful_is_healthy) — handled correctly. Expected surfaced but exempt (disaster_recovery), not actionable; got surfaced but exempt (disaster_recovery via role=disaster-recovery-standby), costing 280.32 USD outside the actionable savings total.
+  - Labelled reasoning: 0.8% average and 2.1% peak CPU with no inbound traffic: on the numbers alone this is the most idle machine in the estate. It is also a disaster-recovery standby, tagged as one and named in a runbook, and being idle is the entire point of it. The committed FinOps policy says so explicitly: 'A disaster-recovery standby is idle by design.' A tool that recommends deallocating it is recommending the removal of a control, and the client will say so. The correct outcome is surfaced-but-exempt: the detector should still see that it is idle, the report should still show the 280.32 USD a month it costs, and the role tag should withhold the recommendation and keep that figure out of the actionable savings total. Not detecting it would also produce 'no recommendation', and would be the wrong way to get there -- the client would lose the one fact they might act on later, which is what the standby is costing them.
 - **`vm-claims-batch`** (looks_healthy_is_wasteful) — handled correctly. Expected flagged as oversized_virtual_machine; got flagged as oversized_virtual_machine.
-  - Labelled reasoning: 22% average and 42% peak sits just above both rightsizing thresholds (20% and 40%), so it reads as appropriately sized. It is not: 42% of 32 vCPU is 13.4 vCPU of real demand on a machine of 32. But the rightsizing rule requires 32 x 0.42 x 2.0 = 26.9 vCPU, which only a D32s_v5 satisfies, so even if the detector flagged it there is no smaller in-family SKU and the saving would be unknown. Labelled wasteful with an unknown saving, which is the honest expected answer. This case is expected to FAIL on detection, and it is in the dataset precisely to record that a genuinely oversized machine can hide just above the thresholds -- and that the 2.0 headroom factor makes anything above a 33% peak unrightsizable in a doubling SKU family.
-- **`snap-clinical-retained`** (looks_wasteful_is_healthy) — handled correctly. Expected not flagged; got not flagged.
-  - Labelled reasoning: 900 days old, five times past the staleness threshold, and 512 GB of it. It also carries a retention tag naming a six-year HIPAA requirement, which the committed policy exempts: 'Snapshots supporting a regulatory retention period are exempt and must be tagged retention with the requirement reference.' Deleting it would be a compliance breach, not a saving. The detectors have no tag exemption, so this case is expected to FAIL -- it is here to record that gap rather than to hide it.
+  - Labelled reasoning: 22% average and 42% peak sat just above both of the old rightsizing ceilings (20% average and 40% peak), so it read as appropriately sized. It is not: 42% of 32 vCPU is 13.4 vCPU of real demand on a machine of 32. Phase 6 replaced the two absolute ceilings with a single 50% peak threshold, which is where the next SKU down in a halving family stops holding the observed demand -- a general rule, not a constant tuned to this resource. The saving is still unknown, and that is the honest answer rather than a gap: the rightsizing rule requires 32 x 0.42 x 2.0 = 26.9 vCPU of headroom, which only a D32s_v5 satisfies, so no smaller same-family SKU fits. The report says the machine is oversized and says it cannot name a target that preserves the configured headroom, which leaves the choice between a tighter margin and a different SKU family where it belongs -- with a person.
+- **`snap-clinical-retained`** (looks_wasteful_is_healthy) — handled correctly. Expected surfaced but exempt (retention_required), not actionable; got surfaced but exempt (retention_required via retention=HIPAA-6YR-REF-2291), costing 67.58 USD outside the actionable savings total.
+  - Labelled reasoning: 900 days old, five times past the staleness threshold, and 512 GB of it. It also carries a retention tag naming a six-year HIPAA requirement, which the committed policy exempts: 'Snapshots supporting a regulatory retention period are exempt and must be tagged retention with the requirement reference.' Deleting it would be a compliance breach, not a saving. The correct outcome is surfaced-but-exempt: the snapshot is genuinely stale and genuinely costing money, and the retention tag is the reason nothing is proposed. Suppressing the finding entirely would hide a real cost behind a compliance obligation the client may be able to meet more cheaply.
 
 ## Per dataset
 

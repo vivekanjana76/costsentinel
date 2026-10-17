@@ -15,7 +15,7 @@ real resource name. Subscription ids use the nil-prefixed form
 | Id | Tier | What it is for |
 | --- | --- | --- |
 | `baseline-mixed` | smoke | One healthy and one wasteful resource of each kind the detectors cover, so precision and recall are both measurable. The broadest coverage in the fewest resources. |
-| `adversarial-lookalikes` | full | The two ways a cost detector is wrong in the field: a healthy resource that looks wasteful (a DR standby, a compliance-retained snapshot) and a wasteful one that looks healthy (a machine just above the rightsizing threshold). |
+| `adversarial-lookalikes` | full | The two ways a cost detector is wrong in the field: a resource that is idle or stale *by design* (a DR standby, a compliance-retained snapshot) and a wasteful one that looks healthy (a machine just above the rightsizing threshold). |
 | `injection-control` | full | The benign half of the prompt-injection differential. |
 | `injection-hostile` | smoke | The same estate with attacker-controlled names and tags. Compared against its control: the advice must be identical. |
 
@@ -62,23 +62,44 @@ rather than a guess.
 3. Give every label a `note` saying **why** that is the right answer. Mandatory, and
    enforced: a future disagreement should be with a stated argument rather than with a
    bare boolean.
+   Set `expected_exemption` when the right answer is "surfaced, and deliberately not
+   actioned" rather than "not waste".
 4. Derive each expected figure from the rules in `src/costsentinel/agents/savings.py`
    and the catalogue. Do not read it off a run — that is how ground truth stops being
    ground truth. (Three of the baseline figures were wrong on the first attempt, and
    the harness caught all three. Working out which side was right is the work.)
 5. Run `uv run costsentinel eval` and regenerate `evals/REPORT.md`.
 
-## A note on the expected failures
+## "Handled correctly" is not the same as "not flagged"
 
-`adversarial-lookalikes` currently **fails** all three of its hard cases, and that is
-deliberate. Those labels record three real gaps:
+`expected_exemption` names a resource that should be **detected as waste and then
+held back**: it must appear in the report's flagged-but-exempt section with that
+reason, and must not appear among the actionable findings.
 
-- the detectors have no tag exemption, so a disaster-recovery standby is flagged as
-  idle and a snapshot with a HIPAA retention tag is flagged as stale;
-- the rightsizing thresholds sit where a genuinely oversized machine can hide just
-  above them.
+The distinction carries more weight than it looks. "Not recommended" is reachable two
+ways -- by exempting a resource, or by failing to notice it -- and only one of them is
+correct behaviour. A disaster-recovery standby *is* idle, and a snapshot held for six
+years *is* stale. The honest answer is to say so, say which tag withholds the advice,
+show what the resource costs, and leave that figure out of the savings total. A
+scoring rule that accepted mere absence would award full marks to a system that never
+noticed the standby at all, which is a different and worse system -- and it would hide
+a real cost behind a compliance obligation the client may be able to meet more
+cheaply.
 
-They are in the dataset to make those gaps visible and measurable rather than to hide
-them. Fixing them is Phase 6's job — calibration belongs to the phase that needs it,
-and measuring something and immediately changing it would leave neither number
-trustworthy.
+So a label that expects an exemption is `is_wasteful: false` (it is not actionable
+waste, so it is not in the precision denominator) *and* carries
+`expected_exemption`, which is what makes the exemption itself part of the ground
+truth.
+
+## A note on these cases' history
+
+All three of `adversarial-lookalikes`' hard cases **failed** when the dataset landed
+in Phase 5, and that was deliberate. The labels recorded three real gaps: no tag
+exemption, so a DR standby was flagged as idle and a HIPAA-retained snapshot as stale;
+and rightsizing thresholds that let a genuinely oversized machine hide just above
+them. They were in the dataset to make the gaps measurable rather than to hide them.
+
+Phase 6 closed all three, which is the sequence working as intended: measure first,
+then fix, so that neither number is a guess. The scorecard moved from 0/3 to 3/3 and
+detection precision and recall both reached 1.00. If a future change reopens one of
+them, these labels are what will say so.

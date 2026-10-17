@@ -34,6 +34,7 @@ from pydantic import Field, ValidationError, model_validator
 
 from costsentinel.domain.common import Frozen
 from costsentinel.domain.estate import Environment, ResourceKind, ResourceState
+from costsentinel.domain.exemption import ExemptionReason
 from costsentinel.domain.recommendations import ActionClass, ActionType
 from costsentinel.domain.signals import WasteKind
 
@@ -224,6 +225,21 @@ class ResourceLabel(Frozen):
             "of the weights the ranker already uses."
         ),
     )
+    expected_exemption: ExemptionReason | None = Field(
+        default=None,
+        description=(
+            "This resource is expected to be detected as waste and then held back by "
+            "this exemption. Setting it changes what 'handled correctly' means: the "
+            "resource must appear in the report's flagged-but-exempt section with this "
+            "reason, and must *not* appear among the actionable findings.\n"
+            "\n"
+            "The distinction matters more than it looks. 'Not recommended' can be "
+            "reached two ways -- by exempting a resource, or by failing to notice it -- "
+            "and only one of them is correct behaviour. A disaster-recovery standby "
+            "*is* idle, and a tool that scored full marks for never detecting it would "
+            "be scoring a different and worse system."
+        ),
+    )
     adversarial: AdversarialKind | None = None
     note: str = Field(
         min_length=1,
@@ -258,6 +274,24 @@ class ResourceLabel(Frozen):
                 f"an expected action. One of the two is wrong."
             )
             raise ValueError(msg)
+
+        if self.expected_exemption is not None:
+            if self.is_wasteful:
+                msg = (
+                    f"{self.resource!r} expects an exemption and is also labelled "
+                    f"wasteful. An exempt resource is by definition not actionable "
+                    f"waste, so it is not in the denominator for precision -- "
+                    f"labelling it wasteful would count a correct non-recommendation "
+                    f"as a miss."
+                )
+                raise ValueError(msg)
+            if not self.expected_exemption.is_exempt:
+                msg = (
+                    f"{self.resource!r} expects the exemption reason "
+                    f"{self.expected_exemption.value!r}, which is the verdict when "
+                    f"nothing matched. Leave the field unset to expect no exemption."
+                )
+                raise ValueError(msg)
         return self
 
 
@@ -339,6 +373,11 @@ class LabelledEstate(Frozen):
     def healthy(self) -> tuple[ResourceLabel, ...]:
         """Labels for the resources a detector must leave alone."""
         return tuple(label for label in self.labels if not label.is_wasteful)
+
+    @property
+    def expected_exempt(self) -> tuple[ResourceLabel, ...]:
+        """Labels that expect a finding to be surfaced and deliberately not actioned."""
+        return tuple(label for label in self.labels if label.expected_exemption is not None)
 
     @property
     def adversarial(self) -> tuple[ResourceLabel, ...]:

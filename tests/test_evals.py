@@ -26,6 +26,7 @@ from evals.harness.dataset import (
     AdversarialKind,
     DatasetError,
     LabelledEstate,
+    ResourceLabel,
     Tier,
     control_for,
     datasets_dir,
@@ -42,12 +43,20 @@ from evals.harness.gates import (
 from evals.harness.judge import _DECIMAL, FakeJudge
 from evals.harness.metrics import Mismatch, Score, detection_scores, ranking_concordance
 from evals.harness.provider import DatasetProvider
-from evals.harness.runner import eval_settings, evaluate, run_pipeline, write_report
+from evals.harness.runner import (
+    adversarial_outcomes,
+    eval_settings,
+    evaluate,
+    run_pipeline,
+    write_report,
+)
 from evals.harness.scorecard import BLOCKING_GATES
+from pydantic import ValidationError
 
 from costsentinel.cli import main
 from costsentinel.config import MemoryBackend, RunMode
-from costsentinel.domain.recommendations import ActionClass
+from costsentinel.domain.exemption import ExemptionReason
+from costsentinel.domain.recommendations import ActionClass, ActionType
 from costsentinel.domain.report import ClientReport
 from costsentinel.domain.signals import WasteKind
 
@@ -329,6 +338,132 @@ def test_every_adversarial_case_is_handled_correctly() -> None:
     failing = [outcome.line() for outcome in card.adversarial if not outcome.passed]
     assert not failing, failing
     assert card.adversarial_passed == len(card.adversarial) == 3
+
+
+def test_an_exempt_case_is_only_correct_when_the_exemption_is_visible() -> None:
+    """The redefinition that closes the two look-alike cases, asserted three ways.
+
+    "Not actionably recommended" is reachable by exempting a resource *or* by failing
+    to notice it, and only the first is correct behaviour. So the scoring rule is
+    checked against all three outcomes: exempt for the right reason (pass), exempt
+    for the wrong reason (fail), and never detected at all (fail). Without the third,
+    the ground truth would reward a detector that had simply gone blind.
+    """
+    dataset = next(d for d in load_all() if d.dataset_id == "adversarial-lookalikes")
+    report, _ = run_pipeline(dataset, eval_settings(_STATE))
+    standby = next(
+        o for o in adversarial_outcomes(dataset, report) if o.resource == "vm-dr-standby"
+    )
+    assert standby.passed
+    assert "surfaced but exempt" in standby.actual
+    assert "disaster_recovery" in standby.actual
+    assert "role=disaster-recovery-standby" in standby.actual
+
+    # Exempt, but attributed to the wrong rule.
+    mislabelled = report.model_copy(
+        update={
+            "exempt_findings": tuple(
+                item.model_copy(update={"exemption_reason": ExemptionReason.COST_EXEMPTION})
+                if item.resource_name == "vm-dr-standby"
+                else item
+                for item in report.exempt_findings
+            )
+        }
+    )
+    wrong_reason = next(
+        o for o in adversarial_outcomes(dataset, mislabelled) if o.resource == "vm-dr-standby"
+    )
+    assert not wrong_reason.passed
+    assert "wrong reason" in wrong_reason.actual
+
+    # Never detected. Silence is not the same as a decision.
+    blind = report.model_copy(
+        update={
+            "exempt_findings": tuple(
+                item for item in report.exempt_findings if item.resource_name != "vm-dr-standby"
+            )
+        }
+    )
+    undetected = next(
+        o for o in adversarial_outcomes(dataset, blind) if o.resource == "vm-dr-standby"
+    )
+    assert not undetected.passed
+    assert "never exercised" in undetected.actual
+
+
+def test_an_actionable_recommendation_fails_an_exempt_case() -> None:
+    """The original defect: the standby recommended for deallocation."""
+    dataset = next(d for d in load_all() if d.dataset_id == "adversarial-lookalikes")
+    report, _ = run_pipeline(dataset, eval_settings(_STATE))
+    survivor = report.findings[0]
+    regressed = report.model_copy(
+        update={
+            "findings": (
+                *report.findings,
+                survivor.model_copy(
+                    update={
+                        "resource_name": "vm-dr-standby",
+                        "proposed_action": ActionType.DEALLOCATE_VIRTUAL_MACHINE,
+                    }
+                ),
+            )
+        }
+    )
+    outcome = next(
+        o for o in adversarial_outcomes(dataset, regressed) if o.resource == "vm-dr-standby"
+    )
+    assert not outcome.passed
+    assert "actionably recommended" in outcome.actual
+
+
+def test_a_label_cannot_expect_an_exemption_and_be_wasteful() -> None:
+    """An exempt resource is not actionable waste, so it is not in the denominator.
+
+    Labelling it both ways would count a correct non-recommendation as a miss, which
+    is the shape of mistake that makes a recall figure meaningless.
+    """
+    with pytest.raises(ValidationError, match="expects an exemption and is also labelled"):
+        ResourceLabel(
+            resource="vm-dr-standby",
+            is_wasteful=True,
+            waste_kind=WasteKind.IDLE_VIRTUAL_MACHINE,
+            expected_action=ActionType.DEALLOCATE_VIRTUAL_MACHINE,
+            expected_action_class=ActionClass.REVIEW,
+            expected_exemption=ExemptionReason.DISASTER_RECOVERY,
+            note="contradictory on purpose",
+        )
+
+
+def test_a_label_cannot_expect_the_not_exempt_verdict() -> None:
+    """``not_exempt`` is what happens when nothing matched, not something to expect."""
+    with pytest.raises(ValidationError, match="Leave the field unset"):
+        ResourceLabel(
+            resource="vm-api-01",
+            is_wasteful=False,
+            expected_exemption=ExemptionReason.NOT_EXEMPT,
+            note="contradictory on purpose",
+        )
+
+
+def test_both_look_alike_cases_expect_an_exemption() -> None:
+    """The committed ground truth, so the redefinition cannot quietly be undone."""
+    dataset = next(d for d in load_all() if d.dataset_id == "adversarial-lookalikes")
+    expecting = {label.resource: label.expected_exemption for label in dataset.expected_exempt}
+    assert expecting == {
+        "vm-dr-standby": ExemptionReason.DISASTER_RECOVERY,
+        "snap-clinical-retained": ExemptionReason.RETENTION_REQUIRED,
+    }
+    for label in dataset.expected_exempt:
+        assert not label.is_wasteful
+        assert "surfaced-but-exempt" in label.note
+
+
+def test_the_report_explains_what_handled_correctly_means() -> None:
+    """A redefinition nobody can find reads as a bar being quietly lowered."""
+    rendered = evaluate(tier=Tier.SMOKE).markdown()
+    assert "handled correctly means" in rendered
+    assert "exempt is the correct outcome" in rendered
+    assert "scoring on" in rendered
 
 
 def test_the_scorecard_names_a_gap_rather_than_hiding_it() -> None:
