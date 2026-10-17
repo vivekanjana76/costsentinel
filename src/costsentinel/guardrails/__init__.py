@@ -5,6 +5,16 @@ destructive may reach an execution path without being classified here first.
 """
 
 from costsentinel.guardrails.approval import ApprovalGate, NoDecisionGate
+from costsentinel.guardrails.exemption import (
+    DEFAULT_RULES_PATH,
+    ExemptionPolicy,
+    ExemptionRule,
+    ExemptionRulesError,
+    ExemptionRuleset,
+    MatchMode,
+    get_exemption_policy,
+    load_ruleset,
+)
 from costsentinel.guardrails.policy import (
     ACTION_CLASS_FLOOR,
     CANDIDATE_ACTIONS,
@@ -15,8 +25,16 @@ from costsentinel.guardrails.policy import (
 __all__ = [
     "ACTION_CLASS_FLOOR",
     "CANDIDATE_ACTIONS",
+    "DEFAULT_RULES_PATH",
     "PRECONDITIONS",
     "ApprovalGate",
+    "ExemptionPolicy",
+    "ExemptionRule",
+    "ExemptionRulesError",
+    "ExemptionRuleset",
+    "MatchMode",
     "NoDecisionGate",
     "PolicyStore",
+    "get_exemption_policy",
+    "load_ruleset",
 ]
