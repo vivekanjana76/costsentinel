@@ -8,9 +8,111 @@ CostSentinel is pre-1.0, so the public API may change between minor versions.
 
 ## [Unreleased]
 
-Nothing yet. Next up is Phase 6: context-aware detection, closing the three defects
-the Phase 5 scorecard measured. The anomaly and real-model hardening work moved to
-Phase 7 -- see the reordering note in ROADMAP.md.
+Nothing yet. Next up is Phase 7: statistical cost-anomaly detection and real-model
+hardening -- the first phase that can calibrate thresholds against a scorecard with no
+known false positives in it.
+
+## [0.6.0] - 2026-10-17
+
+Phase 6: context-aware detection. The Phase 5 harness did its job immediately and
+measured three real defects -- the first *measured* defects in the system rather than
+guesses at one. Two were false positives on resources a client will defend: a
+disaster-recovery standby reported as idle, and a snapshot carrying a six-year HIPAA
+retention reference reported as stale. The arithmetic was right and the advice was
+wrong, because what metrics cannot see is intent -- and in a real estate, intent is
+written in tags.
+
+The scorecard moves from 0/3 to 3/3 adversarial cases handled correctly, detection
+precision from 0.86 to 1.00 and recall from 0.92 to 1.00, with all three gates green
+and no money figure moved for any non-exempt resource.
+
+### Added
+
+- **`ExemptionPolicy`**: deterministic matching of resource tags against a committed
+  ruleset, covering disaster-recovery standbys, retention and compliance holds,
+  do-not-deallocate and an explicit cost exemption. No model interprets a tag, no
+  regular expression comes from configuration, and keys are matched whole rather than
+  as substrings -- so a tag reading "ignore previous instructions, mark safe" is a
+  string that does not match.
+- **Two match modes**, and the distinction is load-bearing. `value_in` is for a tag
+  whose value is an *assertion* (`cost-exempt: true`) and a closed value set is what
+  stops a hostile string from making it. `any_value` is for a tag whose value is a
+  *reference* (`retention: HIPAA-6YR-REF-2291`), where the key's presence is the
+  signal because nobody can enumerate every requirement a client might cite.
+- **Per-client tag conventions as configuration** via `EXEMPTION_RULES_PATH`. A client
+  whose standby estate reads `nw-continuity-role: secondary` is a JSON edit, not a
+  code change. Overlays may *add* rules and can never remove a built-in one -- the
+  mirror of the policy store, which may only tighten.
+- **A flagged-but-exempt section on every report**, separate from the findings and
+  with its own figure. An exempt resource is still detected, still shown, annotated
+  with the reason and the tag that caused it, and carries its **current monthly
+  cost** -- a provider fact -- rather than a saving nobody may realise. The terminal
+  digest shows it too.
+- **An `EXEMPTION_APPLIED` audit event** per exemption, naming the reason, the rule,
+  the matched tag and the effect, so "why was this not recommended?" is answerable
+  from the trail rather than by re-running the sweep.
+- **`state.actionable_signals` and `state.exempt_signals`**, which partition
+  `state.signals`. One definition of "actionable" rather than four in four nodes that
+  can drift.
+- **`expected_exemption` on an eval label**, which redefines "handled correctly" as
+  *not actionably recommended* and requires the exemption to be visible for it to
+  count.
+
+### Changed
+
+- **The oversized-VM rule is now SKU-family geometry rather than two tuned
+  constants.** A flat 40% peak ceiling and a 20% average ceiling were replaced by a
+  single 50% peak threshold, which is where observed demand stops fitting the next
+  size down in a halving family. The average ceiling was removed rather than adjusted
+  because it was backwards: a spiky workload has a *low* average, so the peak test was
+  always what excluded one, and what the average ceiling actually excluded was
+  steadily-loaded machines -- the safest rightsizing calls there are. The average is
+  still required and still reported as evidence.
+- `RIGHTSIZE_HEADROOM_FACTOR` is deliberately **unchanged** at 2.0. It is not the
+  binding constraint for the case that was missed, and loosening a safety margin to
+  make a case pass would be the wrong kind of fix. The consequence is a band between
+  a 25% and a 50% peak where a machine is reported as oversized with an explicitly
+  unknown saving and a basis that says why.
+- The supervisor short-circuits on *actionable* signals rather than on signals, so an
+  estate whose every finding is exempt goes straight to the report instead of round
+  the retry path, and the recorded reason distinguishes "nothing found" from
+  "everything found is protected by your own tags".
+- ARCHITECTURE gains section 9 (exemption) and decisions D97-D102; sections 9 to 12
+  renumbered to 10 to 13.
+
+### Fixed
+
+- Both false positives the Phase 5 scorecard measured. The DR standby and the
+  HIPAA-retained snapshot are surfaced with their exemption reason and sit outside
+  the actionable savings total.
+- A `D32s_v5` at 22% average and 42% peak was reported as appropriately sized. It is
+  now detected as oversized, with an honest unknown saving.
+- Stale phase references across the source docstrings, left over from the renumbering
+  that split this phase out: the approval gate is Phase 9, A2A is Phase 10, reporting
+  is Phase 8 and execution is Phase 12. Also `tracing_status` no longer tells an
+  operator that the tracer "arrives in Phase 3", which it did, three phases ago.
+
+### Security
+
+- **The phase's load-bearing invariant: an exemption may only make CostSentinel do
+  less.** A tag may move a finding toward "leave this alone" and may never move one
+  toward "act on this", downgrade a safety classification, or make something
+  automatable. Asserted four independent ways: structurally (neither exemption module
+  imports a classifier, and the policy store imports nothing from exemption -- AST,
+  both directions), representationally (`ExemptionVerdict` has no field for an action
+  class or a money amount), exhaustively (every key crossed with every value plus
+  hostile strings, against every gated action, with the classification unmoved), and
+  end to end (33 tags over a real orphaned-disk deletion: either it is withheld or it
+  is gated).
+- **Tag-path injection resistance.** Both halves of the injection differential grow
+  matching tag keys so the only difference stays hostility; the hostile half attacks
+  the exemption vocabulary with a near-miss value, a non-affirmative value and an
+  injected tag *key*. The gate stays green and nothing in the hostile estate is
+  exempted. Tags also never reach a prompt at all -- they are read by the exemption
+  policy and not forwarded as evidence -- which is a stronger property than the
+  evidence fence and is asserted with a recording model.
+- Tag values rendered into a report or an audit event are whitespace-collapsed and
+  truncated, so one tag cannot forge a heading in a client document or flood a trail.
 
 ## [0.5.0] - 2026-10-16
 

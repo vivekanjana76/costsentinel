@@ -1,7 +1,7 @@
 # CostSentinel — Architecture
 
 Status: living document. Every design decision made while building CostSentinel is
-recorded here, in section 12 (Decision log), with its rationale and the alternatives
+recorded here, in section 13 (Decision log), with its rationale and the alternatives
 rejected. If a decision is ambiguous, it is written down here and the simplest
 defensible option is taken.
 
@@ -581,7 +581,126 @@ response cannot name an operation the system does not already permit.
 
 ---
 
-## 9. Evaluation approach
+## 9. Exemption: waste that is waste on purpose
+
+Implemented in Phase 6. Some resources are idle, stale or oversized *by design*. A
+disaster-recovery standby is supposed to sit at 2% CPU; a snapshot held for a six-year
+retention period is supposed to be old. The detectors are right about both and the
+advice is wrong, because the thing arithmetic over metrics cannot see is intent — and
+in a real estate, intent is written in tags.
+
+The Phase 5 scorecard measured exactly this: a DR standby reported as idle and a
+HIPAA-retained snapshot reported as stale. Those are the findings that lose a client's
+trust, because the client knows the answer and the tool does not.
+
+### 9.1 Deterministic tag reading, never interpretation
+
+`ExemptionPolicy` matches resource tags against a committed ruleset. A rule names a
+set of tag **keys** and either requires a **value from a closed set** or accepts **any
+non-empty value**. No model is involved, no regular expression comes from
+configuration, nothing is fuzzy, and keys are matched whole rather than as substrings.
+
+The two match modes are not interchangeable, and the distinction is load-bearing:
+
+| Mode | Used when | Example | A hostile value |
+| --- | --- | --- | --- |
+| `value_in` | the value is an **assertion** | `cost-exempt: true` | does not match |
+| `any_value` | the value is a **reference** | `retention: HIPAA-6YR-REF-2291` | does exempt |
+
+A closed value set is what stops a hostile string from asserting an exemption. An open
+one is unavoidable where the value is a requirement reference, because nobody can
+enumerate every reference a client might cite — and the alternative would mean a real
+HIPAA reference nobody had listed got a snapshot deleted. So a hostile value under
+`any_value` does exempt, and that is the **safe failure**: advice withheld, with the
+tag that withheld it printed on the report. The mirror image would be a deleted
+production disk.
+
+Deliberately *not* read: resource names, resource groups and descriptions. Those are
+attacker-influenceable too, and unlike a tag they carry no convention the client has
+agreed to, so an exemption drawn from one would be a guess dressed as a policy.
+
+### 9.2 Surfaced, never suppressed
+
+An exemption removes the **recommendation**, never the **finding**. Dropping the
+finding is the easy implementation and the dishonest one: the client loses the one
+fact they might act on later, which is what the standby costs them every month.
+
+So an exempt signal is:
+
+- still detected, and still in `state.signals`;
+- carried as an `ExemptionVerdict` in `state.exemptions`, with a machine-readable
+  reason, the rule that decided it and the matched tag;
+- excluded from `state.actionable_signals`, which is what the diagnosis, pricing and
+  planning nodes read — one definition of "actionable" rather than four that can
+  drift;
+- never priced, because a saving nobody may take is one edit away from a headline
+  total;
+- reported as an `ExemptFinding`, a separate type from `ReportFinding` because a
+  finding is a *proposal* and an exempt item has no rank, action, class, saving or
+  preconditions and never will;
+- recorded as an `EXEMPTION_APPLIED` audit event, so "why was this not recommended?"
+  is answerable from the trail rather than by re-running the sweep.
+
+The report separates **actionable savings** from **flagged but exempt**.
+`projected_monthly_savings` is the sum of the actionable findings and nothing else;
+the exempt items carry their **current cost**, a provider fact, which is never added
+to a saving. `exempt_monthly_cost` is `MoneyAmount | None`, and the `None` matters:
+nothing exempt is an absence, not an unknown amount, and rendering the two alike would
+turn "no exempt resources" into "unknown spend on exempt resources".
+
+### 9.3 The invariant: exemption may only reduce action
+
+**A tag may move a finding toward "leave this alone". A tag may never move a finding
+toward "act on this", downgrade a safety classification, or make something automatable
+that was not.**
+
+This mirrors D8 — policy may tighten a class and never loosen one — and for the same
+reason. Both read client-supplied configuration and both are only safe in one
+direction. A client exemption overlay may *add* rules and cannot remove a built-in
+one, so no configuration can switch off the retention exemption.
+
+Asserted four independent ways, because the first three could all hold while the
+wiring was wrong:
+
+1. **Structural.** Neither exemption module imports `ActionClass`,
+   `ActionClassification`, `PolicyStore` or `MoneyAmount`, and `policy.py` imports
+   nothing from exemption. An AST test checks both directions, as it does for the
+   absent LLM import in `savings.py` (D17).
+2. **Representational.** `ExemptionVerdict` has no field an action class or a money
+   amount could live in. An exemption cannot *carry* a classification, so it cannot
+   loosen one.
+3. **Exhaustive over the classifier.** Every key any rule reads, crossed with every
+   value any rule accepts plus a battery of hostile strings, against every gated
+   action. The classification never moves. `PolicyStore.classify` also accepts no
+   parameter through which a tag could arrive, and re-running the Policy Guard over a
+   state with the exemptions stripped out yields identical verdicts.
+4. **End to end.** A real sweep over an orphaned-disk deletion with 33 tags worth
+   trying: recommendations, classifications and gated counts can only go down, every
+   surviving class is at least as strict, and either the deletion is withheld or it is
+   gated, with no third outcome.
+
+Ranks renumber and do not reshuffle. Exempting an entry necessarily renumbers what is
+left — there is no way to avoid it short of leaving a gap where a proposal used to be
+— so the claim is that the *relative* order is unchanged and no finding moves down the
+page. That is checked on an estate where the exempt resource holds the largest saving,
+which is where it could plausibly fail: the savings component is normalised against
+the largest saving in the run, so removing the leader rescales it for everything else
+while leaving safety and confidence alone.
+
+### 9.4 Per-client configuration
+
+Tag conventions are a data file, not code. `EXEMPTION_RULES_PATH` points at a ruleset;
+unset uses the one shipped in `src/costsentinel/guardrails/data/exemption_rules.json`.
+A client whose standby estate reads `nw-continuity-role: secondary` is a JSON edit.
+Client rules are evaluated before the defaults, so when two rules would both fire the
+client's own vocabulary is the one explained back to them.
+
+A broken or missing ruleset raises rather than falling back to the defaults. An
+operator who pointed CostSentinel at the wrong file and got silent defaults would
+believe their client's conventions were in force, and would find out otherwise from a
+recommendation to deallocate a standby.
+
+## 10. Evaluation approach
 
 Implemented in Phase 5. Evals are a deliverable, not an afterthought, because "did we
 find the waste" and "did we gate the dangerous thing" are the product's actual claims
@@ -729,7 +848,7 @@ reproducible.
 
 ---
 
-## 10. MCP and A2A boundaries
+## 11. MCP and A2A boundaries
 
 These are two different seams and are deliberately not conflated.
 
@@ -796,7 +915,7 @@ both ways is defined once in the domain layer and adapted at both edges.
 
 ---
 
-## 11. Non-functional posture
+## 12. Non-functional posture
 
 - **Zero-credential by default.** `MODE=mock` is the default. CI never has secrets or
   network access to a cloud or LLM provider.
@@ -808,7 +927,7 @@ both ways is defined once in the domain layer and adapted at both edges.
 
 ---
 
-## 12. Decision log
+## 13. Decision log
 
 Each entry records the decision, the alternatives considered, and why.
 
@@ -1556,3 +1675,87 @@ just above them. Calibration belongs to Phase 6, the phase that needs it: measur
 something and immediately changing it would leave neither number trustworthy. A test
 asserts the failures are still there *and* says to update it when they are fixed,
 because a scorecard whose numbers never move is not measuring anything.
+
+*Closed in Phase 6.* All three were fixed and the test did need updating, which is
+the sequence working as intended. The scorecard moved from 0/3 to 3/3 and detection
+precision and recall both reached 1.00. See D97 for why the fix became its own phase,
+and D102 for how "handled correctly" had to be redefined along the way.
+
+**D97. Context-aware detection was split out ahead of the anomaly phase.**
+*Alternatives:* fix the three measured defects inside Phase 7 alongside anomaly
+detection, or carry them. *Why:* two of the three are false positives on resources a
+client will defend, which is the kind of finding that loses the client rather than
+merely annoying them. And Phase 7 is meant to *calibrate* thresholds against the
+scorecard; calibrating against a scorecard containing known false positives would tune
+the detectors around a defect. Fixing what is already measured comes before measuring
+more.
+
+**D98. Exemption reads tags, deterministically, and nothing else.** *Alternatives:*
+let the Root-Cause Analyst judge intent from the resource name, group and description
+(richer, and it would catch untagged standbys); or infer it from utilisation shape.
+*Why:* a model's reading of attacker-controllable text deciding whether a resource is
+actioned is precisely the thing golden rule 4 forbids, and it would make the behaviour
+irreproducible — a scorecard baseline over a model's judgement of a tag means nothing.
+Determinism also makes the injection defence trivial to state and to test: a hostile
+tag is a string that does not match. The cost is real and accepted: an untagged
+standby is still reported as idle, so the system's correctness depends on the client's
+tagging discipline. That is the right dependency to have, because it is one the client
+can see, audit and fix — and we can tell them exactly which tag to add.
+
+**D99. Exemption may only reduce action, never escalate it.** *Alternatives:* let a
+tag influence the action class in either direction, which would allow a client to mark
+a resource as needing extra scrutiny through the same mechanism. *Why:* the mechanism
+reads attacker-controllable data, and a channel that can only make the system do less
+has a bounded worst case — a missed saving. The same channel able to loosen a class
+has an unbounded one. A client who wants extra scrutiny already has the policy store,
+which tightens (D8); exemption is the mirror of it and broadens only toward inaction.
+Stated as the one invariant of the phase and asserted structurally,
+representationally, exhaustively and end to end, because an invariant with one proof
+is an invariant with one place to break.
+
+**D100. An exempt resource keeps its cost and loses its saving.** *Alternatives:* drop
+the finding (simpler, and the report gets shorter); or keep the saving and exclude it
+from the total with a flag. *Why:* dropping it is lying by omission — a thin report
+becomes indistinguishable from a clean estate, and the client loses the figure they
+might act on later. Keeping a saving is worse: a number labelled "saving" that nobody
+may realise is one refactor away from a total, and a `ReportFinding` for an exempt item
+would need an invented rank and an action nobody may take. So `ExemptFinding` is its
+own type carrying the resource's current monthly cost, which is a provider fact, and
+no saving at all. `exempt_monthly_cost` is `None` rather than an undetermined amount
+when nothing is exempt, because an absence and an unknown should not render alike.
+
+**D101. The oversized-VM threshold is SKU-family geometry, not a tuned constant.**
+*Alternatives:* raise the old 40% peak ceiling until `vm-claims-batch` passed; or align
+the detector to the sizing rule's 25% effective cliff. *Why:* the first is tuning to a
+test case, and the second would declare a machine at 42% of 32 vCPU appropriately
+sized, which is simply false. Each step within an Azure SKU family halves the vCPU
+count, so observed peak demand fits the next size down exactly when the peak is at or
+below 50% — the threshold is the size-independent statement of "a smaller SKU would
+hold this workload". The old 20% *average* ceiling was removed rather than adjusted
+because it was backwards: its stated purpose was to avoid shrinking spiky workloads,
+but a spiky workload has a low average, so the peak test was always what excluded one.
+What it actually excluded was steadily-loaded machines, which are the safest
+rightsizing calls there are.
+
+Detection and sizing therefore use different thresholds, deliberately. Detection asks
+"is this machine larger than its workload needs", from utilisation alone; sizing asks
+"which smaller SKU, and what does it save", which needs a catalogue and a risk
+appetite. Collapsing them would mean the detector inherited `RIGHTSIZE_HEADROOM_FACTOR`
+— so raising headroom from 2.0 to 2.5 would make machines *stop being oversized*,
+which is absurd. The headroom factor is unchanged at 2.0: it is not the binding
+constraint for this case, and loosening a safety margin to make a case pass would be
+the wrong kind of fix. The visible consequence is a band between a 25% and a 50% peak
+where the detector fires and no same-family target exists, so the saving is reported
+as explicitly unknown with a basis that says why. Choosing between a tighter margin
+and a different SKU family is a decision for a person.
+
+**D102. "Handled correctly" means "not actionably recommended", and the exemption must
+be visible.** *Alternatives:* score the look-alike cases on absence from the findings
+alone. *Why:* "not recommended" is reachable by exempting a resource or by failing to
+notice it, and only one is correct behaviour. Absence-only scoring would award full
+marks to a detector that had gone blind, and it would let the system hide a real cost
+behind a compliance obligation the client may be able to meet more cheaply. So
+`expected_exemption` requires the resource to appear in the flagged-but-exempt section
+with that reason *and* to be absent from the actionable findings, and the scoring rule
+is tested against exempt-for-the-right-reason, exempt-for-the-wrong-reason and
+never-detected.

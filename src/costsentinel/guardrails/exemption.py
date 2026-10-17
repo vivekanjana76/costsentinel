@@ -22,10 +22,10 @@ field in which to carry a class or an amount, and this module imports neither
 asserts the absent imports rather than trusting the convention -- the same technique
 that keeps a language model out of :mod:`costsentinel.agents.savings`.
 
-That asymmetry is the whole safety argument. The worst a hostile tag achieves is a
-saving CostSentinel declines to recommend, which costs money and breaks nothing. The
-mirror image -- a tag that made a deletion automatable -- would be a deleted
-production disk, so the code is shaped so that it cannot be written.
+That asymmetry is the whole safety argument (ARCHITECTURE.md D99). The worst a hostile
+tag achieves is a saving CostSentinel declines to recommend, which costs money and
+breaks nothing. The mirror image -- a tag that made a deletion automatable -- would be
+a deleted production disk, so the code is shaped so that it cannot be written.
 
 **It mirrors the policy store's direction of travel.** A client policy overlay may
 *tighten* an action class and never loosen it (ARCHITECTURE.md D8). A client

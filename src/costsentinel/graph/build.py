@@ -28,7 +28,7 @@ approval seam one mechanism instead of four: the supervisor's decision is a reco
 fact in state, and :func:`route_from_supervisor` simply reads it back.
 
 State is checkpointed after every node, so a sweep resumes from the last completed
-node rather than re-reading the estate -- and from Phase 7 the same mechanism lets a
+node rather than re-reading the estate -- and from Phase 9 the same mechanism lets a
 run halt for days awaiting a human approval.
 """
 

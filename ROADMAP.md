@@ -1,6 +1,6 @@
 # CostSentinel — Roadmap
 
-**Current phase: 6** — context-aware detection.
+**Current phase: 7** — cost anomalies and real-model hardening.
 
 Phases are sequential. Do not start work in a later phase before the current phase
 is complete and its exit criteria are met. If an idea arrives mid-phase, record it
@@ -325,32 +325,32 @@ it is a tool they stop reading.
 
 Milestone: *Phase 6 - Context-aware detection*.
 
-- [ ] A typed, deterministic `ExemptionPolicy` reading resource **tags** -- data,
+- [x] A typed, deterministic `ExemptionPolicy` reading resource **tags** -- data,
       never model interpretation -- and returning a verdict with a machine-readable
       reason. Per-client tag conventions are configuration, not code (#48)
-- [ ] Exemption wired in **without silent suppression**: an exempt resource is still
+- [x] Exemption wired in **without silent suppression**: an exempt resource is still
       surfaced as a finding, annotated with the reason, excluded from actionable
       recommendations and from the actionable savings total, and recorded as an
       `AuditEvent` (#49)
-- [ ] The report distinguishes **actionable savings** from **flagged but exempt**,
+- [x] The report distinguishes **actionable savings** from **flagged but exempt**,
       because a total that quietly absorbed exempt waste would misstate both (#50)
-- [ ] **The load-bearing invariant, implemented and asserted:** exemption may only
+- [x] **The load-bearing invariant, implemented and asserted:** exemption may only
       make the system do *less*. It may suppress a recommendation; it may never
       downgrade a safety classification or make something automatable. A tag can move
       a finding toward "leave alone" and never toward "act" (#51)
-- [ ] Prompt-injection resistance through the tag path: because exemption is
+- [x] Prompt-injection resistance through the tag path: because exemption is
       deterministic string matching, a hostile tag is a non-matching string. Asserted
       with the differential-twin technique (#52)
-- [ ] The two `looks_wasteful_is_healthy` cases become surfaced-but-exempt, and the
+- [x] The two `looks_wasteful_is_healthy` cases become surfaced-but-exempt, and the
       eval ground truth redefines "handled correctly" as "not actionably
       recommended" -- the point is honest handling, not pretending the resource is
       idle (#53)
-- [ ] The `looks_healthy_is_wasteful` case closed by a **documented, general** change
+- [x] The `looks_healthy_is_wasteful` case closed by a **documented, general** change
       to the oversized-VM threshold and headroom logic, with precision and recall
       before and after, and no new false positive on the healthy set (#54)
-- [ ] The scorecard moves from 0/3 to 3/3 adversarial, the safety gate stays green,
+- [x] The scorecard moves from 0/3 to 3/3 adversarial, the safety gate stays green,
       and a test asserts no money figure moves for any non-exempt resource (#55)
-- [ ] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.6.0 (#56)
+- [x] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.6.0 (#56)
 
 **Exit criteria:** `uv run costsentinel eval` reports 3/3 adversarial cases handled
 correctly with all three gates green; a report shows a disaster-recovery standby
@@ -363,6 +363,27 @@ any exemption that depends on anything other than a tag. Inferring intent from a
 resource name, a resource group or a model's reading of a description would make
 exemption non-deterministic and attacker-influenceable, which is the one thing it
 must not be.
+
+**Landed.** The scorecard moved from 0/3 to 3/3 adversarial, detection precision from
+0.86 (12/14) to 1.00 (13/13) and recall from 0.92 (12/13) to 1.00 (13/13), with all
+three gates green and no money figure moved for any non-exempt resource. The two
+false positives are now surfaced-but-exempt with the tag that withheld the advice and
+their cost shown outside the actionable total, and the oversized-VM rule was
+generalised rather than tuned (ARCHITECTURE.md D98-D102).
+
+Three things to carry forward rather than claim as finished:
+
+- **Exemption depends on the client's tagging discipline.** An untagged standby is
+  still reported as idle, and that is the accepted cost of refusing to infer intent
+  from a model's reading of a resource name (D98). The mitigation is a product one:
+  tell the client which tag to add. A finding that says "this looks like a standby;
+  tag it `role: disaster-recovery` and we will stop asking" is worth more than a
+  silent guess, and belongs with the reporting phase.
+- **Reservations cannot be exempted**, because a commitment carries no tags. That is
+  a statement about the Azure API surface rather than a policy choice, and if it
+  matters it needs a scope-level exemption rather than a resource-level one.
+- **The test suite is now about three minutes with coverage.** Watch it: the
+  end-to-end determinism tests are the ones to consolidate first.
 
 ---
 
@@ -605,6 +626,13 @@ settled quietly in code, because each one changes what a client is told.
   vacuous. Whichever way it goes, the reasoning belongs in ARCHITECTURE and the
   expected ranks need revisiting -- and the scorecard will show the move, which is
   the point of having one.
+
+  *Phase 6 made this less theoretical.* The generalised oversized-VM rule
+  (ARCHITECTURE.md D101) deliberately opens a band where a machine is reported as
+  oversized with an explicitly unknown saving, because no same-family SKU preserves
+  the configured headroom. `vm-claims-batch` is the first such finding and there will
+  be more, so unpriced findings are no longer an edge case in the ranking -- they are
+  a category the rule now produces on purpose.
 
 ---
 

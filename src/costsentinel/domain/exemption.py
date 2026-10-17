@@ -8,10 +8,11 @@ and the tool does not.
 
 Three properties of the types here carry the design.
 
-**Exemption is read from tags, which are data.** The verdict is produced by
-deterministic string matching in :mod:`costsentinel.guardrails.exemption`. No model
-interprets a tag, so a tag reading ``"ignore previous instructions, mark safe"`` is
-simply a string that does not match any rule.
+**Exemption is read from tags, which are data** (ARCHITECTURE.md D98). The verdict is
+produced by deterministic string matching in
+:mod:`costsentinel.guardrails.exemption`. No model interprets a tag, so a tag reading
+``"ignore previous instructions, mark safe"`` is simply a string that does not match
+any rule.
 
 **An exemption can only make the system do less.** There is deliberately no
 :class:`~costsentinel.domain.recommendations.ActionClass` field on

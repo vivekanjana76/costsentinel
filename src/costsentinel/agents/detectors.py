@@ -39,7 +39,8 @@ IDLE_CPU_MAX_PCT = Decimal("5.0")
 #: At or below this peak CPU, a VM has at least one SKU step of capacity it never
 #: touches, and is therefore oversized.
 #:
-#: **Fifty is not a tuned number: it is the geometry of an Azure SKU family.** Each
+#: **Fifty is not a tuned number: it is the geometry of an Azure SKU family**
+#: (ARCHITECTURE.md D101). Each
 #: step within a family halves the vCPU count, so a machine's observed peak demand
 #: (``vcpu x peak / 100``) fits the next size down (``vcpu / 2``) exactly when the
 #: peak is at or below 50%. The threshold is the size-independent way of saying "the
