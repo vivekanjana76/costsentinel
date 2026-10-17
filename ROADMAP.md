@@ -1,6 +1,6 @@
 # CostSentinel — Roadmap
 
-**Current phase: 6** — cost anomalies and real-model hardening.
+**Current phase: 6** — context-aware detection.
 
 Phases are sequential. Do not start work in a later phase before the current phase
 is complete and its exit criteria are met. If an idea arrives mid-phase, record it
@@ -24,18 +24,30 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 > thresholds against, which only accumulates once somebody is running real sweeps;
 > memory needs nothing but its own store, so it can be built and proven offline today.
 >
-> After Phase 4, **the evaluation harness and the anomaly phase swapped**: evals are
-> now Phase 5 and anomalies Phase 6 (ARCHITECTURE.md D85). CLAUDE.md section 8 calls
-> evaluations "a first-class deliverable, not an afterthought", and four phases have
-> now shipped detectors, ranking weights, savings arithmetic and a memory penalty with
-> no measurement of precision, recall or ranking quality at all -- every claim about
-> them rests on hand-written tests of specific cases. Two consequences made the
-> ordering wrong. The safety-recall gate protects every later phase, so the longer it
-> waits the more unguarded work accumulates behind it. And anomaly detection is
-> *exactly* the kind of work that needs a scorecard: its thresholds are tuning
-> parameters, and tuning them without a measurement is guessing. Building the harness
-> first means the anomaly phase can be calibrated rather than asserted. Nothing after
-> Phase 6 was renumbered.
+> After Phase 4, **the evaluation harness and the anomaly phase swapped**: evals
+> became Phase 5 (ARCHITECTURE.md D85). CLAUDE.md section 8 calls evaluations "a
+> first-class deliverable, not an afterthought", and four phases had shipped
+> detectors, ranking weights, savings arithmetic and a memory penalty with no
+> measurement of precision, recall or ranking quality at all. The safety-recall gate
+> also protects every later phase, so the longer it waited the more unguarded work
+> accumulated behind it -- and anomaly detection is *exactly* the kind of work that
+> needs a scorecard, since its thresholds are tuning parameters and tuning them
+> without a measurement is guessing.
+>
+> After Phase 5, **context-aware detection was split out ahead of the anomaly work**:
+> it is now Phase 6 and anomalies Phase 7 (ARCHITECTURE.md D97). The harness did its
+> job immediately and found three real defects -- the first *measured* defects in the
+> system rather than guesses at one. Two of them are false positives on resources a
+> client will defend: a disaster-recovery standby reported as idle, and a snapshot
+> carrying a regulatory retention tag reported as stale. Those are the findings that
+> lose a client's trust in a cost tool, because the client knows the answer and the
+> tool does not, and no amount of anomaly detection compensates for being wrong about
+> something obvious.
+>
+> It also makes the sequencing honest. Phase 7 is supposed to calibrate thresholds
+> against the scorecard; calibrating against a scorecard that contains known false
+> positives would tune the detectors around a defect. Fixing what is already measured
+> comes before measuring more. Phases 8-12 were renumbered.
 
 ---
 
@@ -105,8 +117,9 @@ coverage, with `domain`, `graph` and `guardrails` at 98-100%; `ruff`, `ruff form
 and `pyright` (strict on `src`) all clean.
 
 **Deliberately *not* in this phase:** the approval-gate adapters and the durable
-interrupt (Phase 7), real LLM backends (Phase 3), and statistical cost-anomaly
-detection (Phase 3, where real cost history makes it calibratable).
+interrupt (Phase 9), real LLM backends (Phase 3), and statistical cost-anomaly
+detection (Phase 7, where real cost history and a clean scorecard make it
+calibratable).
 
 **New dependencies to flag:** `langfuse` as an *optional* extra only. It is imported
 lazily behind a `Tracer` protocol so that tracing is never a hard dependency, CI does
@@ -223,7 +236,7 @@ Worth watching rather than acting on; if it keeps climbing, the end-to-end deter
 tests are the ones to consolidate.
 
 **Deliberately *not* in this phase:** the approval gate itself and its Teams and Slack
-adapters (Phase 8). `decide` is a recording CLI, not a gate -- it writes an outcome
+adapters (Phase 9). `decide` is a recording CLI, not a gate -- it writes an outcome
 after the fact rather than halting a run. Separating them is what lets the learning
 loop be demonstrated now instead of waiting for the adapters.
 
@@ -294,19 +307,76 @@ this phase".
 
 **Deliberately *not* in this phase:** tuning any threshold or weight in response to a
 score. Measuring and then immediately changing what is measured would leave neither
-number trustworthy. Calibration belongs to Phase 6, which is the phase that needs it.
+number trustworthy. Closing them is Phase 6; calibrating thresholds against a then-clean
+scorecard is Phase 7.
 
 ---
 
-## Phase 6 — Cost anomalies and real-model hardening
+## Phase 6 — Context-aware detection
+
+**Goal:** close the three defects the Phase 5 scorecard measured. A resource that is
+idle *by design* must stop being reported as waste to act on, and a genuinely
+oversized machine must stop hiding just above a threshold.
+
+These are the first measured defects in the system rather than guesses at one, and two
+of the three are the kind that lose a client's trust: the client knows a
+disaster-recovery standby is idle on purpose, and a tool that recommends deallocating
+it is a tool they stop reading.
+
+Milestone: *Phase 6 - Context-aware detection*.
+
+- [ ] A typed, deterministic `ExemptionPolicy` reading resource **tags** -- data,
+      never model interpretation -- and returning a verdict with a machine-readable
+      reason. Per-client tag conventions are configuration, not code (#48)
+- [ ] Exemption wired in **without silent suppression**: an exempt resource is still
+      surfaced as a finding, annotated with the reason, excluded from actionable
+      recommendations and from the actionable savings total, and recorded as an
+      `AuditEvent` (#49)
+- [ ] The report distinguishes **actionable savings** from **flagged but exempt**,
+      because a total that quietly absorbed exempt waste would misstate both (#50)
+- [ ] **The load-bearing invariant, implemented and asserted:** exemption may only
+      make the system do *less*. It may suppress a recommendation; it may never
+      downgrade a safety classification or make something automatable. A tag can move
+      a finding toward "leave alone" and never toward "act" (#51)
+- [ ] Prompt-injection resistance through the tag path: because exemption is
+      deterministic string matching, a hostile tag is a non-matching string. Asserted
+      with the differential-twin technique (#52)
+- [ ] The two `looks_wasteful_is_healthy` cases become surfaced-but-exempt, and the
+      eval ground truth redefines "handled correctly" as "not actionably
+      recommended" -- the point is honest handling, not pretending the resource is
+      idle (#53)
+- [ ] The `looks_healthy_is_wasteful` case closed by a **documented, general** change
+      to the oversized-VM threshold and headroom logic, with precision and recall
+      before and after, and no new false positive on the healthy set (#54)
+- [ ] The scorecard moves from 0/3 to 3/3 adversarial, the safety gate stays green,
+      and a test asserts no money figure moves for any non-exempt resource (#55)
+- [ ] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.6.0 (#56)
+
+**Exit criteria:** `uv run costsentinel eval` reports 3/3 adversarial cases handled
+correctly with all three gates green; a report shows a disaster-recovery standby
+surfaced with its exemption reason and sitting outside the actionable savings total;
+and a test proves no tag value can turn a `review` or `block` action into an
+automatable one.
+
+**Deliberately *not* in this phase:** statistical anomaly detection (Phase 7), and
+any exemption that depends on anything other than a tag. Inferring intent from a
+resource name, a resource group or a model's reading of a description would make
+exemption non-deterministic and attacker-influenceable, which is the one thing it
+must not be.
+
+---
+
+## Phase 7 — Cost anomalies and real-model hardening
 
 **Goal:** the work that only becomes meaningful once real cost history and real models
 are in hand. Split out of the original Phase 3 so that the safety-critical capability
 unlock and this ordinary feature work are separately reviewable, then deferred twice:
 behind the memory layer because threshold calibration wants history that only real
-sweeps accumulate (D67), and behind the evaluation harness because tuning a threshold
-without a measurement is guessing (D85). This is the first phase that can calibrate
-rather than assert.
+sweeps accumulate (D67), behind the evaluation harness because tuning a threshold
+without a measurement is guessing (D85), and behind context-aware detection because
+calibrating against a scorecard containing known false positives would tune the
+detectors around a defect (D97). This is the first phase that can calibrate against a
+clean measurement.
 
 - [ ] Statistical cost-anomaly detection over the cost series, emitting `CostAnomaly`.
       Needs real cost history to calibrate thresholds against, which is why it waited.
@@ -321,27 +391,13 @@ rather than assert.
       names and tags drawn from the evidence path
 - [ ] Calibrate detector thresholds and the ranking weights against the Phase 5
       scorecard and observed real estates, replacing the Phase 2 defaults
-- [ ] Close the three gaps the Phase 5 scorecard found, which are the first
-      measured defects in the system rather than guesses at one:
-      - a tag-exemption mechanism, so a resource tagged as a disaster-recovery
-        standby is not reported as idle and one tagged with a regulatory retention
-        reference is not reported as a stale snapshot. Both are in the committed
-        FinOps policy already; the detectors do not read it.
-      - the rightsizing threshold boundary, where a `D32s_v5` at 42% peak is
-        genuinely oversized and reads as correctly sized. Note that the 2.0 headroom
-        factor makes anything above a 33% peak unrightsizable in a doubling SKU
-        family, which is a property of the policy parameter rather than of the
-        detector.
-      - once each is fixed, the adversarial labels stop being expected failures and
-        `test_the_scorecard_names_the_gaps_rather_than_hiding_them` needs updating
-
 **Exit criteria:** a spend spike in a real subscription is detected, attributed and
 reported; a primary-backend failure falls back to the secondary without failing the
 sweep; a hostile resource name cannot alter a recommendation.
 
 ---
 
-## Phase 7 — Reporting
+## Phase 8 — Reporting
 
 **Goal:** output a client would actually accept as a deliverable.
 
@@ -376,7 +432,7 @@ template engine (`jinja2`).
 
 ---
 
-## Phase 8 — The approval gate and its adapters
+## Phase 9 — The approval gate and its adapters
 
 **Goal:** a gated action halts the graph until a human decides, wherever that human
 already works.
@@ -406,7 +462,7 @@ verification library.
 
 ---
 
-## Phase 9 — A2A layer
+## Phase 10 — A2A layer
 
 **Goal:** specialists are discoverable and invocable by external agents, without
 routing around governance.
@@ -425,7 +481,7 @@ typed result; an external attempt to execute a gated action is refused.
 
 ---
 
-## Phase 10 — Dashboard
+## Phase 11 — Dashboard
 
 **Goal:** an operator view across the estate.
 
@@ -443,7 +499,7 @@ action entirely from the dashboard.
 
 ---
 
-## Phase 11 — Execution and hardening
+## Phase 12 — Execution and hardening
 
 **Goal:** approved changes are actually applied, safely.
 
@@ -471,7 +527,7 @@ a complete audit chain from signal to execution, and the outcome recorded.
 
 ## Later features, scheduled
 
-- **Config-tunable ranking weights per client** (Phase 8, with the client policy
+- **Config-tunable ranking weights per client** (Phase 9, with the client policy
   overlays the approval gate needs anyway).
   The Phase 2 weights -- 0.60 savings, 0.25 safety, 0.15 confidence -- are a product
   judgement baked into a module constant. Different clients have genuinely different
@@ -483,7 +539,7 @@ a complete audit chain from signal to execution, and the outcome recorded.
   model output.
 
 - **Report residual spend alongside the saving, for every conservative action**
-  (Phase 7, with reporting). A finding currently says "resize this VM, saves
+  (Phase 8, with reporting). A finding currently says "resize this VM, saves
   $140/month". For a conservative action it does not say what remains: downsizing
   `Standard_D8s_v5` to `Standard_D4s_v5` saves half and leaves the other half
   running. A client reading a report with a $12,000 annual savings headline cannot
@@ -503,7 +559,7 @@ a complete audit chain from signal to execution, and the outcome recorded.
   to route around the approval gate. Needs the reporting layer in place first, because
   it is a presentation change to a number the Savings Estimator can already compute.
 
-- **A real-run acceptance checklist** (Phase 6, alongside threshold calibration).
+- **A real-run acceptance checklist** (Phase 7, alongside threshold calibration).
   Phase 3 made a real read-only run safe but did not execute one. The first real sweep
   against a sandbox subscription will surface a predictable class of gap -- a SKU the
   catalogue does not price, a resource type `sku_mapping` does not translate, an
@@ -511,6 +567,44 @@ a complete audit chain from signal to execution, and the outcome recorded.
   degrades to an explicit unknown, which is correct behaviour and poor experience. The
   checklist should turn the first run into a diagnostic: what fraction of resources
   priced, which SKUs and regions were missed, and the exact command to fix each gap.
+
+---
+
+## Open decisions
+
+Things that need a judgement rather than an implementation. Recorded here rather than
+settled quietly in code, because each one changes what a client is told.
+
+- **How should an unknown saving participate in ranking?** Unresolved, and visible in
+  the Phase 5 scorecard as the single discordant ranking pair.
+
+  Today an unpriced finding scores zero on the savings component and keeps its safety
+  and confidence components (`agents/ranking.py`), so a reversible-but-unquantified
+  finding can outrank an irreversible one carrying a small but known figure. That is
+  what happens to `sql-reporting` (zero connections, no cheaper tier, saving unknown)
+  against `snap-web-01-pre-migration` (33.79, irreversible): the pipeline puts the
+  unquantified one higher and the hand-written label puts it lower.
+
+  Two defensible positions, and they disagree:
+
+  1. **Treat unknown as low until quantified.** A client prioritises by money, and a
+     finding nobody can cost cannot be compared on the axis that matters. Ranking it
+     above a known figure asks them to take it on faith. Risk: a genuinely large
+     unquantified waste sinks to the bottom and is never actioned, which is how an
+     unknown quietly becomes a zero -- the exact failure the domain model's
+     unknown-is-not-zero rule exists to prevent.
+  2. **Let reversibility carry it.** "Scale down an idle database" is safe and
+     obviously worth doing whether or not the catalogue can price the target, and a
+     reversible action with no number attached is still a better first move than an
+     irreversible one with a small number. Risk: the order stops tracking money at
+     all for a subset of findings, and a client reading top-to-bottom is no longer
+     reading in value order.
+
+  The discordant pair stays as **documented discordance** rather than being resolved
+  by changing the label to match the code, which would make the ranking metric
+  vacuous. Whichever way it goes, the reasoning belongs in ARCHITECTURE and the
+  expected ranks need revisiting -- and the scorecard will show the move, which is
+  the point of having one.
 
 ---
 
