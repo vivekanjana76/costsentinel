@@ -116,6 +116,13 @@ def _state_figures(state: ScanState, report: ClientReport) -> frozenset[str]:
         report.totals.projected_monthly_savings.amount,
         report.totals.projected_annual_savings.amount,
     ]
+    # Flagged-but-exempt items. Their current cost is a provider fact and their total
+    # is arithmetic over it, so both are figures the report is entitled to state --
+    # and leaving them out would have the judge report the exempt section's own
+    # honest numbers as ungrounded.
+    if report.totals.exempt_monthly_cost is not None:
+        amounts.append(report.totals.exempt_monthly_cost.amount)
+    amounts += [item.current_monthly_cost.amount for item in report.exempt_findings]
     for summary in report.waste_breakdown:
         amounts += [summary.monthly_saving.amount, summary.annual_saving.amount]
 
@@ -123,6 +130,7 @@ def _state_figures(state: ScanState, report: ClientReport) -> frozenset[str]:
     # components are quoted in the rationale, and they are just as much the
     # pipeline's own arithmetic as a saving is.
     amounts += [signal.confidence for signal in state.signals]
+    amounts += [item.confidence for item in report.exempt_findings]
     amounts += [recommendation.confidence for recommendation in state.recommendations]
     for score in state.ranking:
         amounts += [

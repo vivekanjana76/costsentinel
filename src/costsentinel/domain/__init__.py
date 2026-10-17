@@ -89,6 +89,7 @@ from costsentinel.domain.recommendations import (
 from costsentinel.domain.report import (
     ApprovalQueueItem,
     ClientReport,
+    ExemptFinding,
     ReportFinding,
     ReportPeriod,
     ReportSeverity,
@@ -129,6 +130,7 @@ __all__ = [
     "EpisodicEntry",
     "EpisodicRecord",
     "Estate",
+    "ExemptFinding",
     "ExemptionReason",
     "ExemptionVerdict",
     "FactorKind",

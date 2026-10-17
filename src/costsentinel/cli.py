@@ -238,6 +238,16 @@ def summarise_report(report: ClientReport) -> str:
         f"({totals.awaiting_approval_count} awaiting approval, "
         f"{totals.automatable_count} automatable)",
     ]
+    if totals.exempt_findings_count:
+        spend = (
+            totals.exempt_monthly_cost.display()
+            if totals.exempt_monthly_cost is not None
+            else "unknown"
+        )
+        lines.append(
+            f"  flagged but exempt   {totals.exempt_findings_count} "
+            f"(costing {spend}/month, excluded from the savings above)"
+        )
     if report.memory_recall:
         lines.append(f"  memory               {report.memory_recall}")
     lines.append("")
@@ -258,6 +268,15 @@ def summarise_report(report: ClientReport) -> str:
                 else ""
             )
             lines.append(f"       memory: {finding.memory_note}{moved}")
+    if report.exempt_findings:
+        lines += ["", "  Flagged but exempt (no action proposed):"]
+        for item in report.exempt_findings:
+            lines.append(
+                f"    - {item.resource_name}  [{item.waste_kind.value}]  "
+                f"costs {item.current_monthly_cost.display()}/month  "
+                f"exempt: {item.exemption_reason.value}"
+            )
+            lines.append(f"        {item.exemption_statement}")
     if report.approval_queue:
         lines += ["", "  Awaiting approval:"]
         lines += [

@@ -238,7 +238,7 @@ def test_the_actionable_and_exempt_signals_partition_the_signals(mixed: ScanStat
 
 
 def test_an_audit_event_records_every_exemption(mixed: ScanState) -> None:
-    """ "Why was this not recommended?" must be answerable from the trail alone."""
+    """Why something was not recommended must be answerable from the trail alone."""
     events = [e for e in mixed.audit if e.event_type is AuditEventType.EXEMPTION_APPLIED]
     assert len(events) == 1
     detail = events[0].detail
