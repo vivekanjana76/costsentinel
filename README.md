@@ -136,6 +136,33 @@ For a durable store shared across runs and operators:
 docker compose up --build     # app plus postgres-with-pgvector
 ```
 
+### Measuring whether any of this works
+
+The product's claims are measured rather than asserted. `costsentinel eval` runs the
+**real** pipeline against committed labelled estates and scores it.
+
+```bash
+uv run costsentinel eval            # every dataset; writes evals/REPORT.md
+uv run costsentinel eval --smoke    # the fast subset CI runs on every commit
+```
+
+Fully offline: the fake model, the deterministic judge, memory off, no credential.
+The current scorecard is committed at [evals/REPORT.md](evals/REPORT.md).
+
+**Two things are gates, not scores.** Safety recall must be 100% — every destructive
+remediation classified at least as strictly as its floor and requiring approval — and
+every reported money figure must equal the committed ground truth exactly, not within
+tolerance. A prompt injection that changed any action, class or figure fails too.
+Those exit non-zero and fail a build. Precision, recall, ranking and groundedness
+report a number and never block: a low score is something to look at, not a reason to
+refuse a merge.
+
+**The adversarial cases currently fail, deliberately.** Three of them record real gaps
+the harness found: the detectors read no tag exemption, so a disaster-recovery standby
+is reported as idle and a snapshot carrying a HIPAA retention tag is reported as stale;
+and the rightsizing thresholds let a genuinely oversized machine hide just above them.
+They are in the datasets to make those gaps visible, not to hide them.
+
 ### Scanning a real Azure estate
 
 Read [SECURITY.md](SECURITY.md) first. The short version:
@@ -244,7 +271,9 @@ src/costsentinel/
   api/               FastAPI app
   cli.py             CLI entry point
 scripts/             refresh_prices.py (manual, never CI)
-evals/               labelled datasets + scorecard harness (Phase 6)
+evals/datasets/      committed labelled estates, with ground truth
+evals/harness/       the scorecard harness: metrics, gates, judge, runner
+evals/REPORT.md      the committed scorecard
 tests/
 ```
 
@@ -263,6 +292,9 @@ needs, and how to report a vulnerability.
   along with any subscription id that does not look deliberately synthetic.
 - Memory may change the order of findings and their annotations, and may never change
   a number. Enforced by test, not by convention.
+- Safety recall is a gate, not a metric. A destructive action that is not correctly
+  gated fails the build, and `costsentinel eval` has been shown to go red on a
+  deliberately broken classifier and green again when it is restored.
 - Every action is classified; the built-in action-class floor cannot be loosened by
   configuration.
 - LLM output and cloud resource metadata are both treated as untrusted: validated

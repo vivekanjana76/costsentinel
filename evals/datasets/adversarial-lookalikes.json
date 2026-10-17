@@ -1,0 +1,133 @@
+{
+  "dataset_id": "adversarial-lookalikes",
+  "title": "Adversarial: a healthy resource that looks wasteful, and a wasteful one that looks healthy",
+  "purpose": "The two ways a cost detector is actually wrong in the field. A disaster-recovery standby is idle by design and must not be flagged; a machine sitting just above the rightsizing threshold is genuinely oversized and should be. Both are expected to be hard, and the scorecard calls them out individually rather than folding them into an aggregate.",
+  "tier": "full",
+  "estate": {
+    "client": "meridian-health",
+    "daily_spend": "96.20",
+    "subscriptions": [
+      {
+        "subscription_id": "00000000-0000-4000-8000-0000000e0002",
+        "display_name": "MH-PROD-Clinical",
+        "environment": "production",
+        "region": "eastus"
+      }
+    ],
+    "resources": [
+      {
+        "name": "vm-dr-standby",
+        "kind": "virtual_machine",
+        "subscription": 0,
+        "resource_group": "rg-continuity",
+        "state": "running",
+        "sku": "Standard_D8s_v5",
+        "tags": {
+          "owner": "platform-team",
+          "env": "prod",
+          "role": "disaster-recovery-standby",
+          "runbook": "DR-014"
+        },
+        "age_days": 540,
+        "cpu_avg_pct": "0.8",
+        "cpu_max_pct": "2.1",
+        "network_in_gb": "0.0"
+      },
+      {
+        "name": "vm-claims-batch",
+        "kind": "virtual_machine",
+        "subscription": 0,
+        "resource_group": "rg-claims",
+        "state": "running",
+        "sku": "Standard_D32s_v5",
+        "tags": {
+          "owner": "claims-team",
+          "env": "prod"
+        },
+        "age_days": 300,
+        "cpu_avg_pct": "22.0",
+        "cpu_max_pct": "42.0",
+        "network_in_gb": "640.0"
+      },
+      {
+        "name": "vm-api-01",
+        "kind": "virtual_machine",
+        "subscription": 0,
+        "resource_group": "rg-claims",
+        "state": "running",
+        "sku": "Standard_D4s_v5",
+        "tags": {
+          "owner": "claims-team",
+          "env": "prod"
+        },
+        "age_days": 300,
+        "cpu_avg_pct": "61.0",
+        "cpu_max_pct": "88.0",
+        "network_in_gb": "2100.0"
+      },
+      {
+        "name": "disk-dr-standby-os",
+        "kind": "managed_disk",
+        "subscription": 0,
+        "resource_group": "rg-continuity",
+        "state": "attached",
+        "sku": "Premium_LRS_P10",
+        "attached_to": "vm-dr-standby",
+        "tags": {
+          "owner": "platform-team"
+        },
+        "age_days": 540
+      },
+      {
+        "name": "snap-clinical-retained",
+        "kind": "snapshot",
+        "subscription": 0,
+        "resource_group": "rg-claims",
+        "state": "available",
+        "sku": "Premium_LRS_Snapshot",
+        "tags": {
+          "owner": "compliance-team",
+          "retention": "HIPAA-6YR-REF-2291"
+        },
+        "age_days": 900,
+        "capacity_gb": "512"
+      }
+    ],
+    "reservations": []
+  },
+  "labels": [
+    {
+      "resource": "vm-dr-standby",
+      "is_wasteful": false,
+      "adversarial": "looks_wasteful_is_healthy",
+      "note": "0.8% average and 2.1% peak CPU with no inbound traffic: on the numbers alone this is the most idle machine in the estate. It is also a disaster-recovery standby, tagged as one and named in a runbook, and being idle is the entire point of it. The committed FinOps policy says so explicitly: 'A disaster-recovery standby is idle by design.' A tool that recommends deallocating it is recommending the removal of a control, and the client will say so."
+    },
+    {
+      "resource": "vm-claims-batch",
+      "is_wasteful": true,
+      "waste_kind": "oversized_virtual_machine",
+      "expected_action": "resize_virtual_machine",
+      "expected_action_class": "review",
+      "expected_monthly_saving": null,
+      "expected_rank": 1,
+      "adversarial": "looks_healthy_is_wasteful",
+      "note": "22% average and 42% peak sits just above both rightsizing thresholds (20% and 40%), so it reads as appropriately sized. It is not: 42% of 32 vCPU is 13.4 vCPU of real demand on a machine of 32. But the rightsizing rule requires 32 x 0.42 x 2.0 = 26.9 vCPU, which only a D32s_v5 satisfies, so even if the detector flagged it there is no smaller in-family SKU and the saving would be unknown. Labelled wasteful with an unknown saving, which is the honest expected answer. This case is expected to FAIL on detection, and it is in the dataset precisely to record that a genuinely oversized machine can hide just above the thresholds -- and that the 2.0 headroom factor makes anything above a 33% peak unrightsizable in a doubling SKU family."
+    },
+    {
+      "resource": "vm-api-01",
+      "is_wasteful": false,
+      "note": "61% average and 88% peak with heavy traffic. Busy and correctly sized. The control for the two hard cases: a detector that flags everything would be caught here."
+    },
+    {
+      "resource": "disk-dr-standby-os",
+      "is_wasteful": false,
+      "note": "Attached to the standby, so not an orphan whatever the standby's own utilisation looks like. Present as a second control: a detector that reasoned from the parent machine's idleness rather than from the disk's own attachment state would flag this one too."
+    },
+    {
+      "resource": "snap-clinical-retained",
+      "is_wasteful": false,
+      "adversarial": "looks_wasteful_is_healthy",
+      "note": "900 days old, five times past the staleness threshold, and 512 GB of it. It also carries a retention tag naming a six-year HIPAA requirement, which the committed policy exempts: 'Snapshots supporting a regulatory retention period are exempt and must be tagged retention with the requirement reference.' Deleting it would be a compliance breach, not a saving. The detectors have no tag exemption, so this case is expected to FAIL -- it is here to record that gap rather than to hide it."
+    }
+  ]
+}

@@ -46,6 +46,10 @@ PROGRAM = "costsentinel"
 #: cost data in a commit is the one irreversible mistake available here.
 DEFAULT_REAL_OUTPUT_DIR = Path("var/real-runs")
 
+#: Where `costsentinel eval` writes its scorecard. Committed, so a diff shows what
+#: moved between runs.
+DEFAULT_REPORT = Path("evals/REPORT.md")
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser."""
@@ -163,6 +167,41 @@ def build_parser() -> argparse.ArgumentParser:
         "--client",
         default=None,
         help="One client. Default: every client the provider can see.",
+    )
+
+    evaluate = subcommands.add_parser(
+        "eval",
+        help="Score the pipeline against the labelled datasets and emit a scorecard.",
+        description=(
+            "Runs the real graph over the committed labelled estates and reports "
+            "precision, recall, ranking concordance, savings calibration and report "
+            "groundedness. Exits non-zero if a gate fails -- safety recall below "
+            "100%, a money figure that does not match the ground truth, or a "
+            "prompt injection that changed the advice. Fully offline: the fake "
+            "model and the deterministic judge, no network and no credential."
+        ),
+    )
+    tier_group = evaluate.add_mutually_exclusive_group()
+    tier_group.add_argument(
+        "--smoke",
+        action="store_true",
+        help="The fast subset CI runs on every commit. Still enforces every gate.",
+    )
+    tier_group.add_argument("--full", action="store_true", help="Every dataset. The default.")
+    evaluate.add_argument("--dataset", default=None, metavar="ID", help="Run one dataset by id.")
+    evaluate.add_argument(
+        "--out",
+        default=None,
+        metavar="PATH",
+        help=(
+            f"Where to write the Markdown scorecard. Default: {DEFAULT_REPORT}. "
+            f"Pass --no-write to skip it."
+        ),
+    )
+    evaluate.add_argument(
+        "--no-write",
+        action="store_true",
+        help="Print the summary without writing the Markdown report.",
     )
 
     subcommands.add_parser(
@@ -466,6 +505,43 @@ def _decisions_text(store: MemoryStore, clients: Sequence[str]) -> str:
     return "\n".join(lines).rstrip()
 
 
+def run_eval(args: argparse.Namespace) -> int:
+    """Score the pipeline against the labelled datasets.
+
+    Returns:
+        ``0`` when every gate held, ``1`` otherwise. The quality metrics never
+        affect the exit code: a precision of 0.80 is a number somebody should look
+        at, not a reason to refuse a merge.
+    """
+    # Imported here rather than at module scope: the harness is a development tool
+    # and the CLI should not pay for importing it on every `scan`. It also keeps the
+    # dependency pointing one way -- evals imports costsentinel, never the reverse.
+    from evals.harness.dataset import DatasetError, Tier  # noqa: PLC0415
+    from evals.harness.runner import evaluate, write_report  # noqa: PLC0415
+
+    try:
+        card = evaluate(tier=Tier.SMOKE if args.smoke else None, dataset_id=args.dataset)
+    except DatasetError as exc:
+        print(f"{PROGRAM}: {exc}", file=sys.stderr)
+        return 1
+
+    print(card.terminal_summary())
+
+    if not args.no_write:
+        written = write_report(card, Path(args.out) if args.out else DEFAULT_REPORT)
+        print(f"\nScorecard written to {written}")
+
+    if not card.passed:
+        failed = ", ".join(gate.name for gate in card.blocking if not gate.passed)
+        print(
+            f"\n{PROGRAM}: evaluation FAILED on {failed}. These are gates, not "
+            f"scores: see the failures above.",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point.
 
@@ -485,6 +561,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "decisions":
         return run_decisions(args, settings)
+
+    if args.command == "eval":
+        return run_eval(args)
 
     real = bool(args.real) or settings.mode is RunMode.REAL
     scope: tuple[str, ...] = ()

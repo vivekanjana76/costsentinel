@@ -1,6 +1,6 @@
 # CostSentinel — Roadmap
 
-**Current phase: 5** — cost anomalies and real-model hardening.
+**Current phase: 6** — cost anomalies and real-model hardening.
 
 Phases are sequential. Do not start work in a later phase before the current phase
 is complete and its exit criteria are met. If an idea arrives mid-phase, record it
@@ -16,14 +16,26 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 > unlock with a safety surface* and bundling ordinary feature work with it would have
 > meant shipping both as one reviewable unit (D49).
 >
-> After Phase 3, **the memory layer and the anomaly phase swapped**: memory is now
-> Phase 4 and anomalies Phase 5 (ARCHITECTURE.md D67). Two reasons. Memory is what
-> makes CostSentinel a system that *learns* rather than one that re-pitches the same
-> rejected advice every month, and that is the product's central claim -- it should
-> not sit behind a detector improvement. And anomaly detection wants real cost history
-> to calibrate thresholds against, which only accumulates once somebody is running
-> real sweeps; memory needs nothing but its own store, so it can be built and proven
-> offline today. Nothing after Phase 5 was renumbered.
+> After Phase 3, **the memory layer and the anomaly phase swapped**: memory became
+> Phase 4 (ARCHITECTURE.md D67). Two reasons. Memory is what makes CostSentinel a
+> system that *learns* rather than one that re-pitches the same rejected advice every
+> month, and that is the product's central claim -- it should not sit behind a
+> detector improvement. And anomaly detection wants real cost history to calibrate
+> thresholds against, which only accumulates once somebody is running real sweeps;
+> memory needs nothing but its own store, so it can be built and proven offline today.
+>
+> After Phase 4, **the evaluation harness and the anomaly phase swapped**: evals are
+> now Phase 5 and anomalies Phase 6 (ARCHITECTURE.md D85). CLAUDE.md section 8 calls
+> evaluations "a first-class deliverable, not an afterthought", and four phases have
+> now shipped detectors, ranking weights, savings arithmetic and a memory penalty with
+> no measurement of precision, recall or ranking quality at all -- every claim about
+> them rests on hand-written tests of specific cases. Two consequences made the
+> ordering wrong. The safety-recall gate protects every later phase, so the longer it
+> waits the more unguarded work accumulates behind it. And anomaly detection is
+> *exactly* the kind of work that needs a scorecard: its thresholds are tuning
+> parameters, and tuning them without a measurement is guessing. Building the harness
+> first means the anomaly phase can be calibrated rather than asserted. Nothing after
+> Phase 6 was renumbered.
 
 ---
 
@@ -221,13 +233,80 @@ and whatever the real embedder needs. The default store uses the standard librar
 
 ---
 
-## Phase 5 — Cost anomalies and real-model hardening
+## Phase 5 — Evaluation harness and scorecard
+
+**Goal:** the product's claims are measured rather than asserted, and a safety
+regression fails the build. CLAUDE.md section 8.
+
+Four phases have shipped detectors, ranking weights, savings arithmetic and a memory
+penalty, and every claim about their quality currently rests on hand-written tests of
+specific cases. This phase replaces "the tests pass" with a number, and turns the one
+claim that must never regress -- that every destructive action is gated -- into a gate
+rather than a score.
+
+Milestone: *Phase 5 - Evaluation harness*.
+
+- [x] Labelled synthetic estates under `evals/datasets/`, each paired with
+      ground-truth labels: which resources are genuinely wasteful and of what kind,
+      which are healthy, and for destructive remediations the correct action class
+      (#36)
+- [x] Deliberately adversarial cases: a healthy resource that looks wasteful, a
+      wasteful one that looks healthy, and a prompt-injection attempt in a resource
+      name and a tag (#37)
+- [x] A harness under `evals/harness/` that runs the **real** graph against each
+      estate -- no special-casing, no production code aware it is being evaluated
+      (#38)
+- [x] Quality metrics: waste-detection precision and recall with a per-detector
+      breakdown, recommendation ranking quality, and savings-estimate calibration
+      (#39)
+- [x] Report groundedness via LLM-as-judge, behind a deterministic `FakeJudge` so it
+      is scored offline in CI, with the real judge opt-in (#40)
+- [x] **Hard gates, not scores:** safety recall below 100%, or any reported money
+      figure that does not equal the committed ground-truth arithmetic, fails the run
+      (#41)
+- [x] Prompt-injection resistance scored as a gate: a hostile name or tag must not
+      alter a single action or classification (#42)
+- [x] A typed `Scorecard` rendered as a committed Markdown report and a terminal
+      summary, with the adversarial cases called out (#43)
+- [x] `costsentinel eval`, plus a fast smoke subset in the normal CI job and the full
+      run on demand, both documented (#44)
+- [x] An asserted boundary: `evals` imports from `costsentinel`, and nothing under
+      `src/costsentinel` imports from `evals` (#45)
+- [x] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.5.0 (#46)
+
+**Exit criteria (met):** `uv run costsentinel eval` emits a scorecard and writes
+`evals/REPORT.md`; the smoke subset runs in CI on every commit, offline, in under four
+seconds, enforcing every gate; a deliberately broken classifier fails the run with
+exit 1, demonstrated red and then green; 850 tests pass at 94% coverage with `domain`,
+`agents`, `guardrails` and `graph` at 97-100%; and four separate tests assert the
+pipeline contains no knowledge of the harness.
+
+**Current scores**, from the committed `evals/REPORT.md`: all three gates pass;
+detection precision 0.86, recall 0.92, ranking concordance 0.97, savings calibration
+1.00, report groundedness 0.96.
+
+**Three adversarial cases fail, deliberately and on the record.** The detectors have
+no tag exemption, so a disaster-recovery standby reads as idle and a snapshot carrying
+a HIPAA retention tag reads as stale; and the rightsizing thresholds sit where a
+genuinely oversized machine hides just above them. Those are the first real findings
+the harness produced, and fixing them is Phase 6's job -- see "Deliberately not in
+this phase".
+
+**Deliberately *not* in this phase:** tuning any threshold or weight in response to a
+score. Measuring and then immediately changing what is measured would leave neither
+number trustworthy. Calibration belongs to Phase 6, which is the phase that needs it.
+
+---
+
+## Phase 6 — Cost anomalies and real-model hardening
 
 **Goal:** the work that only becomes meaningful once real cost history and real models
 are in hand. Split out of the original Phase 3 so that the safety-critical capability
-unlock and this ordinary feature work are separately reviewable, then deferred behind
-the memory layer because threshold calibration wants history that only real sweeps
-accumulate (ARCHITECTURE.md D67).
+unlock and this ordinary feature work are separately reviewable, then deferred twice:
+behind the memory layer because threshold calibration wants history that only real
+sweeps accumulate (D67), and behind the evaluation harness because tuning a threshold
+without a measurement is guessing (D85). This is the first phase that can calibrate
+rather than assert.
 
 - [ ] Statistical cost-anomaly detection over the cost series, emitting `CostAnomaly`.
       Needs real cost history to calibrate thresholds against, which is why it waited.
@@ -240,36 +319,25 @@ accumulate (ARCHITECTURE.md D67).
       model bill
 - [ ] Prompt-injection red-teaming against the real backends, using hostile resource
       names and tags drawn from the evidence path
-- [ ] Calibrate detector thresholds and the ranking weights against observed real
-      estates, replacing the Phase 2 defaults
+- [ ] Calibrate detector thresholds and the ranking weights against the Phase 5
+      scorecard and observed real estates, replacing the Phase 2 defaults
+- [ ] Close the three gaps the Phase 5 scorecard found, which are the first
+      measured defects in the system rather than guesses at one:
+      - a tag-exemption mechanism, so a resource tagged as a disaster-recovery
+        standby is not reported as idle and one tagged with a regulatory retention
+        reference is not reported as a stale snapshot. Both are in the committed
+        FinOps policy already; the detectors do not read it.
+      - the rightsizing threshold boundary, where a `D32s_v5` at 42% peak is
+        genuinely oversized and reads as correctly sized. Note that the 2.0 headroom
+        factor makes anything above a 33% peak unrightsizable in a doubling SKU
+        family, which is a property of the policy parameter rather than of the
+        detector.
+      - once each is fixed, the adversarial labels stop being expected failures and
+        `test_the_scorecard_names_the_gaps_rather_than_hiding_them` needs updating
 
 **Exit criteria:** a spend spike in a real subscription is detected, attributed and
 reported; a primary-backend failure falls back to the secondary without failing the
 sweep; a hostile resource name cannot alter a recommendation.
-
----
-
-## Phase 6 — Evaluation harness and datasets
-
-**Goal:** the product's claims are measured, and a safety regression fails the build.
-
-- [ ] Extend the estate generator to vary topology by seed
-- [ ] Labelled synthetic estates under `evals/datasets/`, with ground-truth waste,
-      remediation and savings annotations
-- [ ] Harness running the real pipeline against a dataset, emitting a scorecard
-- [ ] Metric: waste-detection precision and recall
-- [ ] Metric: recommendation ranking quality (nDCG vs ground-truth savings order)
-- [ ] Metric: cost-figure accuracy — hard assertion that no reported number has LLM
-      provenance
-- [ ] Metric: savings-estimate calibration against ground truth
-- [ ] Metric: report groundedness via LLM-as-judge
-- [ ] Metric: safety recall — every destructive action classified and gated
-- [ ] Fast smoke subset wired into CI
-- [ ] Full suite runnable on demand, with a committed scorecard baseline
-- [ ] CI fails the build on a safety-recall regression
-
-**Exit criteria:** `uv run costsentinel eval` emits a scorecard; CI runs the smoke
-subset on every commit; an intentionally mis-classified destructive action fails CI.
 
 ---
 
@@ -435,7 +503,7 @@ a complete audit chain from signal to execution, and the outcome recorded.
   to route around the approval gate. Needs the reporting layer in place first, because
   it is a presentation change to a number the Savings Estimator can already compute.
 
-- **A real-run acceptance checklist** (Phase 5, alongside threshold calibration).
+- **A real-run acceptance checklist** (Phase 6, alongside threshold calibration).
   Phase 3 made a real read-only run safe but did not execute one. The first real sweep
   against a sandbox subscription will surface a predictable class of gap -- a SKU the
   catalogue does not price, a resource type `sku_mapping` does not translate, an

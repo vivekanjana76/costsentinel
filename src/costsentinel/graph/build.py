@@ -66,9 +66,14 @@ NODE_POLICY_GUARD = "policy_guard"
 NODE_MEMORY_CONSULT = "memory_consult"
 NODE_REPORT_AUTHOR = "report_author"
 
-#: The six specialists from CLAUDE.md section 5, in the order a full sweep visits
-#: them. Kept in one place so tests, docs and the diagram cannot drift from the code.
-SPECIALIST_NODES: tuple[str, ...] = (
+#: Every node a full sweep visits, in order.
+#:
+#: Named for what it is rather than for what is in it. It was ``SPECIALIST_NODES``
+#: while it held exactly the six specialists from CLAUDE.md section 5; Phase 4 added
+#: the memory consult step, which is a support node and not a seventh specialist, so
+#: the name had started to assert something untrue. Kept in one place so tests, docs
+#: and the diagram cannot drift from the code.
+SWEEP_NODES: tuple[str, ...] = (
     NODE_ANOMALY_SCOUT,
     NODE_ROOT_CAUSE_ANALYST,
     NODE_SAVINGS_ESTIMATOR,
@@ -78,14 +83,12 @@ SPECIALIST_NODES: tuple[str, ...] = (
     NODE_REPORT_AUTHOR,
 )
 
-#: Every node in the graph: the specialists plus the supervisor.
+#: Every node in the graph: the sweep nodes plus the supervisor.
 #:
-#: Memory Consult is listed among the specialists but is not one of CLAUDE.md
-#: section 5's six: it is a support step that reorders and annotates what the six
-#: produced. Kept in the same tuple because the thing tests and the diagram care
-#: about is "every node a sweep visits", and a second list would be a second thing
-#: to forget to update.
-PHASE_2_NODES: tuple[str, ...] = (NODE_SUPERVISOR, *SPECIALIST_NODES)
+#: Was ``PHASE_2_NODES``, which named it after the phase that introduced it and so
+#: stopped being accurate the moment Phase 4 added a node to it. A constant that
+#: encodes a date in its name is one nobody updates.
+ALL_NODES: tuple[str, ...] = (NODE_SUPERVISOR, *SWEEP_NODES)
 
 #: Where the supervisor may send a run. Declaring the map explicitly means an
 #: unroutable decision is a build-time error rather than a silent dead end.

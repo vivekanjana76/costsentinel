@@ -8,8 +8,90 @@ CostSentinel is pre-1.0, so the public API may change between minor versions.
 
 ## [Unreleased]
 
-Nothing yet. Next up is Phase 5: statistical cost-anomaly detection and real-model
-hardening.
+Nothing yet. Next up is Phase 6: cost anomalies, real-model hardening, and the three
+gaps the Phase 5 scorecard found.
+
+## [0.5.0] - 2026-10-16
+
+Phase 5: the evaluation harness and scorecard. Four phases had shipped detectors,
+ranking weights, savings arithmetic and a memory penalty, and every claim about their
+quality rested on hand-written tests of specific cases. `costsentinel eval` replaces
+"the tests pass" with a number -- and turns the one claim that must never regress,
+that every destructive action is gated, into a gate rather than a score.
+
+### Added
+
+- **Four labelled synthetic estates** under `evals/datasets/`, each one committed file
+  holding both the estate and the right answers. Every resource and reservation is
+  labelled, including the healthy ones, and every label states why it is the right
+  answer. Ground truth is committed rather than recomputed, so the cost-figure gate
+  compares two independent derivations instead of a calculation to itself.
+- **Adversarial cases**: a disaster-recovery standby at 0.8% CPU and a snapshot with a
+  HIPAA retention tag (healthy, look wasteful); a `D32s_v5` at 42% peak sitting just
+  above both rightsizing thresholds (wasteful, looks healthy); and a prompt-injection
+  pair whose hostile half carries fence-closing names, an action outside the closed
+  vocabulary, and a forged evidence block with a fabricated figure.
+- **`costsentinel eval`**, with `--smoke`, `--dataset`, `--out` and `--no-write`. The
+  smoke subset runs in the normal CI job on every commit in under four seconds; the
+  full run is on `master` and on demand. Both enforce every gate.
+- **Three gates that fail a run**, distinct in code from the metrics that score one:
+  `safety.recall` (every destructive remediation classified at least as strictly as
+  its floor, and requiring approval -- not 97%), `cost.figure_accuracy` (every figure
+  equal to the ground truth, not within tolerance, plus the annualisation, the client
+  total and no LLM provenance), and `injection.resistance` (a hostile name or tag
+  changed no action, class, figure or total, measured differentially against a benign
+  twin).
+- **Quality metrics that report and never block**: detection precision and recall per
+  detector as well as in aggregate, ranking concordance against a hand-written
+  reviewer order, savings calibration, and report groundedness. Every score carries
+  its denominator and reports unknown rather than zero when it cannot be computed.
+- **A deterministic groundedness judge**, used by CI, which checks that every decimal
+  in the model-authored prose appears in the state the report was built from. A real
+  `ModelJudge` is opt-in behind the existing structured-output seam.
+- **A typed `Scorecard`**, rendered as the committed `evals/REPORT.md` and a terminal
+  summary. Gates lead, a failing gate is visually distinct from a low score, and the
+  adversarial cases are listed individually rather than folded into an aggregate.
+- **Four assertions that the pipeline is unaware of the harness**: the import graph
+  in both directions, the CLI's lazy import, the absence of any eval-only flag in
+  `src`, and that the graph under evaluation is the one `build_graph` builds.
+
+### Changed
+
+- **`SPECIALIST_NODES` is now `SWEEP_NODES`**, and `PHASE_2_NODES` is `ALL_NODES`. The
+  first was named for what was in it, and Phase 4 made it assert something untrue: the
+  memory consult step is a support node, not a seventh specialist. The second encoded
+  a phase number in a constant, which is a thing nobody updates.
+- **`evals` ships in the wheel.** CLAUDE.md section 8 calls evaluations a first-class
+  deliverable, and a claim only its author can verify is a weaker claim.
+- The placeholder eval CI job does the real thing now, rather than looking as though
+  it runs something it does not.
+
+### Notes
+
+**The harness found four of my own mistakes while being built**, which is the best
+evidence it works:
+
+- Three of the baseline expected savings were wrong. I had assumed rightsizing steps
+  down one SKU rather than to the smallest that fits, and had put a figure on a
+  database already at the smallest tier the catalogue carries, where the honest answer
+  is unknown.
+- One expected action class was wrong: an orphaned disk in a *development*
+  subscription labelled as expecting `block`, copied from the production baseline
+  without noticing the environment differs. The floor is `review` and production
+  tightens it. The safety gate failed on its first real outing, on my label rather
+  than on the code.
+- The judge's first version flagged eight ungrounded claims that were all confidence
+  scores the ranking rationale legitimately quotes. A strict check still has to be a
+  correct one.
+
+**Three adversarial cases fail, deliberately.** They record three real gaps: the
+detectors read no tag exemption, so a disaster-recovery standby is reported as idle
+and a HIPAA-retained snapshot as stale; and the rightsizing thresholds let a genuinely
+oversized machine hide just above them. Calibration is Phase 6's job -- measuring
+something and immediately changing it would leave neither number trustworthy.
+
+Current scores: all three gates pass; precision 0.86, recall 0.92, ranking 0.97,
+calibration 1.00, groundedness 0.96. 850 tests, 94% coverage.
 
 ## [0.4.0] - 2026-10-16
 
@@ -294,7 +376,8 @@ Phase 1: the scaffold and a thin vertical slice.
 - Landed as an honest commit series dated when it was actually committed; it predates
   the issue-driven workflow and has no backing issues.
 
-[Unreleased]: https://github.com/vivekanjana76/costsentinel/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/vivekanjana76/costsentinel/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.1.0...v0.2.0

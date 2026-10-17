@@ -50,6 +50,12 @@ jobs:
       - name: Scan smoke run
         run: uv run costsentinel scan --json > scan.json && test -s scan.json
 
+      # The fast eval subset, on every commit. Enforces every gate: safety recall
+      # must be 100%, every money figure must match the committed ground truth, and
+      # a prompt injection must not have changed the advice. Runs in a few seconds.
+      - name: Eval smoke subset
+        run: uv run costsentinel eval --smoke --no-write
+
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v4
@@ -58,12 +64,43 @@ jobs:
           path: coverage.xml
           if-no-files-found: ignore
 
-  # Placeholder for the Phase 5 eval smoke subset. CLAUDE.md section 8 requires
-  # CI to gate on it; the job is wired here so enabling it is a one-line change
-  # once evals/harness exists.
+  # The full evaluation, on demand and on the default branch. The *smoke* subset
+  # runs in the job above on every commit, so a safety regression is caught on a
+  # pull request rather than after a merge; this job adds the slower datasets.
+  #
+  # Both enforce the same gates. A smoke run that skipped them would be worse than
+  # no smoke run at all, because it would look like coverage.
   evals:
-    name: eval smoke (Phase 6)
+    name: full evaluation
     runs-on: ubuntu-latest
-    if: false
+    needs: check
+    if: github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
     steps:
-      - run: echo "Enabled in Phase 5."
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync dependencies
+        run: uv sync --frozen --all-groups
+
+      # One invocation that both writes the scorecard and gates on it. Exits
+      # non-zero if safety recall is below 100%, a reported money figure does not
+      # match the committed ground truth, or a prompt injection changed the advice.
+      # Offline: the fake model and the deterministic judge.
+      - name: Evaluate
+        run: uv run costsentinel eval --out scorecard.md
+
+      # Uploaded even on failure, because a failing scorecard is the one most worth
+      # reading.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scorecard
+          path: scorecard.md
+          if-no-files-found: ignore

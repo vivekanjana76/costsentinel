@@ -7,6 +7,7 @@ import paths -- ``domain.state`` is authoritative.
 
 from costsentinel.domain.state import ScanState
 from costsentinel.graph.build import (
+    ALL_NODES,
     NODE_ANOMALY_SCOUT,
     NODE_OPTIMIZATION_PLANNER,
     NODE_POLICY_GUARD,
@@ -14,8 +15,7 @@ from costsentinel.graph.build import (
     NODE_ROOT_CAUSE_ANALYST,
     NODE_SAVINGS_ESTIMATOR,
     NODE_SUPERVISOR,
-    PHASE_2_NODES,
-    SPECIALIST_NODES,
+    SWEEP_NODES,
     build_graph,
 )
 from costsentinel.graph.checkpointer import checkpointer_for, sqlite_checkpointer
@@ -30,6 +30,7 @@ from costsentinel.graph.runner import (
 )
 
 __all__ = [
+    "ALL_NODES",
     "NODE_ANOMALY_SCOUT",
     "NODE_OPTIMIZATION_PLANNER",
     "NODE_POLICY_GUARD",
@@ -37,8 +38,7 @@ __all__ = [
     "NODE_ROOT_CAUSE_ANALYST",
     "NODE_SAVINGS_ESTIMATOR",
     "NODE_SUPERVISOR",
-    "PHASE_2_NODES",
-    "SPECIALIST_NODES",
+    "SWEEP_NODES",
     "ScanFailedError",
     "ScanState",
     "build_graph",
