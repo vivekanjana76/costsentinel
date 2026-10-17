@@ -118,6 +118,18 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- exemption policy -------------------------------------------------
+    exemption_rules_path: Path | None = Field(
+        default=None,
+        validation_alias=_env("EXEMPTION_RULES_PATH"),
+        description=(
+            "Ruleset naming the tag conventions that mark a resource as idle, stale "
+            "or oversized on purpose. Unset uses the built-in rules. A client whose "
+            "tags read 'dr-role: standby' rather than 'role: disaster-recovery' is a "
+            "file, not a code change."
+        ),
+    )
+
     # --- Azure (MODE=real) -----------------------------------------------
     # There is deliberately no client-secret setting. CostSentinel authenticates
     # with DefaultAzureCredential, which picks up an existing ``az login``, a

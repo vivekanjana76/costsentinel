@@ -90,7 +90,7 @@ class CostAnomaly(Frozen):
     """A statistically significant deviation in spend for a scope.
 
     Modelled in Phase 1 so the state, report and eval schemas are stable; the
-    detector that emits these arrives in Phase 3.
+    detector that emits these arrives in Phase 7.
     """
 
     anomaly_id: str

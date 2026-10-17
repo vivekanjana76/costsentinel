@@ -2,9 +2,12 @@
 
 Autonomous, multi-agent FinOps governance for multi-subscription Azure estates.
 
-> **Phase 2 — mock only.** Everything in this repository runs offline against a
-> deterministic synthetic estate and a deterministic fake LLM. There are no cloud
-> calls, no model calls, and no credentials of any kind. See
+> **Offline by default; real access is opt-in.** A fresh clone with no `.env` runs
+> the whole pipeline against a deterministic synthetic estate and a deterministic fake
+> LLM, with no cloud calls, no model calls and no credentials of any kind — and that
+> is what CI runs. A real Azure estate and a real model are available behind explicit
+> configuration and are **read-only**: there is no execution path at all. See
+> [SECURITY.md](SECURITY.md) before a first real run, and
 > [ROADMAP.md](ROADMAP.md) for what each later phase adds.
 
 ## The problem
@@ -43,26 +46,36 @@ candidate set, and writes the prose. Anything destructive is classified `allow`,
 `review` or `block` and cannot reach an execution path without a recorded human
 decision.
 
+Some resources are idle *by design* -- a disaster-recovery standby, a snapshot under a
+retention requirement -- and CostSentinel reads the client's **tags**,
+deterministically, to tell. Such a finding is still shown, annotated with the tag that
+withheld the advice and with what the resource costs, and kept out of the actionable
+savings total. Exemption can only ever make the system recommend *less*: a tag may
+move a finding toward "leave this alone" and can never downgrade a safety
+classification or make something automatable.
+
 Read [ARCHITECTURE.md](ARCHITECTURE.md) for the full design, the graph diagram, and
 the decision log.
 
-### What Phase 2 contains
+### What ships today
 
 The complete six-specialist graph from CLAUDE.md section 5, with a supervisor owning
-every conditional edge:
+every conditional edge. Phase 2 built the graph; Phases 3 to 6 added read-only real
+access, durable memory, the evaluation harness and context-aware detection.
 
 | Piece | Status |
 |---|---|
 | Domain model | Provenance and verification on every derived fact; `MoneyAmount` refuses LLM provenance |
-| Provider seam | `AzureProvider` protocol + deterministic `MockAzureProvider` (21 resources, 3 reservations, 3 subscriptions, 2 clients) |
+| Provider seam | `AzureProvider` protocol, deterministic `MockAzureProvider` (21 resources, 3 reservations, 3 subscriptions, 2 clients), and a read-only real provider behind the `azure` extra |
 | Pricing | Every figure traces to a committed catalogue snapshot; refreshed by hand with `scripts/refresh_prices.py` |
-| LLM seam | `LLM` protocol + `FakeLLM`; Azure OpenAI and Gemini adapters are configuration-error stubs until Phase 3 |
+| LLM seam | `LLM` protocol + `FakeLLM` by default; Azure OpenAI (keyless or keyed) and Gemini adapters behind the `llm` extra |
 | Detectors | Eight deterministic detectors: orphaned disk, unattached IP, idle VM, oversized VM, stale snapshot, idle SQL, oversized App Service plan, unused reservation |
 | Graph | Supervisor + Anomaly Scout, Root-Cause Analyst, Savings Estimator, Optimization Planner, Policy Guard, Report Author |
 | Routing | Proceed, retry (bounded), escalate, require-approval, short-circuit — each a recorded decision with a reason |
 | Ranking | Deterministic weighted composite of savings, safety and confidence. The model narrates the order; it cannot change it |
 | Observability | Structured JSON logs correlated by `run_id`; tracing seam with a no-op default; token, cost and latency per run |
 | Governance | Every action classified `allow` / `review` / `block`. **No execution path exists** |
+| Exemption | Deterministic tag reading (Phase 6): a resource that is idle or stale by design is surfaced with its reason and excluded from the actionable savings total |
 | Entry points | `costsentinel scan` and `POST /scan` |
 
 ### What Phase 1 contained
@@ -157,11 +170,19 @@ Those exit non-zero and fail a build. Precision, recall, ranking and groundednes
 report a number and never block: a low score is something to look at, not a reason to
 refuse a merge.
 
-**The adversarial cases currently fail, deliberately.** Three of them record real gaps
-the harness found: the detectors read no tag exemption, so a disaster-recovery standby
-is reported as idle and a snapshot carrying a HIPAA retention tag is reported as stale;
-and the rightsizing thresholds let a genuinely oversized machine hide just above them.
-They are in the datasets to make those gaps visible, not to hide them.
+**The adversarial cases are the point of the datasets.** When the harness landed, all
+three of them failed, deliberately: the detectors read no tag exemption, so a
+disaster-recovery standby was reported as idle and a snapshot carrying a HIPAA
+retention tag was reported as stale, and the rightsizing thresholds let a genuinely
+oversized machine hide just above them. They were in the datasets to make those gaps
+visible rather than to hide them.
+
+Phase 6 closed all three, which is the sequence working as intended: measure first,
+then fix, so that neither number is a guess. The scorecard now reports 3/3 handled
+correctly with detection precision and recall both at 1.00. For the two resources that
+are idle *by design*, "handled correctly" means **surfaced but not actionably
+recommended** -- the standby really is idle, and a tool that scored full marks for
+never noticing it would be a worse tool, not a better one.
 
 ### Scanning a real Azure estate
 
@@ -211,7 +232,7 @@ curl -X POST localhost:8000/scan -H 'content-type: application/json' \
 Each client's scan is a LangGraph thread keyed by its run id, checkpointed to
 `.costsentinel/checkpoints.sqlite` after every node. A crashed or interrupted sweep
 resumes from the last completed node rather than re-reading the estate — which in
-Phase 7 is also the mechanism that lets the graph halt for days awaiting a human
+Phase 9 is also the mechanism that lets the graph halt for days awaiting a human
 approval.
 
 ### Observability
@@ -261,13 +282,14 @@ src/costsentinel/
   agents/            the six specialists, the supervisor, the memory consult step,
                      detectors, savings, ranking
   graph/             graph assembly + checkpointer + sweep runner
-  guardrails/        policy store, action classes, approval-gate seam
+  guardrails/        policy store, action classes, exemption policy, approval-gate seam
+  guardrails/data/   committed tag conventions that mark a resource exempt
   memory/            episodic + semantic stores, embedder, recall, decisions
   memory/data/       committed synthetic policy and guidance corpus
-  reports/           report rendering (Phase 7)
+  reports/           report rendering (Phase 8)
   observability/     structured logging + the tracing seam
   tools/             read-only MCP Azure tool server
-  a2a/               Agent Cards (Phase 9)
+  a2a/               Agent Cards (Phase 10)
   api/               FastAPI app
   cli.py             CLI entry point
 scripts/             refresh_prices.py (manual, never CI)
@@ -297,6 +319,12 @@ needs, and how to report a vulnerability.
   deliberately broken classifier and green again when it is restored.
 - Every action is classified; the built-in action-class floor cannot be loosened by
   configuration.
+- Exemption reads tags and can only reduce what is proposed. A tag can suppress a
+  recommendation and can never loosen a class, make something automatable, or raise a
+  finding's rank. Asserted structurally (the exemption modules cannot import a
+  classifier), representationally (a verdict has no field for a class or an amount),
+  exhaustively (every rule key and value against every gated action) and end to end.
+  A client's tag overlay may *add* exemptions and can never remove a built-in one.
 - LLM output and cloud resource metadata are both treated as untrusted: validated
   against a schema, and passed to models as delimited data, never as instructions.
 - No secrets in code or git. Configuration is environment-driven, and CI needs no

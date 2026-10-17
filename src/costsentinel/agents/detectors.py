@@ -30,17 +30,44 @@ from costsentinel.domain.estate import (
 from costsentinel.domain.signals import Observation, WasteKind, WasteSignal
 
 # --- thresholds ------------------------------------------------------------
-# Explicit, documented policy constants. They are not derived quantities, and they
-# are the knobs the Phase 5 evals calibrate against the labelled datasets.
+# Explicit, documented policy constants. They are not derived quantities, and the
+# evaluation harness measures what they cost in precision and recall.
 
 #: At or below this peak CPU, a running VM is considered idle.
 IDLE_CPU_MAX_PCT = Decimal("5.0")
 
-#: Above this average CPU, a VM is considered appropriately sized.
-OVERSIZED_CPU_AVG_PCT = Decimal("20.0")
-
-#: Above this peak CPU, a VM is considered appropriately sized.
-OVERSIZED_CPU_MAX_PCT = Decimal("40.0")
+#: At or below this peak CPU, a VM has at least one SKU step of capacity it never
+#: touches, and is therefore oversized.
+#:
+#: **Fifty is not a tuned number: it is the geometry of an Azure SKU family**
+#: (ARCHITECTURE.md D101). Each
+#: step within a family halves the vCPU count, so a machine's observed peak demand
+#: (``vcpu x peak / 100``) fits the next size down (``vcpu / 2``) exactly when the
+#: peak is at or below 50%. The threshold is the size-independent way of saying "the
+#: next SKU down would hold this workload", which is the question the detector is
+#: actually for.
+#:
+#: It replaced a flat 40% peak plus a 20% *average* ceiling, and both halves of that
+#: were wrong. The constants were absolute percentages, so they got less meaningful
+#: the larger the machine: 42% of 2 vCPU is 0.84 vCPU and there is nothing to
+#: reclaim, while 42% of 32 vCPU is 13.4 vCPU on a machine of 32 -- plainly
+#: oversized, and the Phase 5 scorecard measured the detector missing exactly that
+#: (``vm-claims-batch``, a D32s_v5 at 22% average and 42% peak, sitting just above
+#: both ceilings).
+#:
+#: The average ceiling was worse than merely imprecise, it was backwards. Its stated
+#: purpose was to avoid shrinking a spiky workload -- but a spiky workload has a
+#: *low* average and a *high* peak, so the peak test is what guards against that and
+#: the average test added nothing to it. What the average ceiling actually excluded
+#: was steadily-loaded machines, which are the easiest and safest rightsizing calls
+#: there are. A machine at 22% average and 42% peak is a predictable, well-behaved
+#: load on a box four times the size it needs, and it was being skipped for being too
+#: well-behaved.
+#:
+#: The average is still *required* -- a sizing conclusion is only drawn when both
+#: signals were measured -- and still reported as evidence. It simply no longer
+#: disqualifies anything.
+OVERSIZED_CPU_MAX_PCT = Decimal("50.0")
 
 #: Minimum observation window before a utilisation-based conclusion is drawn.
 MIN_OBSERVATION_DAYS = 7
@@ -285,35 +312,54 @@ def detect_oversized_virtual_machine(
     client: str,
     as_of: datetime,
 ) -> WasteSignal | None:
-    """A running VM in use, but on far more capacity than it ever consumes.
+    """A running VM in use, but on at least one SKU step more capacity than it needs.
 
-    Requires *both* average and peak to be low, so a spiky workload is not
-    mistakenly shrunk. Yields nothing for a machine that is already idle: the idle
-    detector's remediation -- deallocate, saving the whole charge -- strictly
-    dominates a resize, and two signals for one resource would double-count the
-    saving.
+    Keyed on peak alone, at the boundary where the next SKU down in the family would
+    still hold the observed demand (see :data:`OVERSIZED_CPU_MAX_PCT`). A spiky
+    workload is excluded by that same peak test, which is what the former average
+    ceiling was mistakenly thought to be doing.
+
+    Yields nothing for a machine that is already idle: the idle detector's
+    remediation -- deallocate, saving the whole charge -- strictly dominates a
+    resize, and two signals for one resource would double-count the saving.
+
+    Detection is separate from sizing on purpose, and the two use different
+    thresholds. This answers "is the machine larger than its workload needs", from
+    utilisation alone. :func:`~costsentinel.agents.savings.choose_rightsize_target`
+    answers "which smaller SKU, and what does it save", which needs a price
+    catalogue and a headroom policy. Collapsing them would mean the detector
+    inherited the headroom factor -- so raising headroom from 2.0 to 2.5 would make
+    machines *stop being oversized*, which is absurd: a policy about how much slack
+    to leave cannot change whether a machine is over-provisioned.
+
+    The visible consequence is a band where this fires and no saving can be named.
+    With a 2.0x headroom in a halving family nothing above a 25% peak has a
+    same-family target, so a machine between 25% and 50% is reported as oversized
+    with an explicitly unknown saving and a basis that says why. That is the honest
+    answer: the machine is too big, and choosing between a tighter margin and a
+    different SKU family is a decision for a person.
     """
     _ = as_of
     if resource.kind is not ResourceKind.VIRTUAL_MACHINE:
         return None
     if resource.state is not ResourceState.RUNNING:
         return None
+    # The average is required so a conclusion is only drawn where both signals were
+    # measured, and is reported as evidence. It no longer disqualifies anything.
     if metrics is None or metrics.cpu_avg_pct is None or metrics.cpu_max_pct is None:
         return None
     if metrics.observation_days < MIN_OBSERVATION_DAYS:
         return None
 
     already_idle = metrics.cpu_max_pct <= IDLE_CPU_MAX_PCT
-    busy_on_average = metrics.cpu_avg_pct >= OVERSIZED_CPU_AVG_PCT
-    peaks_high = metrics.cpu_max_pct >= OVERSIZED_CPU_MAX_PCT
-    if already_idle or busy_on_average or peaks_high:
+    peak_leaves_no_step = metrics.cpu_max_pct > OVERSIZED_CPU_MAX_PCT
+    if already_idle or peak_leaves_no_step:
         return None
 
     source = metrics.provenance
     evidence = [
         _observation("cpu_avg_pct", str(metrics.cpu_avg_pct), source),
         _observation("cpu_max_pct", str(metrics.cpu_max_pct), source),
-        _observation("avg_threshold_pct", str(OVERSIZED_CPU_AVG_PCT), source),
         _observation("peak_threshold_pct", str(OVERSIZED_CPU_MAX_PCT), source),
         _observation("observation_days", str(metrics.observation_days), source),
         _observation("sku", resource.sku or "unknown", resource.provenance),

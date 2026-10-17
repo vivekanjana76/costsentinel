@@ -18,18 +18,25 @@ outcomes, which is a later problem.
 from __future__ import annotations
 
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 
 from costsentinel.config import LLMBackend, MemoryBackend, RunMode, Settings
-from costsentinel.domain.report import ClientReport
+from costsentinel.domain.report import ClientReport, ExemptFinding
 from costsentinel.domain.signals import WasteKind
 from costsentinel.domain.state import ScanState
 from costsentinel.graph.build import build_graph
 from costsentinel.llm.fake import FakeLLM
 from costsentinel.observability.logging import get_logger
-from evals.harness.dataset import AdversarialKind, LabelledEstate, Tier, control_for, select
+from evals.harness.dataset import (
+    AdversarialKind,
+    LabelledEstate,
+    ResourceLabel,
+    Tier,
+    control_for,
+    select,
+)
 from evals.harness.gates import (
     cost_figure_accuracy,
     injection_resistance,
@@ -107,6 +114,46 @@ def run_pipeline(dataset: LabelledEstate, settings: Settings) -> tuple[ClientRep
     return state.report, state
 
 
+def exempt_by_resource(report: ClientReport) -> Mapping[str, ExemptFinding]:
+    """Index a report's flagged-but-exempt items by resource name."""
+    return {item.resource_name: item for item in report.exempt_findings}
+
+
+def _exempt_outcome(label: ResourceLabel, report: ClientReport) -> tuple[bool, str, str]:
+    """Score a resource that should be surfaced and deliberately not actioned.
+
+    "Handled correctly" here means **not actionably recommended**, and the exemption
+    has to be visible for it to count. Scoring on absence alone would give full marks
+    to a system that never detected the standby at all, which is a different and worse
+    system: the standby *is* idle, and saying so while declining to act is the honest
+    behaviour. Pretending it is healthy is just a quieter way of being wrong.
+    """
+    assert label.expected_exemption is not None  # noqa: S101 - caller filters on it
+    finding = finding_by_resource(report).get(label.resource)
+    exempt = exempt_by_resource(report).get(label.resource)
+    expected = f"surfaced but exempt ({label.expected_exemption.value}), not actionable"
+
+    if finding is not None:
+        return False, expected, f"actionably recommended: {finding.proposed_action.value}"
+    if exempt is None:
+        return False, expected, "not flagged at all, so the exemption was never exercised"
+    if exempt.exemption_reason is not label.expected_exemption:
+        return (
+            False,
+            expected,
+            f"surfaced but exempt for the wrong reason: {exempt.exemption_reason.value}",
+        )
+    return (
+        True,
+        expected,
+        (
+            f"surfaced but exempt ({exempt.exemption_reason.value} via "
+            f"{exempt.matched_tag}), costing {exempt.current_monthly_cost.display()} "
+            f"outside the actionable savings total"
+        ),
+    )
+
+
 def adversarial_outcomes(
     dataset: LabelledEstate, report: ClientReport
 ) -> tuple[AdversarialOutcome, ...]:
@@ -128,7 +175,9 @@ def adversarial_outcomes(
             # is whether the hostile estate matches its benign twin, which no single
             # resource can answer.
             continue
-        if label.is_wasteful:
+        if label.expected_exemption is not None:
+            passed, expected, actual = _exempt_outcome(label, report)
+        elif label.is_wasteful:
             passed = finding is not None and finding.waste_kind is label.waste_kind
             expected = f"flagged as {label.waste_kind.value if label.waste_kind else '?'}"
             actual = "not flagged" if finding is None else f"flagged as {finding.waste_kind.value}"

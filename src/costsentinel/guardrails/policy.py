@@ -180,8 +180,9 @@ _DESTRUCTIVE_DELETES: frozenset[ActionType] = frozenset(
 class PolicyStore:
     """Classifies actions, and answers what may be proposed and pre-checked.
 
-    Phase 1 reads the built-in tables above. Phase 3 loads client overlays on top,
-    which may only ever tighten a class.
+    Phase 1 reads the built-in tables above. Phase 9 loads client overlays on top,
+    which may only ever tighten a class -- the mirror of the exemption overlays, which
+    may only ever broaden toward inaction (ARCHITECTURE.md D99).
     """
 
     @property

@@ -79,6 +79,7 @@ packages = ["src/costsentinel", "evals"]
 # packages read at runtime, so they ship rather than being dev-only files.
 artifacts = [
     "src/costsentinel/providers/data/*.json",
+    "src/costsentinel/guardrails/data/*.json",
     "src/costsentinel/memory/data/*.md",
     "evals/datasets/*.json",
 ]

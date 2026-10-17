@@ -21,6 +21,7 @@ from costsentinel.domain.common import (
     Provenance,
     utc_now,
 )
+from costsentinel.domain.exemption import ExemptionReason
 from costsentinel.domain.observability import RunMetrics
 from costsentinel.domain.recommendations import ActionClass, ActionType
 from costsentinel.domain.signals import WasteKind
@@ -85,6 +86,47 @@ class ReportFinding(Frozen):
     )
 
 
+class ExemptFinding(Frozen):
+    """A real waste signal the client's own tags say not to act on.
+
+    Separate from :class:`ReportFinding` rather than a flag on it, and the separation
+    is the point. A :class:`ReportFinding` is a *proposal*: it has a rank, an action,
+    a class, a saving and a set of preconditions. An exempt item has none of those
+    and never will, so giving it the shape of a proposal would mean inventing a rank
+    for something nobody is being asked to do and an action nobody may take.
+
+    What it does carry is the one figure that is real: the resource's **current
+    monthly cost**, straight from the provider. That is not a saving and is never
+    added to one. It is what the client is spending on something they have told us to
+    leave alone, which is a fact worth putting in front of them -- they may decide
+    the standby is worth less than its bill, and that decision is theirs.
+    """
+
+    signal_id: str
+    waste_kind: WasteKind
+    subscription_id: str
+    resource_id: str
+    resource_name: str
+    current_monthly_cost: MoneyAmount
+    confidence: Confidence
+    detector: str
+    exemption_reason: ExemptionReason
+    exemption_rule: str = Field(
+        description="The rule that withheld remediation, so it can be disputed against a rule."
+    )
+    exemption_statement: str = Field(
+        description=(
+            "Why nothing is proposed, in words a client reads. Composed by the "
+            "exemption rule from fixed text plus the matched tag, never by a model."
+        )
+    )
+    matched_tag: str = Field(
+        default="",
+        description="The deciding tag as ``key=value``, already rendered safe for a document.",
+    )
+    evidence: tuple[str, ...] = ()
+
+
 class ApprovalQueueItem(Frozen):
     """A finding that cannot proceed without a human, surfaced for the client."""
 
@@ -137,6 +179,24 @@ class ReportTotals(Frozen):
             "provider data. Counted, never treated as zero."
         ),
     )
+    exempt_findings_count: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Real waste signals on resources the client's tags protect. Surfaced and "
+            "excluded from every savings figure above, because a total that quietly "
+            "absorbed them would promise savings nobody can realise."
+        ),
+    )
+    exempt_monthly_cost: MoneyAmount | None = Field(
+        default=None,
+        description=(
+            "What the client currently spends on the exempt resources. ``None`` when "
+            "nothing was exempt -- which is an absence rather than an unknown amount, "
+            "and the two should not render as the same thing. Deliberately a *cost* "
+            "and not a saving: nobody is proposing to recover it."
+        ),
+    )
 
 
 class ReportSeverity(StrEnum):
@@ -167,6 +227,16 @@ class ClientReport(Frozen):
     summary_provenance: Provenance
     totals: ReportTotals
     findings: tuple[ReportFinding, ...]
+    exempt_findings: tuple[ExemptFinding, ...] = Field(
+        default=(),
+        description=(
+            "Flagged but exempt: waste that is real and deliberately not actioned. "
+            "Listed separately from the findings so a client can see both what we "
+            "propose and what we found and chose not to propose, with the reason. "
+            "The alternative -- dropping them -- would make a thin report "
+            "indistinguishable from a clean estate."
+        ),
+    )
     waste_breakdown: tuple[WasteKindSummary, ...] = ()
     approval_queue: tuple[ApprovalQueueItem, ...]
     incomplete_reasons: tuple[str, ...] = Field(
@@ -191,6 +261,11 @@ class ClientReport(Frozen):
     def is_complete(self) -> bool:
         """Whether the run completed without escalating anything."""
         return not self.incomplete_reasons
+
+    @property
+    def has_exemptions(self) -> bool:
+        """Whether anything was flagged and deliberately left alone."""
+        return bool(self.exempt_findings)
 
 
 class ScanResult(Frozen):

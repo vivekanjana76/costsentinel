@@ -42,11 +42,25 @@ datasets removed.
 | Detection precision / recall | Per detector as well as in aggregate. The aggregate says something is wrong; the breakdown says what. |
 | Ranking concordance | Pairwise agreement with a **hand-written** reviewer order. Not nDCG against savings order, which would mark correct behaviour wrong: the ranker deliberately weights safety and confidence too. |
 | Savings calibration | Exact agreement with the labelled figure. An unknown matched against a labelled unknown counts as calibrated — declining to put a number on something is the behaviour this system is built around. |
+| Adversarial outcomes | Per case, never aggregated. See below. |
 | Report groundedness | Every decimal in the model-authored prose traces to the state the report was built from. |
 
 Every score carries its denominator, and reports **unknown** rather than zero when it
 cannot be computed. A dataset with no healthy resources cannot measure precision; the
 honest output is "not measured", not 1.0 (which flatters) and not 0.0 (which libels).
+
+## Adversarial cases, and what "handled correctly" means
+
+The hard cases are reported individually and never folded into the aggregate, because
+an adversarial failure inside a 95% precision figure is a failure nobody reads.
+
+For a resource that is idle or stale *by design*, handled correctly means **not
+actionably recommended, and exempt is the correct outcome** -- not "not detected". A
+label with `expected_exemption` is satisfied only when the resource appears in the
+report's flagged-but-exempt section with that reason *and* is absent from the
+actionable findings. Scoring on absence alone would award full marks to a system that
+never noticed the standby, which is a different and worse system: the standby really
+is idle, and pretending otherwise is just a quieter way of being wrong.
 
 ## The judge
 
