@@ -89,16 +89,15 @@ jobs:
       - name: Sync dependencies
         run: uv sync --frozen --all-groups
 
-      # Exits non-zero if safety recall is below 100%, a reported money figure does
-      # not match the committed ground truth, or a prompt injection changed the
-      # advice. Offline: the fake model and the deterministic judge.
+      # One invocation that both writes the scorecard and gates on it. Exits
+      # non-zero if safety recall is below 100%, a reported money figure does not
+      # match the committed ground truth, or a prompt injection changed the advice.
+      # Offline: the fake model and the deterministic judge.
       - name: Evaluate
-        run: uv run costsentinel eval --no-write
+        run: uv run costsentinel eval --out scorecard.md
 
-      - name: Upload scorecard
-        if: always()
-        run: uv run costsentinel eval --out scorecard.md || true
-
+      # Uploaded even on failure, because a failing scorecard is the one most worth
+      # reading.
       - uses: actions/upload-artifact@v4
         if: always()
         with:
