@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from costsentinel.domain.analysis import RankingScore, RootCause
 from costsentinel.domain.common import utc_now
 from costsentinel.domain.estate import Estate
+from costsentinel.domain.exemption import ExemptionVerdict
 from costsentinel.domain.governance import (
     ActionClassification,
     ApprovalDecision,
@@ -55,6 +56,19 @@ class ScanState(BaseModel):
     # --- detection -------------------------------------------------------
     signals: tuple[WasteSignal, ...] = ()
     anomalies: tuple[CostAnomaly, ...] = ()
+
+    # --- exemption -------------------------------------------------------
+    exemptions: tuple[ExemptionVerdict, ...] = Field(
+        default=(),
+        description=(
+            "Verdicts for the signalled resources a tag convention marks as idle, "
+            "stale or oversized on purpose. Only the exempt ones are carried: an "
+            "estate's worth of 'we looked and found nothing' would bloat every "
+            "checkpoint, so the count examined is recorded on the estate-read audit "
+            "event instead. An exemption withholds a recommendation and nothing "
+            "else -- it classifies, prices and ranks nothing."
+        ),
+    )
 
     # --- diagnosis -------------------------------------------------------
     root_causes: tuple[RootCause, ...] = ()
@@ -121,6 +135,38 @@ class ScanState(BaseModel):
             (d for d in self.decisions if d.recommendation_id == recommendation_id),
             None,
         )
+
+    def exemption_for(self, resource_id: str) -> ExemptionVerdict | None:
+        """The exemption held against one resource, or ``None``."""
+        return next((e for e in self.exemptions if e.resource_id == resource_id), None)
+
+    @property
+    def exempt_resource_ids(self) -> frozenset[str]:
+        """Resources whose waste signals are deliberately not acted on."""
+        return frozenset(exemption.resource_id for exemption in self.exemptions)
+
+    @property
+    def exempt_signals(self) -> tuple[WasteSignal, ...]:
+        """Signals that are real and deliberately not actioned.
+
+        Surfaced, not suppressed. A cost tool that silently dropped an idle machine
+        would be lying by omission, and the client would lose the one fact they
+        might act on later -- that the standby costs them money every month whether
+        or not they choose to keep it.
+        """
+        exempt = self.exempt_resource_ids
+        return tuple(signal for signal in self.signals if signal.resource_id in exempt)
+
+    @property
+    def actionable_signals(self) -> tuple[WasteSignal, ...]:
+        """Signals a remediation may be proposed for.
+
+        What the diagnosis, pricing and planning nodes work from. Exempt signals are
+        excluded here rather than inside each node, so there is one definition of
+        "actionable" rather than four that can drift.
+        """
+        exempt = self.exempt_resource_ids
+        return tuple(signal for signal in self.signals if signal.resource_id not in exempt)
 
     def signal(self, signal_id: str) -> WasteSignal | None:
         """One signal by id, or ``None``."""

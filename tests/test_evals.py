@@ -562,11 +562,29 @@ def test_a_quality_drop_does_not_fail_the_run() -> None:
 
     Wiring quality into the verdict would mean the first person to add a hard dataset
     broke the build -- which is the surest way to get hard datasets removed.
+
+    Asserted against a *forced* quality drop rather than against a real one. This
+    test used to read ``precision < 1`` with the comment "the lookalikes dataset
+    drags it down", which was true while the detectors had no tag exemption and the
+    lookalikes dataset held two measured false positives. Phase 6 fixed them, and the
+    test went red -- for the best possible reason, but it showed the assertion was
+    pinned to a defect rather than to the design. A precision of 1.00 should not make
+    this claim unprovable.
     """
     card = evaluate()
-    assert card.precision.value is not None
-    assert card.precision.value < Decimal(1)  # the lookalikes dataset drags it down
     assert card.passed
+
+    degraded = card.model_copy(
+        update={
+            "precision": Score.of("detection.precision", 1, 2),
+            "recall": Score.of("detection.recall", 1, 2),
+            "ranking": Score.of("ranking.concordance", 1, 4),
+            "calibration": Score.of("savings.calibration", 0, 3),
+        }
+    )
+    assert degraded.precision.value == Decimal("0.5000")
+    assert degraded.passed, "a quality metric must never decide the verdict"
+    assert not degraded.failures
 
 
 # ---------------------------------------------------------------------------

@@ -122,6 +122,7 @@ class AuditEventType(StrEnum):
     SCAN_STARTED = "scan_started"
     ESTATE_READ = "estate_read"
     SIGNAL_DETECTED = "signal_detected"
+    EXEMPTION_APPLIED = "exemption_applied"
     RECOMMENDATION_PROPOSED = "recommendation_proposed"
     ACTION_CLASSIFIED = "action_classified"
     APPROVAL_REQUESTED = "approval_requested"

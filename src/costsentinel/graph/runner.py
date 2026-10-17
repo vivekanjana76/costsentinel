@@ -26,6 +26,7 @@ from costsentinel.domain.report import ClientReport, ScanResult
 from costsentinel.domain.state import ScanState
 from costsentinel.graph.build import build_graph
 from costsentinel.graph.checkpointer import checkpointer_for
+from costsentinel.guardrails.exemption import get_exemption_policy
 from costsentinel.guardrails.policy import PolicyStore
 from costsentinel.llm import get_llm
 from costsentinel.llm.base import LLM
@@ -99,16 +100,19 @@ def run_client_scan(
     active_tracer = tracer or NoOpTracer()
     traced = TracedLLM(llm, tracer=active_tracer, settings=settings)
     store = memory or NullMemoryStore()
-    # Derived from settings rather than taken as an argument. The embedder is a
-    # function of configuration, not a collaborator a caller chooses, and adding an
-    # eleventh injected dependency here would be a ratchet rather than a seam.
+    # Derived from settings rather than taken as arguments. An embedder and a set of
+    # tag conventions are both functions of configuration, not collaborators a
+    # caller chooses, and adding an eleventh injected dependency here would be a
+    # ratchet rather than a seam.
     embedder = get_embedder(settings)
+    exemptions = get_exemption_policy(settings)
 
     graph = build_graph(
         provider=provider,
         llm=traced,
         settings=settings,
         policy=policy,
+        exemptions=exemptions,
         memory=store,
         embedder=embedder,
         checkpointer=checkpointer,
@@ -126,6 +130,7 @@ def run_client_scan(
             "model": llm.name,
             "tracer": active_tracer.name,
             "memory": store.name,
+            "exemption_ruleset": exemptions.name,
         },
     )
 
