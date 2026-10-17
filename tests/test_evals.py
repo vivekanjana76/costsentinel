@@ -316,19 +316,54 @@ def test_the_quality_metrics_are_measured_and_report_their_denominators() -> Non
         assert str(score.denominator) in score.display()
 
 
-def test_the_scorecard_names_the_gaps_rather_than_hiding_them() -> None:
-    """The adversarial cases currently fail, and the scorecard must say so.
+def test_every_adversarial_case_is_handled_correctly() -> None:
+    """3 of 3, and this is the acceptance test for Phase 6.
 
-    This test will need updating when the detectors gain tag exemptions. That is the
-    point: a scorecard whose numbers never move is not measuring anything.
+    It read the other way round until Phase 6: it asserted that at least one
+    adversarial case was failing, with a comment saying it would need updating when
+    the detectors gained tag exemptions. They did, so it does -- which was the point
+    of writing it that way rather than leaving the gap unmeasured.
     """
     card = evaluate()
     assert card.adversarial
-    failing = [o for o in card.adversarial if not o.passed]
-    assert failing, "if the adversarial cases now pass, update this test and the report"
-    for outcome in failing:
-        assert outcome.note
-        assert outcome.expected != outcome.actual
+    failing = [outcome.line() for outcome in card.adversarial if not outcome.passed]
+    assert not failing, failing
+    assert card.adversarial_passed == len(card.adversarial) == 3
+
+
+def test_the_scorecard_names_a_gap_rather_than_hiding_it() -> None:
+    """An adversarial failure inside an aggregate is a failure nobody reads.
+
+    Asserted against a forced failure rather than a real one, now that there are no
+    real ones. What matters is that a failing case is named with its dataset, its
+    resource, what was expected and what happened -- and that it stays outside the
+    aggregate precision, so a reader cannot mistake "0.92 precision" for "the hard
+    cases are fine".
+    """
+    card = evaluate()
+    broken = (
+        card.datasets[0]
+        .adversarial[0]
+        .model_copy(update={"passed": False, "actual": "flagged as idle_virtual_machine"})
+    )
+    degraded = card.model_copy(
+        update={
+            "datasets": (
+                card.datasets[0].model_copy(update={"adversarial": (broken,)}),
+                *card.datasets[1:],
+            )
+        }
+    )
+
+    assert degraded.adversarial_passed < len(degraded.adversarial)
+    rendered = degraded.markdown()
+    assert broken.dataset_id in rendered
+    assert broken.resource in rendered
+    assert broken.expected in rendered
+    assert broken.actual in rendered
+    assert broken.note in rendered
+    # Reported, and still not blocking: the gates decide the verdict.
+    assert degraded.precision.value == card.precision.value
 
 
 # ---------------------------------------------------------------------------
