@@ -177,7 +177,7 @@ class Scorecard(Frozen):
 
     def markdown(self) -> str:
         """The committed report, so a diff shows what moved."""
-        verdict = "**PASS**" if self.passed else "**FAIL**"
+        verdict = "PASS" if self.passed else "FAIL"
         lines = [
             "# CostSentinel evaluation scorecard",
             "",
