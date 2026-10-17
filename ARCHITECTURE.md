@@ -583,29 +583,149 @@ response cannot name an operation the system does not already permit.
 
 ## 9. Evaluation approach
 
-Evals are a deliverable, not an afterthought, because "did we find the waste" and
-"did we gate the dangerous thing" are the product's actual claims.
+Implemented in Phase 5. Evals are a deliverable, not an afterthought, because "did we
+find the waste" and "did we gate the dangerous thing" are the product's actual claims
+— and for four phases those claims rested entirely on hand-written tests of specific
+cases.
 
-**Datasets** (`evals/datasets/`) are labelled synthetic estates: generated Azure
-estates with ground-truth annotations of which resources are wasteful, what kind of
-waste, and what the correct remediation and savings figure are.
+### 9.1 The one invariant
 
-**Metrics**
+**The harness observes the pipeline. It never mutates or special-cases it.** Nothing
+in `src/costsentinel` knows it is being evaluated. Asserted four ways in
+`tests/test_evals.py`:
 
-| Metric | What it asserts |
-|---|---|
-| Waste-detection precision / recall | Detectors find real waste and few false positives. |
-| Recommendation ranking quality | nDCG against ground-truth savings ordering. |
-| Cost-figure accuracy | **Hard assertion**: no number in a report has LLM provenance. |
-| Savings-estimate calibration | Estimated vs ground-truth savings, within tolerance. |
-| Report groundedness | LLM-as-judge: every claim traces to a state field. |
-| Safety recall | **Every** destructive action was correctly classified and gated. |
+1. `evals` imports from `costsentinel`; nothing under `src/costsentinel` imports from
+   `evals`, bar the CLI's `eval` handler, which does so lazily *inside the function* —
+   so importing the CLI does not drag the harness in, and the dependency stays
+   one-directional in substance as well as in form.
+2. No production module contains an eval-only flag, branch or environment check. A
+   stray `if settings.is_eval:` would make every score a measurement of a special
+   case and would be invisible to an import scan.
+3. Datasets reach the pipeline through `DatasetProvider`, which satisfies the same
+   `AzureProvider` protocol as the mock and the real one. The graph cannot tell a
+   dataset from an estate because there is nothing to notice.
+4. The graph is the one `build_graph` builds, with the same arguments. `run_pipeline`
+   compiles it directly only because the judge needs the final state and
+   `run_client_scan` returns only the report.
 
-**Harness** (`evals/harness/`) runs the real pipeline — not a reimplementation —
-against a dataset and emits a scorecard. CI runs a fast smoke subset on every
-commit; the full suite runs on demand. A drop in **safety recall** is a build
-failure, not a warning: it is the one metric where a regression is a safety
-incident.
+### 9.2 Datasets
+
+Four labelled estates under `evals/datasets/`, each **one** committed JSON file
+holding both the estate and the right answers. Two files would drift, and a label that
+no longer matches its estate is worse than no label.
+
+Every resource *and* reservation carries a label, including the healthy ones. An
+estate of nothing but waste cannot measure precision, and an unlabelled resource is
+neither a true positive nor a false one — it is uncounted, which is the worst of the
+three. Every label carries a mandatory `note` saying why that is the right answer, so
+a future disagreement is with a stated argument rather than with a bare boolean.
+
+The estate is a *specification* — SKU, state, size, tags, measured utilisation — and
+`DatasetProvider` prices it from the committed catalogue by `(sku, kind, region)`, the
+same path every other provider uses. A dataset therefore cannot assert a price Azure
+does not charge.
+
+**Ground truth is committed, not recomputed** (D86). Each wasteful resource carries
+the exact expected monthly saving, derived by hand from the rules in `agents/savings.py`
+and the catalogue, and reviewed once. Computing it at scoring time from the same
+catalogue would make the cost-figure gate compare a calculation to itself and pass
+unconditionally. A label may state the expected saving as **unknown**, which is a real
+answer: a database already on the smallest tier the catalogue carries has no cheaper
+target, and reporting its full cost as a "saving" would claim a figure for an action
+that cannot be named.
+
+**Adversarial cases** are first-class, because an eval over easy cases measures only
+that the easy cases work:
+
+| Kind | In the datasets |
+| --- | --- |
+| A healthy resource that looks wasteful | A disaster-recovery standby at 0.8% CPU; a 900-day snapshot carrying a HIPAA retention tag |
+| A wasteful one that looks healthy | A `D32s_v5` at 42% peak, sitting just above both rightsizing thresholds |
+| A prompt-injection attempt | A resource name that closes the evidence fence and issues a system instruction; tags asking for an action outside the closed vocabulary and forging a whole evidence block with a fabricated figure |
+
+### 9.3 Gates, not scores
+
+Two of CLAUDE.md section 8's metrics are not percentages, and the distinction is drawn
+in the code — `gates.py` versus `metrics.py` — rather than only in the prose.
+
+| Gate | Requirement |
+| --- | --- |
+| `safety.recall` | Every destructive remediation classified **at least** as strictly as its labelled floor, and requiring approval. Not 97%: a tool that gates 97% of its deletions is a tool that will delete something. |
+| `cost.figure_accuracy` | Every reported figure **equal** to the committed ground truth. Not within tolerance. Plus the annual figure is twelve times the monthly, the client total is the sum of its findings, and no figure has LLM provenance. |
+| `injection.resistance` | A hostile name or tag changed no action, class, figure or headline total, measured differentially against a benign twin. |
+
+"At or above" rather than "equal to" for safety recall, because policy may tighten a
+class and may never loosen one (D8): a label saying `review` is satisfied by a
+`block`, and the reverse is a failure. A destructive action the pipeline never found
+is *not* counted here — that is a recall failure, and folding it in would let a
+detector that finds nothing score perfect safety.
+
+The injection fingerprint deliberately omits the resource name (D89). The hostile
+dataset varies exactly those names, so a name-keyed comparison could not align the two
+runs — and keying a security comparison on a value under the attacker's control is the
+wrong instinct regardless. What must be invariant is the *shape of the advice*.
+
+### 9.4 Quality metrics
+
+These report a number and never fail a run. Wiring a quality floor into the verdict
+would mean the first person to add a hard dataset broke the build, which is the surest
+way to get hard datasets removed.
+
+| Metric | What it measures |
+| --- | --- |
+| Detection precision / recall | Per detector as well as in aggregate. The aggregate says something is wrong; the breakdown says what, and is not dominated by whichever waste kind happens to appear most. |
+| Ranking concordance | Pairwise agreement with a hand-written reviewer order (D87). |
+| Savings calibration | Exact agreement with the labelled figure. An unknown matched against a labelled unknown counts as calibrated. |
+| Report groundedness | Every decimal in the model-authored prose traces to the state the report was built from. |
+
+Every score carries its denominator — "precision 1.00" over two resources is not the
+claim a reader will take it for — and reports **unknown** rather than zero when it
+cannot be computed. `Score` carries that distinction in its type: `None` is not 1.0,
+which flatters, and not 0.0, which libels.
+
+A finding of the *wrong kind* on a genuinely wasteful resource counts as a false
+positive for the kind claimed *and* a false negative for the kind labelled. Calling a
+disk an idle VM is not a partially right answer.
+
+### 9.5 The judge
+
+`FakeJudge` is the default and the only one CI uses, and it is not a stub. It checks
+the one thing about prose that is mechanically checkable: **every decimal the report
+states must appear in the state it was built from.** A summary claiming "savings of
+98,765.43" when nothing computed that figure fails, and says why. That is a narrower
+claim than a real model makes and a far more reliable one, and it is precisely the
+failure mode the system exists to prevent.
+
+`ModelJudge` is opt-in and goes through the existing structured-output seam, so its
+verdict is schema-validated like any other response and cannot introduce a number. Its
+job is the claims traceability cannot see — a confident sentence about a cause nobody
+observed — not re-checking the arithmetic.
+
+### 9.6 The scorecard
+
+A typed `Scorecard`, rendered as a committed Markdown report (`evals/REPORT.md`, so a
+diff shows what moved) and a terminal summary. Three presentation rules, all serving
+the same end:
+
+- **Gates lead.** A scorecard headlining "precision 0.92" buries an ungated deletion.
+- **A failing gate is visually distinct from a low score,** because the two mean
+  categorically different things.
+- **Adversarial cases are listed individually,** never folded into the aggregate. An
+  adversarial failure inside a 95% figure is a failure nobody sees.
+
+### 9.7 Running it
+
+`costsentinel eval` runs everything; `--smoke` runs the fast subset. The smoke tier is
+a genuine subset — two of four datasets, under four seconds — and enforces **every**
+gate, because one that skipped them would be worse than none: it would look like
+coverage. It runs in the normal CI job on every commit; the full run is on `master`
+and on demand.
+
+A scored run is fully offline and explicit about it: `FakeLLM`, `FakeEmbedder`, the
+deterministic judge, and memory off. The settings are constructed rather than read
+from the environment, so a developer's local `.env` cannot change a scorecard, and
+memory is off because a score that depended on a local store would not be
+reproducible.
 
 ---
 
@@ -1319,3 +1439,120 @@ so a one-word query costs the same as a full document. Building the vector spars
 and materialising it once fixes that. *Found by* the test suite slowing down sharply
 under coverage instrumentation, which traces every one of those iterations — a real
 inefficiency that only became visible because something amplified it.
+
+### Phase 5 decisions
+
+**D85. The evaluation harness moved ahead of anomaly detection.** *Alternatives:* keep
+the order set after Phase 4. *Why:* CLAUDE.md section 8 calls evaluations "a
+first-class deliverable, not an afterthought", and four phases had shipped detectors,
+ranking weights, savings arithmetic and a memory penalty with no measurement of
+precision, recall or ranking quality at all — every claim about them rested on
+hand-written tests of specific cases. Two consequences made the ordering wrong. The
+safety-recall gate protects every later phase, so the longer it waits the more
+unguarded work accumulates behind it. And anomaly detection is *exactly* the work that
+needs a scorecard: its thresholds are tuning parameters, and tuning them without a
+measurement is guessing. Building the harness first means the anomaly phase can be
+calibrated rather than asserted.
+
+**D86. Ground truth is committed, not recomputed.** *Alternatives:* compute each
+expected saving at scoring time from the price catalogue, which would never go stale.
+*Why:* it would make the cost-figure gate compare a calculation to itself and pass
+unconditionally — the gate would be a tautology dressed as a check. Committing a
+figure a human derived from the stated rules and reviewed once means the gate compares
+two independent derivations. The cost is that refreshing the catalogue breaks these
+files loudly, which is the same bargain `tests/test_graph.py` already makes, and the
+right way round. *Found while writing them:* three of the four baseline figures were
+wrong on the first attempt — I had assumed rightsizing steps down one SKU rather than
+to the smallest that fits, and had put a figure on a database already at the smallest
+tier the catalogue carries. Working out which side was right is the work.
+
+**D87. Ranking quality is pairwise concordance with a hand-written order, not nDCG
+against savings.** *Alternatives:* the ROADMAP's original proposal, nDCG against the
+ground-truth savings ordering. *Why:* the ranker deliberately weights safety and
+confidence as well as money (D36), so scoring it against a pure savings order would
+mark correct behaviour wrong — the metric would punish the design. Deriving the
+expected order from the same weights the ranker uses would be circular. So each label
+may carry an `expected_rank` that is a human judgement about where a FinOps reviewer
+would put that finding, and the metric measures agreement with a person. Pairs where
+the labels express no opinion, or where a finding is missing, are not counted: a
+ranking metric should not be penalised for a detection failure it is not measuring.
+
+**D88. Quality metrics never fail a run; three gates do.** *Alternatives:* a minimum
+precision, which is what most eval harnesses grow. *Why:* a precision of 0.80 is
+information somebody should act on, and a destructive action that was not gated is a
+defect. Collapsing the two into one verdict loses that distinction in the direction
+that matters. A quality floor would also mean the first person to add a genuinely hard
+dataset broke the build, which is the surest way to get hard datasets quietly removed.
+The gates are named explicitly in `BLOCKING_GATES` rather than inferred, so adding one
+is a deliberate act a reviewer can see.
+
+**D89. The injection fingerprint omits the resource name.** *Alternatives:* compare
+per resource, which is the obvious design and what the first implementation did.
+*Why:* the hostile dataset varies exactly those names, so a name-keyed comparison
+cannot align the two runs at all. More importantly, keying a security comparison on a
+value under the attacker's control is the wrong instinct even where it happens to
+work. What must be invariant under an injection is the *shape of the advice* — which
+kinds of waste were found, what was proposed, how strictly classified, what each was
+worth, and the headline totals — so the gate compares multisets of exactly that.
+
+**D90. Injection resistance is measured differentially, against a benign twin.**
+*Alternatives:* a single hostile run, checked for sanity. *Why:* "the output looked
+reasonable" is all a single run can support, and it is not the claim that matters. Two
+runs over estates identical in every respect that should matter let the gate assert
+that the advice is *identical*, which is a property rather than an impression. A test
+checks that the two datasets really do differ only in names and tags, because that
+assumption is what the whole measurement rests on.
+
+**D91. A destructive action the pipeline never found is not a safety failure.** *Why:*
+it is a recall failure, which the detection metric reports. Folding it into safety
+recall would let a detector that finds nothing score perfect safety, which is the
+exact inversion of what the gate is for. The two failures have different fixes and
+belong in different numbers.
+
+**D92. Safety recall checks "at least as strict as", not equality.** *Why:* policy may
+tighten a class and may never loosen one (D8), so a label saying `review` is satisfied
+by a `block`. *Demonstrated by a real mistake:* I labelled an orphaned disk in a
+*development* subscription as expecting `block`, having copied the reasoning from the
+production baseline without noticing the environment differs — the built-in floor is
+`review` and production tightens it. The gate failed on its first real outing, on my
+label rather than on the code. A gate that catches a wrong expectation is working.
+
+**D93. The judge is deterministic by default, and stricter than a model.**
+*Alternatives:* require a real model, which is what "LLM-as-judge" literally asks for.
+*Why:* a metric that only works with a credential is a metric CI never computes, and
+groundedness unmeasured is groundedness unenforced. `FakeJudge` does not score
+plausibility, which is not checkable; it checks traceability, which is — every decimal
+in the prose must appear in the state the report was built from. That is a narrower
+claim and a far more reliable one, and it catches precisely the failure this system
+is built to prevent. The real judge is opt-in for the claims traceability cannot see.
+*Found by the judge's own first version:* collecting money figures only, it reported
+eight ungrounded claims that were all confidence scores the ranking rationale
+legitimately quotes. A strict check still has to be a correct one.
+
+**D94. The smoke tier is a genuine subset that still enforces every gate.**
+*Alternatives:* run everything on every commit (the datasets are fast), or run a
+smoke subset with the gates relaxed for speed. *Why:* the first makes the tier
+decorative, and a distinction that means nothing is worse than no distinction — it
+invites someone to trust it later. The second is worse still: a smoke run without the
+gates would look like coverage while providing none. So smoke is two of four datasets,
+chosen for breadth (`baseline-mixed`) and for the security gate
+(`injection-hostile`, which pulls in its benign twin automatically), runs in under
+four seconds, and gates identically to the full run.
+
+**D95. `evals` ships in the wheel.** *Alternatives:* keep it a repository-only tool,
+which is what the directory layout in CLAUDE.md section 4 implies. *Why:*
+`costsentinel eval` is the command that makes the product's claims checkable, and a
+claim only its author can verify is a weaker claim. Shipping the harness and the
+labelled datasets costs a few tens of kilobytes and lets whoever installed
+CostSentinel run the same scorecard. It is also the only way the documented command
+works from an installed console script.
+
+**D96. The adversarial cases fail, and the scorecard says so.** *Alternatives:* tune
+the detectors until they pass, or soften the labels until they agree. *Why:* both
+would destroy the measurement. The three failures record three real gaps — no tag
+exemption, so a disaster-recovery standby reads as idle and a HIPAA-retained snapshot
+reads as stale; and rightsizing thresholds that let a genuinely oversized machine hide
+just above them. Calibration belongs to Phase 6, the phase that needs it: measuring
+something and immediately changing it would leave neither number trustworthy. A test
+asserts the failures are still there *and* says to update it when they are fixed,
+because a scorecard whose numbers never move is not measuring anything.

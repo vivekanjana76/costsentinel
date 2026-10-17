@@ -1,6 +1,6 @@
 # CostSentinel — Roadmap
 
-**Current phase: 5** — the evaluation harness and scorecard.
+**Current phase: 6** — cost anomalies and real-model hardening.
 
 Phases are sequential. Do not start work in a later phase before the current phase
 is complete and its exit criteria are met. If an idea arrives mid-phase, record it
@@ -246,38 +246,51 @@ rather than a score.
 
 Milestone: *Phase 5 - Evaluation harness*.
 
-- [ ] Labelled synthetic estates under `evals/datasets/`, each paired with
+- [x] Labelled synthetic estates under `evals/datasets/`, each paired with
       ground-truth labels: which resources are genuinely wasteful and of what kind,
       which are healthy, and for destructive remediations the correct action class
       (#36)
-- [ ] Deliberately adversarial cases: a healthy resource that looks wasteful, a
+- [x] Deliberately adversarial cases: a healthy resource that looks wasteful, a
       wasteful one that looks healthy, and a prompt-injection attempt in a resource
       name and a tag (#37)
-- [ ] A harness under `evals/harness/` that runs the **real** graph against each
+- [x] A harness under `evals/harness/` that runs the **real** graph against each
       estate -- no special-casing, no production code aware it is being evaluated
       (#38)
-- [ ] Quality metrics: waste-detection precision and recall with a per-detector
+- [x] Quality metrics: waste-detection precision and recall with a per-detector
       breakdown, recommendation ranking quality, and savings-estimate calibration
       (#39)
-- [ ] Report groundedness via LLM-as-judge, behind a deterministic `FakeJudge` so it
+- [x] Report groundedness via LLM-as-judge, behind a deterministic `FakeJudge` so it
       is scored offline in CI, with the real judge opt-in (#40)
-- [ ] **Hard gates, not scores:** safety recall below 100%, or any reported money
+- [x] **Hard gates, not scores:** safety recall below 100%, or any reported money
       figure that does not equal the committed ground-truth arithmetic, fails the run
       (#41)
-- [ ] Prompt-injection resistance scored as a gate: a hostile name or tag must not
+- [x] Prompt-injection resistance scored as a gate: a hostile name or tag must not
       alter a single action or classification (#42)
-- [ ] A typed `Scorecard` rendered as a committed Markdown report and a terminal
+- [x] A typed `Scorecard` rendered as a committed Markdown report and a terminal
       summary, with the adversarial cases called out (#43)
-- [ ] `costsentinel eval`, plus a fast smoke subset in the normal CI job and the full
+- [x] `costsentinel eval`, plus a fast smoke subset in the normal CI job and the full
       run on demand, both documented (#44)
-- [ ] An asserted boundary: `evals` imports from `costsentinel`, and nothing under
+- [x] An asserted boundary: `evals` imports from `costsentinel`, and nothing under
       `src/costsentinel` imports from `evals` (#45)
-- [ ] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.5.0 (#46)
+- [x] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.5.0 (#46)
 
-**Exit criteria:** `uv run costsentinel eval` emits a scorecard; the smoke subset runs
-in CI on every commit, offline; a deliberately mis-classified destructive action fails
-the run with a non-zero exit, demonstrated red and then green; and a test asserts the
+**Exit criteria (met):** `uv run costsentinel eval` emits a scorecard and writes
+`evals/REPORT.md`; the smoke subset runs in CI on every commit, offline, in under four
+seconds, enforcing every gate; a deliberately broken classifier fails the run with
+exit 1, demonstrated red and then green; 850 tests pass at 94% coverage with `domain`,
+`agents`, `guardrails` and `graph` at 97-100%; and four separate tests assert the
 pipeline contains no knowledge of the harness.
+
+**Current scores**, from the committed `evals/REPORT.md`: all three gates pass;
+detection precision 0.86, recall 0.92, ranking concordance 0.97, savings calibration
+1.00, report groundedness 0.96.
+
+**Three adversarial cases fail, deliberately and on the record.** The detectors have
+no tag exemption, so a disaster-recovery standby reads as idle and a snapshot carrying
+a HIPAA retention tag reads as stale; and the rightsizing thresholds sit where a
+genuinely oversized machine hides just above them. Those are the first real findings
+the harness produced, and fixing them is Phase 6's job -- see "Deliberately not in
+this phase".
 
 **Deliberately *not* in this phase:** tuning any threshold or weight in response to a
 score. Measuring and then immediately changing what is measured would leave neither
@@ -308,6 +321,19 @@ rather than assert.
       names and tags drawn from the evidence path
 - [ ] Calibrate detector thresholds and the ranking weights against the Phase 5
       scorecard and observed real estates, replacing the Phase 2 defaults
+- [ ] Close the three gaps the Phase 5 scorecard found, which are the first
+      measured defects in the system rather than guesses at one:
+      - a tag-exemption mechanism, so a resource tagged as a disaster-recovery
+        standby is not reported as idle and one tagged with a regulatory retention
+        reference is not reported as a stale snapshot. Both are in the committed
+        FinOps policy already; the detectors do not read it.
+      - the rightsizing threshold boundary, where a `D32s_v5` at 42% peak is
+        genuinely oversized and reads as correctly sized. Note that the 2.0 headroom
+        factor makes anything above a 33% peak unrightsizable in a doubling SKU
+        family, which is a property of the policy parameter rather than of the
+        detector.
+      - once each is fixed, the adversarial labels stop being expected failures and
+        `test_the_scorecard_names_the_gaps_rather_than_hiding_them` needs updating
 
 **Exit criteria:** a spend spike in a real subscription is detected, attributed and
 reported; a primary-backend failure falls back to the secondary without failing the

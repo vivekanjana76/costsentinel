@@ -739,3 +739,143 @@ def test_writing_the_report_creates_its_directory(tmp_path: Path) -> None:
     path = write_report(card, tmp_path / "nested" / "REPORT.md")
     assert path.is_file()
     assert "CostSentinel evaluation scorecard" in path.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# The real judge, and the provider's surface
+# ---------------------------------------------------------------------------
+
+
+def test_the_model_judge_asks_the_model_which_claims_it_cannot_trace() -> None:
+    """Driven by a double, so no credential and no network.
+
+    The real judge exists for the claims traceability cannot see -- a confident
+    sentence about a cause nobody observed -- so what is asserted here is the shape of
+    the request and the handling of the verdict, not a quality score.
+    """
+    from evals.harness.judge import JudgeVerdict, ModelJudge
+
+    from costsentinel.llm.base import LLMTask, Prompt
+
+    class _Recording:
+        def __init__(self) -> None:
+            self.prompts: list[Prompt] = []
+
+        @property
+        def name(self) -> str:
+            return "recording-llm"
+
+        def structured(self, *, task: LLMTask, prompt: Prompt, schema: type) -> object:
+            self.prompts.append(prompt)
+            assert schema is JudgeVerdict
+            return JudgeVerdict(unsupported_claims=(), verdict="every claim traces to the state")
+
+    dataset = next(d for d in load_all() if d.dataset_id == "baseline-mixed")
+    report, state = run_pipeline(dataset, eval_settings(_STATE))
+
+    llm = _Recording()
+    judge = ModelJudge(llm)  # type: ignore[arg-type]
+    assert judge.name == "model-judge:recording-llm"
+
+    result = judge.score(report, state)
+    assert result.claims
+    assert result.unsupported == ()
+
+    # The report and the state both reach the model, as fenced evidence.
+    (prompt,) = llm.prompts
+    labels = {block.label for block in prompt.evidence}
+    assert labels == {"report", "state"}
+    assert "do not produce any figure of your own" in prompt.instruction
+    # No numeric field in the contract, same rule as every other.
+    assert not {"saving", "cost", "amount"} & set(JudgeVerdict.model_fields)
+
+
+def test_the_model_judge_marks_the_claims_the_model_named() -> None:
+    from evals.harness.judge import JudgeVerdict, ModelJudge, _prose
+
+    from costsentinel.llm.base import LLMTask, Prompt
+
+    dataset = next(d for d in load_all() if d.dataset_id == "baseline-mixed")
+    report, state = run_pipeline(dataset, eval_settings(_STATE))
+    doubted = _prose(report)[0][1]
+
+    class _Doubting:
+        @property
+        def name(self) -> str:
+            return "doubting-llm"
+
+        def structured(self, *, task: LLMTask, prompt: Prompt, schema: type) -> object:
+            _ = (task, prompt, schema)
+            return JudgeVerdict(
+                unsupported_claims=(doubted,), verdict="the summary overstates the estate"
+            )
+
+    result = ModelJudge(_Doubting()).score(report, state)  # type: ignore[arg-type]
+    assert result.unsupported
+    assert any("overstates" in claim.reason for claim in result.unsupported)
+    assert result.score is not None and result.score < 1
+
+
+def test_the_dataset_provider_exposes_what_the_harness_needs() -> None:
+    dataset = next(d for d in load_all() if d.dataset_id == "baseline-mixed")
+    provider = DatasetProvider(dataset)
+
+    assert provider.name == "eval-dataset:baseline-mixed"
+    assert provider.dataset is dataset
+    assert provider.catalogue.is_real_api_pull
+
+    subscription = provider.list_subscriptions()[0]
+    assert provider.list_subscriptions(client=dataset.estate.client) == (subscription,)
+    assert provider.list_subscriptions(client="somebody-else") == ()
+    assert provider.list_reservations(client="somebody-else") == ()
+
+    resource_id = provider.resource_id_for("vm-web-01")
+    assert resource_id is not None and resource_id.startswith("/subscriptions/")
+    assert provider.resource_id_for("no-such-resource") is None
+
+
+def test_an_unmeasured_resource_reports_no_metrics() -> None:
+    """``None`` is a label in its own right.
+
+    A dataset can state that a resource was never measured, and a detector that
+    flags it anyway has invented a fact.
+    """
+    dataset = next(d for d in load_all() if d.dataset_id == "baseline-mixed")
+    provider = DatasetProvider(dataset)
+    disk_id = provider.resource_id_for("disk-web-01-os")
+    assert disk_id is not None
+    assert provider.get_resource_metrics(disk_id) is None
+
+
+def test_a_sku_the_catalogue_does_not_price_is_unknown_not_guessed(
+    tmp_path: Path,
+) -> None:
+    source = json.loads((datasets_dir() / "injection-control.json").read_text(encoding="utf-8"))
+    for resource in source["estate"]["resources"]:
+        if resource["name"] == "vm-sandbox-busy":
+            resource["sku"] = "Standard_NoSuchSize"
+    path = tmp_path / "unpriced.json"
+    path.write_text(json.dumps(source), encoding="utf-8")
+
+    provider = DatasetProvider(load_dataset(path))
+    resource = next(
+        r
+        for r in provider.list_resources(source["estate"]["subscriptions"][0]["subscription_id"])
+        if r.name == "vm-sandbox-busy"
+    )
+    assert resource.monthly_cost.amount is None
+    assert "no price for Standard_NoSuchSize" in (resource.monthly_cost.provenance.reference or "")
+
+
+def test_the_cost_series_is_flat_so_observed_spend_is_exact() -> None:
+    """A varied series would make the figure depend on a seed.
+
+    This phase scores figures exactly, so there is nothing to sample.
+    """
+    dataset = next(d for d in load_all() if d.dataset_id == "baseline-mixed")
+    provider = DatasetProvider(dataset)
+    subscription = provider.list_subscriptions()[0].subscription_id
+    series = provider.get_cost_series(subscription)
+    assert series.window_days == 30
+    assert len({point.amount for point in series.points}) == 1
+    assert series.observed_spend().amount == dataset.estate.daily_spend * 30
