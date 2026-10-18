@@ -1,4 +1,4 @@
-"""Report rendering (Phase 8).
+"""Report rendering (Phase 9).
 
 Markdown and PDF rendering of a
 :class:`~costsentinel.domain.report.ClientReport`, with per-client branding and a
@@ -9,5 +9,5 @@ rendered report traces to a state field -- rendering must not become a place whe
 an ungrounded figure can appear. Phase 1 serialises the report as JSON instead; the
 CLI's ``--summary`` is a terminal digest, not a report.
 
-See ROADMAP.md Phase 8.
+See ROADMAP.md Phase 9.
 """

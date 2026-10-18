@@ -5,8 +5,8 @@ classifies every action and builds an :class:`ApprovalRequest` for anything gate
 but does not yet halt the graph -- and because Phase 1 has no execution path at all,
 classifying without halting cannot cause a mutation.
 
-Phase 9 turns this into a durable LangGraph interrupt with a local CLI gate
-(ARCHITECTURE.md D7); Phase 9 adds the Teams and Slack adapters. All of them satisfy
+Phase 10 turns this into a durable LangGraph interrupt with a local CLI gate
+(ARCHITECTURE.md D7); Phase 10 adds the Teams and Slack adapters. All of them satisfy
 this same protocol and produce the same
 :class:`~costsentinel.domain.governance.ApprovalDecision`.
 """

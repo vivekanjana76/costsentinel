@@ -15,7 +15,7 @@ Four decisions live here:
   records *why* it is incomplete, rather than either looping or dying silently;
 * **require-approval** -- gated actions route to the approval seam.
 
-Phase 9 turns that last branch into a durable interrupt. This phase builds the seam
+Phase 10 turns that last branch into a durable interrupt. This phase builds the seam
 and the records it will act on, which is why :class:`RouteAction` already has a
 ``REQUIRE_APPROVAL`` member that currently routes onward to the report.
 """

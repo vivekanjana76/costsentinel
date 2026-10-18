@@ -420,7 +420,7 @@ def _decided_by(args: argparse.Namespace) -> str:
 
     The OS user is a weak identity and deliberately so: this records who typed the
     command on a machine somebody already has access to. Authenticated approver
-    identity is the approval gate's problem (Phase 9), and pretending otherwise here
+    identity is the approval gate's problem (Phase 10), and pretending otherwise here
     would overstate what the record proves.
     """
     if args.by:

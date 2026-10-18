@@ -1,6 +1,6 @@
 # CostSentinel — Roadmap
 
-**Current phase: 7** — cost anomalies and real-model hardening.
+**Current phase: 7** — spend anomalies and the ranking rule.
 
 Phases are sequential. Do not start work in a later phase before the current phase
 is complete and its exit criteria are met. If an idea arrives mid-phase, record it
@@ -48,6 +48,24 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 > against the scorecard; calibrating against a scorecard that contains known false
 > positives would tune the detectors around a defect. Fixing what is already measured
 > comes before measuring more. Phases 8-12 were renumbered.
+>
+> After Phase 6, **the anomaly phase was split in two**: spend-anomaly detection and
+> the ranking rule are now Phase 7, and anomaly attribution plus real-model hardening
+> become Phase 8 (ARCHITECTURE.md D103). Phases 8-13 renumbered again.
+>
+> The split is along one line: **what can be measured offline against committed data,
+> and what needs a real estate or a real model to mean anything.** A statistical
+> detector over a cost series can be scored completely against committed synthetic
+> series -- step change, reverting spike, seasonal pattern -- so it belongs in a phase
+> whose exit criteria CI can check. Retry-and-fallback between two real backends, a
+> token-spend guardrail and red-teaming against a live model cannot. Bundling them
+> would have produced a phase that could not be verified without a subscription and an
+> API key, which is the opposite of how every phase so far has been closed.
+>
+> The ranking rule joins this phase rather than waiting, because an anomaly is a
+> finding with **no saving at all**. Shipping anomalies while "how does an unquantified
+> finding rank" was still an open question would have meant every anomaly inheriting an
+> unsettled rule, and the open decision becoming load-bearing before it was decided.
 
 ---
 
@@ -117,9 +135,8 @@ coverage, with `domain`, `graph` and `guardrails` at 98-100%; `ruff`, `ruff form
 and `pyright` (strict on `src`) all clean.
 
 **Deliberately *not* in this phase:** the approval-gate adapters and the durable
-interrupt (Phase 9), real LLM backends (Phase 3), and statistical cost-anomaly
-detection (Phase 7, where real cost history and a clean scorecard make it
-calibratable).
+interrupt (Phase 10), real LLM backends (Phase 3), and statistical cost-anomaly
+detection (Phase 7, where a clean scorecard makes it calibratable).
 
 **New dependencies to flag:** `langfuse` as an *optional* extra only. It is imported
 lazily behind a `Tracer` protocol so that tracing is never a hard dependency, CI does
@@ -171,9 +188,9 @@ runbook. The first real run is the operator's call, not the build's -- and it is
 exactly the step this phase was built to make safe rather than to take on somebody's
 behalf.
 
-**Deliberately *not* in this phase:** any write, delete or mutate path (Phase 11);
-statistical cost-anomaly detection and real-model hardening (Phase 4, split out of
-this one).
+**Deliberately *not* in this phase:** any write, delete or mutate path (Phase 13);
+statistical cost-anomaly detection (Phase 7) and real-model hardening (Phase 8), both
+split out of this one.
 
 **New dependencies, all optional extras so CI stays lean and offline:** `fastmcp`,
 `azure-identity`, `azure-mgmt-resourcegraph`, `azure-mgmt-costmanagement`,
@@ -236,7 +253,7 @@ Worth watching rather than acting on; if it keeps climbing, the end-to-end deter
 tests are the ones to consolidate.
 
 **Deliberately *not* in this phase:** the approval gate itself and its Teams and Slack
-adapters (Phase 9). `decide` is a recording CLI, not a gate -- it writes an outcome
+adapters (Phase 10). `decide` is a recording CLI, not a gate -- it writes an outcome
 after the fact rather than halting a run. Separating them is what lets the learning
 loop be demonstrated now instead of waiting for the adapters.
 
@@ -387,22 +404,75 @@ Three things to carry forward rather than claim as finished:
 
 ---
 
-## Phase 7 — Cost anomalies and real-model hardening
+## Phase 7 — Spend anomalies and the ranking rule
 
-**Goal:** the work that only becomes meaningful once real cost history and real models
-are in hand. Split out of the original Phase 3 so that the safety-critical capability
-unlock and this ordinary feature work are separately reviewable, then deferred twice:
-behind the memory layer because threshold calibration wants history that only real
-sweeps accumulate (D67), behind the evaluation harness because tuning a threshold
-without a measurement is guessing (D85), and behind context-aware detection because
-calibrating against a scorecard containing known false positives would tune the
-detectors around a defect (D97). This is the first phase that can calibrate against a
-clean measurement.
+**Goal:** detect that spend *changed* -- as distinct from "this resource is wasteful"
+-- using transparent arithmetic over a cost series, and settle how a finding with no
+quantified saving ranks.
 
-- [ ] Statistical cost-anomaly detection over the cost series, emitting `CostAnomaly`.
-      Needs real cost history to calibrate thresholds against, which is why it waited.
-- [ ] Anomaly root-cause correlation: tie a spend spike to the resource or service
-      that caused it
+Deferred three times to get here: behind the memory layer because threshold
+calibration wants history (D67), behind the evaluation harness because tuning a
+threshold without a measurement is guessing (D85), and behind context-aware detection
+because calibrating against a scorecard containing known false positives would tune
+the detectors around a defect (D97). This is the first phase that can calibrate
+against a clean measurement.
+
+The ranking rule comes first, in its own issue, because an anomaly carries **no saving
+at all**. Shipping anomalies while "how does an unquantified finding rank" was still
+open would mean every anomaly inheriting an unsettled rule.
+
+Milestone: *Phase 7 - Spend anomalies and the ranking rule*.
+
+- [ ] The phase split recorded, and CLAUDE.md section 14 gains the rule that a
+      test asserts *intended* behaviour: a deliberately open gap is a strict
+      `xfail` naming its closing issue, never a wrong answer asserted as correct
+      (#58)
+- [ ] **The ranking rule, resolved and documented:** an unknown or unquantified saving
+      ranks **low until quantified**, so a known saving of any positive magnitude
+      outranks an unknown one, and reversibility breaks ties between comparable known
+      magnitudes rather than letting an unknown outrank a known (#59)
+- [ ] The eval's expected ranks updated to the chosen rule, with the previously
+      documented discordant pair resolved **by rule** rather than by relabelling one
+      case, and concordance reported before and after (#60)
+- [ ] A deterministic statistical detector over a cost or usage series, per
+      subscription and per resource where available, finding level shifts and spikes
+      against a trailing baseline by a transparent method. Every alert states the
+      baseline, the observed value and the deviation in plain numbers (#61)
+- [ ] Committed, seeded synthetic series in the mock provider: a genuine step change,
+      a one-off spike that reverts, a steady healthy series, and a seasonal pattern
+      that must **not** alert (#62)
+- [ ] `CostAnomaly` as a first-class finding distinct from a waste signal. It says
+      "spend changed, investigate", never "this resource is wasteful, act", and
+      **cannot** produce an automatable recommendation -- asserted, not asserted-about
+      (#65)
+- [ ] Labelled anomaly cases in the eval with precision and recall as a quality
+      metric, plus an adversarial case the seasonal pattern must not fire on (#63)
+- [ ] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.7.0 (#64)
+
+**Exit criteria:** `uv run costsentinel eval` detects the step change and the spike,
+does **not** alert on the seasonal pattern or the healthy series, and reports anomaly
+precision and recall; a test proves no unknown saving can outrank a known one and no
+anomaly can reach an automatable action; and a gap in a series is reported as unknown
+rather than as a zero or an anomaly.
+
+**Deliberately *not* in this phase:** attributing a spike to the resource that caused
+it, egress and data-transfer anomalies, real-model retry and fallback, a token-spend
+guardrail, and threshold recalibration against real estates. All of those are Phase 8,
+because none of them can be scored without a real subscription or a real model, and a
+phase whose exit criteria CI cannot check is a phase nobody can close honestly.
+
+---
+
+## Phase 8 — Anomaly attribution and real-model hardening
+
+**Goal:** the work that only becomes meaningful once a real estate and a real model
+are in hand. Split out of the anomaly phase (D103) precisely because none of it can be
+measured offline: a fallback between two backends needs two backends, a token-spend
+guardrail needs real token spend, and recalibrating a threshold needs real history.
+
+- [ ] Anomaly root-cause correlation: tie a spend change to the resource or service
+      that caused it. Needs a real cost series broken down by resource, which the
+      synthetic series deliberately does not model
 - [ ] Egress and data-transfer anomaly detection
 - [ ] Real-model hardening: retry and fallback from the primary backend to the
       secondary on failure or schema violation, with the fallback recorded in the trace
@@ -412,13 +482,14 @@ clean measurement.
       names and tags drawn from the evidence path
 - [ ] Calibrate detector thresholds and the ranking weights against the Phase 5
       scorecard and observed real estates, replacing the Phase 2 defaults
-**Exit criteria:** a spend spike in a real subscription is detected, attributed and
-reported; a primary-backend failure falls back to the secondary without failing the
-sweep; a hostile resource name cannot alter a recommendation.
+
+**Exit criteria:** a spend change in a real subscription is attributed to a resource
+and reported; a primary-backend failure falls back to the secondary without failing
+the sweep; a hostile resource name cannot alter a recommendation on a real backend.
 
 ---
 
-## Phase 8 — Reporting
+## Phase 9 — Reporting
 
 **Goal:** output a client would actually accept as a deliverable.
 
@@ -453,7 +524,7 @@ template engine (`jinja2`).
 
 ---
 
-## Phase 9 — The approval gate and its adapters
+## Phase 10 — The approval gate and its adapters
 
 **Goal:** a gated action halts the graph until a human decides, wherever that human
 already works.
@@ -483,7 +554,7 @@ verification library.
 
 ---
 
-## Phase 10 — A2A layer
+## Phase 11 — A2A layer
 
 **Goal:** specialists are discoverable and invocable by external agents, without
 routing around governance.
@@ -502,7 +573,7 @@ typed result; an external attempt to execute a gated action is refused.
 
 ---
 
-## Phase 11 — Dashboard
+## Phase 12 — Dashboard
 
 **Goal:** an operator view across the estate.
 
@@ -520,7 +591,7 @@ action entirely from the dashboard.
 
 ---
 
-## Phase 12 — Execution and hardening
+## Phase 13 — Execution and hardening
 
 **Goal:** approved changes are actually applied, safely.
 
@@ -548,7 +619,7 @@ a complete audit chain from signal to execution, and the outcome recorded.
 
 ## Later features, scheduled
 
-- **Config-tunable ranking weights per client** (Phase 9, with the client policy
+- **Config-tunable ranking weights per client** (Phase 10, with the client policy
   overlays the approval gate needs anyway).
   The Phase 2 weights -- 0.60 savings, 0.25 safety, 0.15 confidence -- are a product
   judgement baked into a module constant. Different clients have genuinely different
@@ -560,7 +631,7 @@ a complete audit chain from signal to execution, and the outcome recorded.
   model output.
 
 - **Report residual spend alongside the saving, for every conservative action**
-  (Phase 8, with reporting). A finding currently says "resize this VM, saves
+  (Phase 9, with reporting). A finding currently says "resize this VM, saves
   $140/month". For a conservative action it does not say what remains: downsizing
   `Standard_D8s_v5` to `Standard_D4s_v5` saves half and leaves the other half
   running. A client reading a report with a $12,000 annual savings headline cannot

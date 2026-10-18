@@ -6,7 +6,7 @@ Azure adapter a thin wrapper and makes test doubles trivial, while pyright still
 checks conformance statically.
 
 The interface is read-only. Write operations do not appear here, and will not until
-Phase 12 -- a provider literally cannot mutate anything through this seam.
+Phase 13 -- a provider literally cannot mutate anything through this seam.
 """
 
 from __future__ import annotations

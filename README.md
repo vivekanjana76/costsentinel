@@ -232,7 +232,7 @@ curl -X POST localhost:8000/scan -H 'content-type: application/json' \
 Each client's scan is a LangGraph thread keyed by its run id, checkpointed to
 `.costsentinel/checkpoints.sqlite` after every node. A crashed or interrupted sweep
 resumes from the last completed node rather than re-reading the estate — which in
-Phase 9 is also the mechanism that lets the graph halt for days awaiting a human
+Phase 10 is also the mechanism that lets the graph halt for days awaiting a human
 approval.
 
 ### Observability
@@ -286,10 +286,10 @@ src/costsentinel/
   guardrails/data/   committed tag conventions that mark a resource exempt
   memory/            episodic + semantic stores, embedder, recall, decisions
   memory/data/       committed synthetic policy and guidance corpus
-  reports/           report rendering (Phase 8)
+  reports/           report rendering (Phase 9)
   observability/     structured logging + the tracing seam
   tools/             read-only MCP Azure tool server
-  a2a/               Agent Cards (Phase 10)
+  a2a/               Agent Cards (Phase 11)
   api/               FastAPI app
   cli.py             CLI entry point
 scripts/             refresh_prices.py (manual, never CI)

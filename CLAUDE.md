@@ -199,6 +199,34 @@ Commit as each small unit completes. Do not accumulate a phase into one dump.
 `Closes #NN` line for every issue it completes. CI must pass before merge. After
 merging, tag a semver release (for example `v0.2.0`) and update `CHANGELOG.md`.
 
+**A test asserts intended behaviour, and says why in one line.** Every test carries a
+one-line reason -- a docstring stating what property it pins and why that property
+matters. A test whose name describes a mechanism and whose body asserts a constant is
+a test nobody can review.
+
+**Never assert a known-wrong answer as if it were correct.** When a gap is
+deliberately left open, encode the *target* behaviour and mark it `xfail` (or `skip`
+where the code cannot run at all) with `reason=` naming the issue that will close it:
+
+```python
+@pytest.mark.xfail(reason="seasonal baseline not implemented yet; closes #61", strict=True)
+def test_a_seasonal_pattern_does_not_alert() -> None:
+    """A weekly batch window is a pattern, not an anomaly."""
+```
+
+`strict=True` so the marker is removed when the gap closes rather than lingering. The
+test then **turns green on its own** when the work lands. The alternative -- asserting
+the wrong answer and calling it expected -- means the test goes *red* when the bug is
+fixed and has to be rewritten, which is exactly what happened twice in Phase 6
+(`test_a_quality_drop_does_not_fail_the_run` asserted `precision < 1`, and
+`test_the_scorecard_names_the_gaps_rather_than_hiding_them` asserted that an
+adversarial case was still failing). Both went red for the best possible reason and
+both had to be rewritten, which is a cost that an `xfail` avoids entirely.
+
+A labelled eval case is the exception and stays as it is: a dataset label records the
+*right answer* and the scorecard reports the gap as a measured failure, which is the
+dataset's whole job. The rule above is about the pytest suite.
+
 **History must reflect real work only.** Never fabricate commits, never backdate
 activity, and never open an issue or a PR describing work that did not happen. If
 work predates this process -- as the Phase 1 scaffold does -- land it as its own

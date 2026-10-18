@@ -1,6 +1,6 @@
 """Recording what a human decided about a recommendation.
 
-This is deliberately not the approval gate. The gate (Phase 9) halts a run until a
+This is deliberately not the approval gate. The gate (Phase 10) halts a run until a
 decision exists and then authorises an action. This records an outcome *after* a
 report has been read, so the next sweep knows better -- and it exists now, several
 phases early, because otherwise there would be no way to demonstrate that the
