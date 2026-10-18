@@ -246,8 +246,8 @@
       "expected_action": "delete_unattached_public_ip",
       "expected_action_class": "block",
       "expected_monthly_saving": "3.65",
-      "expected_rank": 8,
-      "note": "Unattached static address, billed hourly for nothing. Small money, but release is irreversible and a DNS record or firewall entry may still point at it, so the floor is block. Ranked last because the saving is trivial and the action is irreversible."
+      "expected_rank": 7,
+      "note": "Unattached static address, billed hourly for nothing. Small money, but release is irreversible and a DNS record or firewall entry may still point at it, so the floor is block. Ranked last because the saving is trivial and the action is irreversible. Ranked above sql-reporting only because its saving is quantified and sql-reporting's is not: 3.65 is the smallest figure in this estate, and under the ranking rule a small known saving still outranks an unknown one (D104)."
     },
     {
       "resource": "snap-web-01-pre-migration",
@@ -271,8 +271,8 @@
       "expected_action": "scale_down_sql_database",
       "expected_action_class": "review",
       "expected_monthly_saving": null,
-      "expected_rank": 7,
-      "note": "Zero connections over 30 days, so it is certainly waste. But GP_Gen5_2 is the smallest General Purpose tier the committed catalogue carries, so there is no cheaper target and the saving is genuinely unknown. Labelled unknown deliberately: a tool that reported the full 222.24 here would be claiming a saving from an action it cannot name, and this case exists to check that an unknown stays unknown rather than becoming a zero or a guess."
+      "expected_rank": 8,
+      "note": "No connections at all over 30 days, so the database is idle. Scaling down is the conservative remediation -- 'nobody connected' is not proof nothing needs it -- and it is reversible, which is why review rather than block. The expected saving is unknown, and that is the honest answer rather than a gap: GP_Gen5_2 is the smallest General Purpose tier the catalogue carries, so there is no cheaper target to price, and reporting the database's full cost as a 'saving' would be claiming a figure for an action CostSentinel cannot name.\n\nRanked last by rule, not by judgement of this case. An unquantified saving ranks below every quantified one (ARCHITECTURE.md D104), so this sits beneath pip-decommissioned-lb's 3.65 even though downsizing a database is the more reversible action and, on a reviewer's instinct, the more useful thing to do first. That is the uncomfortable edge of the rule and it is accepted on purpose: the alternative is a report that puts an item it cannot cost above one it can, which is a claim about money made without a number."
     },
     {
       "resource": "sql-orders",

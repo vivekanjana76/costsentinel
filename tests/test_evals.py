@@ -458,6 +458,45 @@ def test_both_look_alike_cases_expect_an_exemption() -> None:
         assert "surfaced-but-exempt" in label.note
 
 
+def test_the_labelled_order_expresses_the_ranking_rule() -> None:
+    """Every labelled unquantified saving ranks below every labelled quantified one.
+
+    Pins the labels against the rule (ARCHITECTURE.md D104) rather than against a
+    remembered set of numbers. Without this, a future edit could quietly restore the
+    old order on one case, concordance would drop by a pair, and the scorecard would
+    read as a regression in the *ranker* rather than a disagreement in the *labels*.
+    """
+    checked = 0
+    for dataset in load_all():
+        ranked = [label for label in dataset.labels if label.expected_rank is not None]
+        quantified = [
+            label.expected_rank
+            for label in ranked
+            if label.expected_monthly_saving is not None and label.expected_rank is not None
+        ]
+        unquantified = [
+            label.expected_rank
+            for label in ranked
+            if label.expected_monthly_saving is None and label.expected_rank is not None
+        ]
+        if not quantified or not unquantified:
+            continue
+        checked += 1
+        assert min(unquantified) > max(quantified), (
+            f"{dataset.dataset_id}: an unquantified saving is labelled above a "
+            f"quantified one, which contradicts D104"
+        )
+    assert checked, "no dataset labels both a quantified and an unquantified rank"
+
+
+def test_the_report_explains_the_ranking_rule_it_is_scored_against() -> None:
+    """A metric scored against an unstated rule is a metric nobody can dispute."""
+    rendered = evaluate(tier=Tier.SMOKE).markdown()
+    assert "an unquantified saving ranks" in rendered
+    assert "below every quantified one" in rendered
+    assert "made this metric vacuous" in rendered
+
+
 def test_the_report_explains_what_handled_correctly_means() -> None:
     """A redefinition nobody can find reads as a bar being quietly lowered."""
     rendered = evaluate(tier=Tier.SMOKE).markdown()

@@ -5,7 +5,7 @@
 
 **Verdict: PASS**
 
-- Generated: `2026-10-17T16:25:39+00:00`
+- Generated: `2026-10-18T15:22:41+00:00`
 - Datasets: 4 (all)
 - Judge: `fake-traceability-judge`
 
@@ -29,9 +29,24 @@ a reason to refuse a merge.
 | --- | --- | --- |
 | Detection precision | 1.00 | 13 finding(s) |
 | Detection recall | 1.00 | 13 labelled waste |
-| Ranking concordance | 0.97 | 30 pair(s) |
+| Ranking concordance | 1.00 | 30 pair(s) |
 | Savings calibration | 1.00 | 13 figure(s) |
 | Report groundedness | 0.95 (61/64) | 64 claim(s) |
+
+Ranking concordance is pairwise agreement with a **hand-written** reviewer
+order, not nDCG against savings order -- the ranker deliberately weights
+safety and confidence too, so scoring it against a pure savings order would
+mark correct behaviour wrong.
+
+The labelled order expresses one stated rule: **an unquantified saving ranks
+below every quantified one** (ARCHITECTURE.md D104). Phase 5 recorded a single
+discordant pair -- an unpriced idle database sitting above a small,
+irreversible, priced snapshot deletion -- and deliberately left it, because
+editing one label to match the code would have made this metric vacuous.
+Phase 7 resolved it by **settling the rule and applying it to every label that
+carries an unquantified saving**, which is a different thing: the pipeline and
+the labels now agree because both follow a rule that is written down, tested
+and reported on each finding.
 
 ## Per-detector breakdown
 
@@ -75,7 +90,7 @@ Detail:
 - **`vm-dr-standby`** (looks_wasteful_is_healthy) — handled correctly. Expected surfaced but exempt (disaster_recovery), not actionable; got surfaced but exempt (disaster_recovery via role=disaster-recovery-standby), costing 280.32 USD outside the actionable savings total.
   - Labelled reasoning: 0.8% average and 2.1% peak CPU with no inbound traffic: on the numbers alone this is the most idle machine in the estate. It is also a disaster-recovery standby, tagged as one and named in a runbook, and being idle is the entire point of it. The committed FinOps policy says so explicitly: 'A disaster-recovery standby is idle by design.' A tool that recommends deallocating it is recommending the removal of a control, and the client will say so. The correct outcome is surfaced-but-exempt: the detector should still see that it is idle, the report should still show the 280.32 USD a month it costs, and the role tag should withhold the recommendation and keep that figure out of the actionable savings total. Not detecting it would also produce 'no recommendation', and would be the wrong way to get there -- the client would lose the one fact they might act on later, which is what the standby is costing them.
 - **`vm-claims-batch`** (looks_healthy_is_wasteful) — handled correctly. Expected flagged as oversized_virtual_machine; got flagged as oversized_virtual_machine.
-  - Labelled reasoning: 22% average and 42% peak sat just above both of the old rightsizing ceilings (20% average and 40% peak), so it read as appropriately sized. It is not: 42% of 32 vCPU is 13.4 vCPU of real demand on a machine of 32. Phase 6 replaced the two absolute ceilings with a single 50% peak threshold, which is where the next SKU down in a halving family stops holding the observed demand -- a general rule, not a constant tuned to this resource. The saving is still unknown, and that is the honest answer rather than a gap: the rightsizing rule requires 32 x 0.42 x 2.0 = 26.9 vCPU of headroom, which only a D32s_v5 satisfies, so no smaller same-family SKU fits. The report says the machine is oversized and says it cannot name a target that preserves the configured headroom, which leaves the choice between a tighter margin and a different SKU family where it belongs -- with a person.
+  - Labelled reasoning: 22% average and 42% peak sat just above both of the old rightsizing ceilings (20% average and 40% peak), so it read as appropriately sized. It is not: 42% of 32 vCPU is 13.4 vCPU of real demand on a machine of 32. Phase 6 replaced the two absolute ceilings with a single 50% peak threshold, which is where the next SKU down in a halving family stops holding the observed demand -- a general rule, not a constant tuned to this resource. The saving is still unknown, and that is the honest answer rather than a gap: the rightsizing rule requires 32 x 0.42 x 2.0 = 26.9 vCPU of headroom, which only a D32s_v5 satisfies, so no smaller same-family SKU fits. The report says the machine is oversized and says it cannot name a target that preserves the configured headroom, which leaves the choice between a tighter margin and a different SKU family where it belongs -- with a person. Its expected rank of 1 is uncontested here because it is the only actionable finding in this estate; under the ranking rule (D104) an unquantified saving ranks below every quantified one, so in an estate with priced findings this would sit beneath all of them.
 - **`snap-clinical-retained`** (looks_wasteful_is_healthy) — handled correctly. Expected surfaced but exempt (retention_required), not actionable; got surfaced but exempt (retention_required via retention=HIPAA-6YR-REF-2291), costing 67.58 USD outside the actionable savings total.
   - Labelled reasoning: 900 days old, five times past the staleness threshold, and 512 GB of it. It also carries a retention tag naming a six-year HIPAA requirement, which the committed policy exempts: 'Snapshots supporting a regulatory retention period are exempt and must be tagged retention with the requirement reference.' Deleting it would be a compliance breach, not a saving. The correct outcome is surfaced-but-exempt: the snapshot is genuinely stale and genuinely costing money, and the retention tag is the reason nothing is proposed. Suppressing the finding entirely would hide a real cost behind a compliance obligation the client may be able to meet more cheaply.
 

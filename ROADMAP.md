@@ -665,45 +665,39 @@ a complete audit chain from signal to execution, and the outcome recorded.
 ## Open decisions
 
 Things that need a judgement rather than an implementation. Recorded here rather than
-settled quietly in code, because each one changes what a client is told.
+settled quietly in code, because each one changes what a client is told. Resolved ones
+stay, with the reasoning and the position that lost, because the argument is worth more
+than the conclusion.
 
-- **How should an unknown saving participate in ranking?** Unresolved, and visible in
-  the Phase 5 scorecard as the single discordant ranking pair.
+- ~~**How should an unknown saving participate in ranking?**~~ **Resolved in Phase 7**
+  (ARCHITECTURE.md D104): an unquantified saving ranks **low until quantified**. A
+  quantified saving of any positive magnitude outranks an unquantified one, and
+  reversibility breaks ties between comparable known magnitudes rather than promoting
+  an unknown above a known.
 
-  Today an unpriced finding scores zero on the savings component and keeps its safety
-  and confidence components (`agents/ranking.py`), so a reversible-but-unquantified
-  finding can outrank an irreversible one carrying a small but known figure. That is
-  what happens to `sql-reporting` (zero connections, no cheaper tier, saving unknown)
-  against `snap-web-01-pre-migration` (33.79, irreversible): the pipeline puts the
-  unquantified one higher and the hand-written label puts it lower.
+  Of the two positions recorded here, the first won. The deciding argument was the
+  product one: a FinOps tool must not tell a client that the thing it cannot cost is
+  their biggest opportunity, because that is a claim about money made with no number
+  behind it. The second position's appeal -- that a reversible action with no figure
+  is still a better first move than an irreversible one with a small figure -- is
+  real, and it is exactly what the rule now overrules. `sql-reporting` (scale down an
+  idle database, reversible, unquantifiable) sits beneath `pip-decommissioned-lb`
+  (release an address, 3.65, irreversible), and on a reviewer's instinct that reads
+  backwards. It is accepted on purpose and recorded in the label.
 
-  Two defensible positions, and they disagree:
+  The stated risk of the winning position -- that a large unquantified waste sinks to
+  the bottom and is never actioned, which is how an unknown quietly becomes a zero --
+  is **not** mitigated by the ranking and is mitigated instead by the report: an
+  unpriced finding is counted, listed, excluded from the total rather than zeroed, and
+  carries the reason no figure could be derived. If that proves insufficient in
+  practice, the answer is a better *price* for the finding, not a better rank for an
+  unknown.
 
-  1. **Treat unknown as low until quantified.** A client prioritises by money, and a
-     finding nobody can cost cannot be compared on the axis that matters. Ranking it
-     above a known figure asks them to take it on faith. Risk: a genuinely large
-     unquantified waste sinks to the bottom and is never actioned, which is how an
-     unknown quietly becomes a zero -- the exact failure the domain model's
-     unknown-is-not-zero rule exists to prevent.
-  2. **Let reversibility carry it.** "Scale down an idle database" is safe and
-     obviously worth doing whether or not the catalogue can price the target, and a
-     reversible action with no number attached is still a better first move than an
-     irreversible one with a small number. Risk: the order stops tracking money at
-     all for a subset of findings, and a client reading top-to-bottom is no longer
-     reading in value order.
-
-  The discordant pair stays as **documented discordance** rather than being resolved
-  by changing the label to match the code, which would make the ranking metric
-  vacuous. Whichever way it goes, the reasoning belongs in ARCHITECTURE and the
-  expected ranks need revisiting -- and the scorecard will show the move, which is
-  the point of having one.
-
-  *Phase 6 made this less theoretical.* The generalised oversized-VM rule
-  (ARCHITECTURE.md D101) deliberately opens a band where a machine is reported as
-  oversized with an explicitly unknown saving, because no same-family SKU preserves
-  the configured headroom. `vm-claims-batch` is the first such finding and there will
-  be more, so unpriced findings are no longer an edge case in the ranking -- they are
-  a category the rule now produces on purpose.
+  The rule is a tier rather than a weight, so it survives the per-client weight
+  configuration scheduled for Phase 10. Ranking concordance moved from 0.97 (29/30) to
+  1.00 (30/30) when the labels were updated to express the rule -- by rule, across
+  every label carrying an unquantified saving, rather than by editing the one case that
+  disagreed.
 
 ---
 
