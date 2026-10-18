@@ -45,19 +45,38 @@ one that works. A Fourier or STL decomposition would handle more shapes and woul
 a client being able to check the arithmetic by hand, which is a bad trade for a figure
 that drives spend decisions.
 
+Why the scale estimate has a floor
+----------------------------------
+
+A robust scale estimate can collapse toward zero, and when it does the z-score stops
+measuring anything. A subscription whose resource set has not changed bills almost the
+same amount every day, so its residual MAD can be a few cents -- at which point a
+normal day's wobble scores a dozen standard deviations and the statistic is arithmetic
+rather than evidence.
+
+This was measured, not predicted. The committed mock estate's *steady* and *seasonal*
+subscriptions were scoring their worst day at 8.9 and 13.5 against a threshold of 5.0,
+and producing no alert only because the materiality test below caught them. A
+statistical test that fires on every series is not a test.
+
+So the scale is floored at :data:`MIN_SPREAD_SHARE` of the baseline level: CostSentinel
+will not claim a deviation is significant on the strength of a variance estimate
+smaller than that, because a number that small describes the granularity of daily
+billing rather than the behaviour of the workload.
+
 Why two conditions
 ------------------
 
 An alert needs to be both **statistically** and **materially** significant, and only
-requiring the first produces alerts nobody wants. A series sitting at 40.00 with a
-cent of daily variation has a residual MAD near zero, so a day at 40.50 scores a z in
-the dozens -- statistically unmistakable and 1.25% of spend. Reporting it would be
-correct and useless, and a feed of correct, useless alerts is how an alerting system
-gets ignored.
+requiring the first produces alerts nobody wants. A change can be many standard
+deviations out and still be 1% of spend; reporting it would be correct and useless,
+and a feed of correct, useless alerts is how an alerting system gets ignored.
 
 So a deviation must also exceed :data:`MIN_RELATIVE_CHANGE` of the baseline. That
 constant is a product judgement rather than a derived quantity, and it is the one knob
-here that an operator might reasonably want to move.
+here that an operator might reasonably want to move. With the scale floor in place the
+two conditions are genuinely complementary: before it, materiality was carrying the
+whole decision on its own.
 
 What this does not do
 ---------------------
@@ -125,6 +144,15 @@ LEVEL_SHIFT_SCORE = Decimal("3.5")
 #: need more evidence than a claim resting on seven.
 SPIKE_SCORE = Decimal("5.0")
 
+#: Smallest scale estimate this detector will divide by, as a share of the baseline
+#: level. A robust MAD can collapse toward zero on a stable subscription, and a z-score
+#: computed against a few cents measures the precision of the billing feed rather than
+#: the behaviour of the workload. Measured against the committed mock estate: without
+#: this floor, the steady and seasonal series scored their worst day at 8.9 and 13.5
+#: against a spike threshold of 5.0, and only the materiality test below kept them
+#: quiet.
+MIN_SPREAD_SHARE = Decimal("0.02")
+
 #: Smallest change worth reporting, as a share of the baseline. The material-
 #: significance half of the test, and a product judgement rather than a derived
 #: quantity: below this a client's own week-to-week variation swamps the finding, and
@@ -191,15 +219,34 @@ def median_absolute_deviation(values: Sequence[Decimal]) -> Decimal:
 
 
 def robust_score(value: Decimal, *, centre: Decimal, deviation: Decimal) -> Decimal | None:
-    """The modified z-score of one value, or ``None`` when there is no variability.
+    """The modified z-score of one value, or ``None`` when there is no scale to use.
 
-    ``None`` rather than infinity. A flat series genuinely cannot say how many
-    standard deviations away something is, and returning a large number would dress a
-    missing statistic up as a strong one.
+    ``None`` rather than infinity. A series with no measurable variability genuinely
+    cannot say how many standard deviations away something is, and returning a large
+    number would dress a missing statistic up as a strong one.
+
+    Callers pass the *floored* scale from :func:`usable_spread`, so in practice this
+    returns ``None`` only for a series whose baseline is zero -- spend appearing where
+    there was none, which the materiality test handles on its own.
     """
     if deviation <= 0:
         return None
     return ((MAD_TO_SIGMA * (value - centre)) / deviation).quantize(_PLACES, rounding=ROUND_HALF_UP)
+
+
+def usable_spread(mad: Decimal, *, baseline_level: Decimal) -> Decimal:
+    """The scale estimate, floored at a share of the baseline level.
+
+    The floor is the honest half of this function. A stable subscription's residual MAD
+    can be a few cents, and dividing by a few cents turns ordinary daily wobble into a
+    double-digit z-score -- which is how a statistical test ends up firing on every
+    series and contributing nothing to the decision.
+
+    Returns the larger of the measured deviation and :data:`MIN_SPREAD_SHARE` of the
+    baseline, so a deviation has to be large relative to *spend* as well as relative to
+    observed variation.
+    """
+    return max(mad, (MIN_SPREAD_SHARE * baseline_level).copy_abs())
 
 
 def weekday_profile(points: Sequence[CostPoint]) -> dict[int, Decimal]:
@@ -353,8 +400,10 @@ def assess_series(
     observed_residuals = residuals(observed_points, profile, overall)
 
     centre = median(baseline_residuals)
-    spread = median_absolute_deviation(baseline_residuals)
     baseline_level = median([point.amount for point in baseline_points])
+    spread = usable_spread(
+        median_absolute_deviation(baseline_residuals), baseline_level=baseline_level
+    )
 
     anomaly = _level_shift(
         series=series,
@@ -426,7 +475,8 @@ def _evidence(
         _observation("baseline_daily_spend", str(baseline_level.quantize(_CENTS)), source),
         _observation("baseline_days", str(baseline_days), source),
         _observation("observation_days", str(OBSERVATION_DAYS), source),
-        _observation("residual_mad", str(spread.quantize(_PLACES)), source),
+        _observation("residual_scale", str(spread.quantize(_PLACES)), source),
+        _observation("minimum_scale_share", f"{MIN_SPREAD_SHARE:.0%} of baseline", source),
         _observation(
             "deviation_score",
             "unavailable (flat baseline)" if score is None else str(score),

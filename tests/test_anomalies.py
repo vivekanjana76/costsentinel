@@ -29,6 +29,7 @@ from costsentinel.agents.anomalies import (
     median_absolute_deviation,
     missing_days,
     robust_score,
+    usable_spread,
     weekday_profile,
 )
 from costsentinel.domain.common import (
@@ -331,18 +332,51 @@ def test_an_immaterial_change_is_not_reported_however_significant() -> None:
     assert change < MIN_RELATIVE_CHANGE
 
 
-def test_a_material_change_on_a_flat_baseline_is_still_reported() -> None:
-    """The flat-baseline fallback, which the material test has to carry alone.
+def test_a_material_change_on_a_perfectly_flat_baseline_is_still_reported() -> None:
+    """A doubling of spend must be found even where there is no variance to measure.
 
-    No variability means no score, so a detector that required a score would be silent
-    on the most obvious step change there is.
+    With no variability the measured deviation is zero and the scale floor supplies 2%
+    of the baseline instead, so the score is computed against the precision of the
+    billing feed rather than against nothing. A detector that required a measured
+    variance would be silent on the most obvious step change there is.
     """
     flat = [Decimal("40.00")] * 23 + [Decimal("80.00")] * 7
     assessment = assess_series(_series([str(v) for v in flat]), client=CLIENT)
     assert len(assessment.anomalies) == 1
     anomaly = assessment.anomalies[0]
     assert anomaly.kind is AnomalyKind.LEVEL_SHIFT
+    assert anomaly.deviation_score > LEVEL_SHIFT_SCORE
+
+
+def test_the_scale_floor_stops_cents_of_noise_scoring_as_significance() -> None:
+    """The defect this floor exists for, measured on the mock estate before it landed.
+
+    A stable subscription's residual deviation can be a few cents, and dividing by a
+    few cents turns ordinary daily wobble into a double-digit score. Flooring the scale
+    at a share of the *baseline* keeps the two halves of the test complementary instead
+    of leaving materiality to carry the whole decision.
+    """
+    assert usable_spread(Decimal("0.02"), baseline_level=Decimal("60.00")) == Decimal("1.20")
+    # A measured deviation above the floor is used as measured.
+    assert usable_spread(Decimal("5.00"), baseline_level=Decimal("60.00")) == Decimal("5.00")
+    # A zero baseline leaves no scale at all, which the caller handles.
+    assert usable_spread(Decimal(0), baseline_level=Decimal(0)) == Decimal(0)
+
+
+def test_a_zero_baseline_has_no_score_and_is_decided_on_materiality() -> None:
+    """Spend appearing where there was none: a real event with no scale to measure it.
+
+    The only case left where ``robust_score`` returns ``None`` once the floor is in
+    place, and materiality decides it -- any non-zero change against a zero baseline is
+    material, because there is no denominator to measure it against.
+    """
+    from_nothing = [Decimal("0.00")] * 23 + [Decimal("50.00")] * 7
+    assessment = assess_series(_series([str(v) for v in from_nothing]), client=CLIENT)
+    assert len(assessment.anomalies) == 1
+    anomaly = assessment.anomalies[0]
+    assert anomaly.direction is AnomalyDirection.INCREASE
     assert anomaly.deviation_score == Decimal(0)
+    assert anomaly.delta_fraction is None
     assert "unavailable (flat baseline)" in {observation.value for observation in anomaly.evidence}
 
 
@@ -362,7 +396,13 @@ def test_an_alert_states_every_number_behind_it() -> None:
     assert "% of baseline" in statement
 
     named = {observation.name for observation in anomaly.evidence}
-    assert {"baseline_daily_spend", "residual_mad", "deviation_score", "method"} <= named
+    assert {
+        "baseline_daily_spend",
+        "residual_scale",
+        "minimum_scale_share",
+        "deviation_score",
+        "method",
+    } <= named
     assert any(name.startswith("weekday_median.") for name in named)
 
 

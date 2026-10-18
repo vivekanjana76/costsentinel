@@ -66,7 +66,7 @@ access, durable memory, the evaluation harness and context-aware detection.
 | Piece | Status |
 |---|---|
 | Domain model | Provenance and verification on every derived fact; `MoneyAmount` refuses LLM provenance |
-| Provider seam | `AzureProvider` protocol, deterministic `MockAzureProvider` (21 resources, 3 reservations, 3 subscriptions, 2 clients), and a read-only real provider behind the `azure` extra |
+| Provider seam | `AzureProvider` protocol, deterministic `MockAzureProvider` (21 resources, 3 reservations, 4 subscriptions, 2 clients, one committed cost-series shape each), and a read-only real provider behind the `azure` extra |
 | Pricing | Every figure traces to a committed catalogue snapshot; refreshed by hand with `scripts/refresh_prices.py` |
 | LLM seam | `LLM` protocol + `FakeLLM` by default; Azure OpenAI (keyless or keyed) and Gemini adapters behind the `llm` extra |
 | Detectors | Eight deterministic detectors: orphaned disk, unattached IP, idle VM, oversized VM, stale snapshot, idle SQL, oversized App Service plan, unused reservation |
