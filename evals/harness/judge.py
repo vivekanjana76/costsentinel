@@ -123,6 +123,11 @@ def _state_figures(state: ScanState, report: ClientReport) -> frozenset[str]:
     if report.totals.exempt_monthly_cost is not None:
         amounts.append(report.totals.exempt_monthly_cost.amount)
     amounts += [item.current_monthly_cost.amount for item in report.exempt_findings]
+    # A spend anomaly's baseline, observed value and difference are the detector's own
+    # arithmetic, so prose quoting them is grounded. Leaving them out would have the
+    # judge report every anomaly note as ungrounded.
+    for anomaly in report.anomalies:
+        amounts += [anomaly.baseline.amount, anomaly.observed.amount, anomaly.delta.amount]
     for summary in report.waste_breakdown:
         amounts += [summary.monthly_saving.amount, summary.annual_saving.amount]
 
@@ -131,6 +136,8 @@ def _state_figures(state: ScanState, report: ClientReport) -> frozenset[str]:
     # pipeline's own arithmetic as a saving is.
     amounts += [signal.confidence for signal in state.signals]
     amounts += [item.confidence for item in report.exempt_findings]
+    amounts += [anomaly.confidence for anomaly in report.anomalies]
+    amounts += [anomaly.deviation_score for anomaly in report.anomalies]
     amounts += [recommendation.confidence for recommendation in state.recommendations]
     for score in state.ranking:
         amounts += [
@@ -169,6 +176,14 @@ def _prose(report: ClientReport) -> tuple[tuple[str, str], ...]:
             parts.append((f"ranking_rationale[{finding.resource_name}]", finding.ranking_rationale))
         if finding.root_cause:
             parts.append((f"root_cause[{finding.resource_name}]", finding.root_cause))
+    # An anomaly's ``note`` is model-authored and belongs here. Its ``statement`` is
+    # composed by the detector from its own arithmetic and deliberately does not --
+    # judging it would be judging the detector, which the harness does elsewhere.
+    parts += [
+        (f"anomaly_note[{anomaly.anomaly_id}]", anomaly.note)
+        for anomaly in report.anomalies
+        if anomaly.note
+    ]
     return tuple(parts)
 
 

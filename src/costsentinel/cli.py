@@ -238,6 +238,13 @@ def summarise_report(report: ClientReport) -> str:
         f"({totals.awaiting_approval_count} awaiting approval, "
         f"{totals.automatable_count} automatable)",
     ]
+    if totals.anomaly_count or totals.unassessed_scope_count:
+        unassessed = (
+            f", {totals.unassessed_scope_count} scope(s) unassessed"
+            if totals.unassessed_scope_count
+            else ""
+        )
+        lines.append(f"  spend changes        {totals.anomaly_count} to investigate{unassessed}")
     if totals.exempt_findings_count:
         spend = (
             totals.exempt_monthly_cost.display()
@@ -268,6 +275,18 @@ def summarise_report(report: ClientReport) -> str:
                 else ""
             )
             lines.append(f"       memory: {finding.memory_note}{moved}")
+    if report.anomalies:
+        lines += ["", "  Spend changes (investigate; no action proposed):"]
+        for anomaly in report.anomalies:
+            lines.append(
+                f"    - {anomaly.scope}  [{anomaly.kind.value}]  "
+                f"{anomaly.baseline.display()} -> {anomaly.observed.display()}/day  "
+                f"({anomaly.deviation_score:.1f} sigma)"
+            )
+            lines.append(f"        {anomaly.statement}")
+    if report.unassessed_spend:
+        lines += ["", "  Spend not assessed:"]
+        lines += [f"    - {line}" for line in report.unassessed_spend]
     if report.exempt_findings:
         lines += ["", "  Flagged but exempt (no action proposed):"]
         for item in report.exempt_findings:

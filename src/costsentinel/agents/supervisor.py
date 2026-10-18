@@ -141,6 +141,15 @@ def _decide(state: ScanState) -> SupervisorDecision:
     # different things to tell a client.
     if not state.actionable_signals:
         exempt = len(state.exemptions)
+        # An anomaly is reported, not remediated, so it does not keep the sweep
+        # running -- but a short-circuit that said "nothing found" while a spend change
+        # was waiting in the report would be the wrong thing to record.
+        found = (
+            f" {len(state.anomalies)} spend change(s) were found and are reported for "
+            f"investigation."
+            if state.anomalies
+            else ""
+        )
         examined = (
             f"{len(state.estate.resources)} resource(s) and "
             f"{len(state.estate.reservations)} reservation(s) examined"
@@ -150,12 +159,13 @@ def _decide(state: ScanState) -> SupervisorDecision:
             to_node="report_author",
             reason=(
                 f"{examined} with no waste detected, so there is nothing to "
-                f"diagnose, price or classify"
+                f"diagnose, price or classify.{found}"
                 if not exempt
                 else (
                     f"{examined}; every one of the {len(state.signals)} signal(s) "
                     f"found is on a resource the client's tags exempt, so all "
-                    f"{exempt} are reported with their reason and none is actioned"
+                    f"{exempt} are reported with their reason and none is "
+                    f"actioned.{found}"
                 )
             ),
         )

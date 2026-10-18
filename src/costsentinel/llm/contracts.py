@@ -121,11 +121,24 @@ class FindingNote(Untrusted):
     note: str = Field(min_length=1, max_length=800)
 
 
+class AnomalyNote(Untrusted):
+    """Client-facing commentary on one spend change.
+
+    Prose only. The anomaly's kind, direction, baseline, observed value and deviation
+    are all computed by the detector and are not fields of this contract, so a model
+    explaining a change cannot restate it as a different change (ARCHITECTURE.md D106).
+    """
+
+    anomaly_id: str = Field(min_length=1)
+    note: str = Field(min_length=1, max_length=800)
+
+
 class ReportNarrative(Untrusted):
     """The report author's requested response: prose only, no figures."""
 
     executive_summary: str = Field(min_length=1, max_length=4000)
     notes: tuple[FindingNote, ...] = Field(default=(), max_length=500)
+    anomaly_notes: tuple[AnomalyNote, ...] = Field(default=(), max_length=500)
 
     def note_for(self, recommendation_id: str) -> str:
         """Commentary for one recommendation, or an empty string."""
@@ -133,3 +146,7 @@ class ReportNarrative(Untrusted):
             (n.note for n in self.notes if n.recommendation_id == recommendation_id),
             "",
         )
+
+    def anomaly_note_for(self, anomaly_id: str) -> str:
+        """Commentary for one spend change, or an empty string."""
+        return next((n.note for n in self.anomaly_notes if n.anomaly_id == anomaly_id), "")

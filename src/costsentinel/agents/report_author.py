@@ -12,6 +12,12 @@ The report also carries the things a client needs in order to *disagree* with it
 the root cause behind each finding, the computed ranking components, the evidence,
 and the preconditions that would be re-checked before anything changed.
 
+**Spend anomalies are a third section, and they carry no money the report can add
+up.** An anomaly's ``delta`` is a change in spend, not a recoverable amount, so it
+never reaches a savings total and never enters the approval queue -- there is nothing
+to approve. The model may write a note explaining a change and cannot alter the
+numbers or the verdict (ARCHITECTURE.md D106).
+
 **Actionable savings and flagged-but-exempt waste are separate sections with
 separate figures.** A single total that quietly absorbed exempt waste would misstate
 both: it would promise savings nobody can realise, and it would hide the fact that a
@@ -43,17 +49,18 @@ from costsentinel.domain.report import (
     ApprovalQueueItem,
     ClientReport,
     ExemptFinding,
+    ReportAnomaly,
     ReportFinding,
     ReportPeriod,
     ReportSeverity,
     ReportTotals,
     WasteKindSummary,
 )
-from costsentinel.domain.signals import WasteKind
+from costsentinel.domain.signals import CostAnomaly, WasteKind
 from costsentinel.domain.state import ScanState
 from costsentinel.llm.base import LLM, EvidenceBlock, EvidenceField, Prompt
 from costsentinel.llm.contracts import ReportNarrative
-from costsentinel.llm.fake import LABEL_RECOMMENDATION, LABEL_TOTALS
+from costsentinel.llm.fake import LABEL_ANOMALY, LABEL_RECOMMENDATION, LABEL_TOTALS
 from costsentinel.llm.routing import TASK_REPORT_PROSE
 from costsentinel.observability.logging import get_logger
 
@@ -78,11 +85,20 @@ Rules you must follow:
 - State plainly that nothing has been changed and that gated actions await the
   client's approval.
 - Be direct and brief. No marketing language.
+
+For each spend_change block, write one line explaining what a change of that shape
+usually means and what the client should look at. Rules:
+- A level_shift means the daily run rate moved and stayed moved; a spike means one day
+  stood out and then reverted. Do not swap them and do not dispute them.
+- Do not restate, adjust or recompute any figure. The baseline, the observed value and
+  the difference are final.
+- Do not propose a remediation. A spend change is something to investigate, not
+  something to action.
 """.strip()
 
 _OUTPUT_CONTRACT = (
-    "ReportNarrative: {executive_summary, notes[] of {recommendation_id, note}}. "
-    "Prose only -- no numeric fields."
+    "ReportNarrative: {executive_summary, notes[] of {recommendation_id, note}, "
+    "anomaly_notes[] of {anomaly_id, note}}. Prose only -- no numeric fields."
 )
 
 
@@ -257,6 +273,68 @@ def _exempt_cost(items: Sequence[ExemptFinding]) -> MoneyAmount | None:
     )
 
 
+def _anomaly_block(anomaly: CostAnomaly) -> EvidenceBlock:
+    """One spend change, rendered for the model to *explain*.
+
+    Deliberately includes the finished statement and the figures, and asks for prose.
+    The model has nothing to decide here: the kind, the direction and every number are
+    already computed, and :class:`~costsentinel.llm.contracts.AnomalyNote` has no field
+    in which a different answer could be returned.
+    """
+    return EvidenceBlock(
+        label=LABEL_ANOMALY,
+        fields=(
+            EvidenceField(name="anomaly_id", value=anomaly.anomaly_id),
+            EvidenceField(name="scope", value=anomaly.subscription_id),
+            EvidenceField(name="kind", value=anomaly.kind.value),
+            EvidenceField(name="direction", value=anomaly.direction.value),
+            EvidenceField(name="baseline", value=anomaly.baseline.display()),
+            EvidenceField(name="observed", value=anomaly.observed.display()),
+            EvidenceField(name="difference", value=anomaly.delta.display()),
+            EvidenceField(name="observed_from", value=anomaly.observed_from.isoformat()),
+            EvidenceField(name="observed_to", value=anomaly.observed_to.isoformat()),
+            EvidenceField(name="statement", value=anomaly.statement()),
+        ),
+    )
+
+
+def _report_anomalies(state: ScanState, narrative: ReportNarrative) -> tuple[ReportAnomaly, ...]:
+    """Spend changes, in a deterministic order with the model's prose attached.
+
+    Ordered by deviation score then by id: the furthest-from-normal change leads,
+    because that is the one a client should look at first, and the id keeps the order
+    total. Not ordered by the size of the delta -- a large change on a large
+    subscription can be ordinary, which is what the score already accounts for.
+    """
+    return tuple(
+        sorted(
+            (
+                ReportAnomaly(
+                    anomaly_id=anomaly.anomaly_id,
+                    scope=anomaly.subscription_id,
+                    subscription_id=anomaly.subscription_id,
+                    service=anomaly.service,
+                    kind=anomaly.kind,
+                    direction=anomaly.direction,
+                    baseline=anomaly.baseline,
+                    observed=anomaly.observed,
+                    delta=anomaly.delta,
+                    observed_from=anomaly.observed_from,
+                    observed_to=anomaly.observed_to,
+                    deviation_score=anomaly.deviation_score,
+                    confidence=anomaly.confidence,
+                    detector=anomaly.detector,
+                    statement=anomaly.statement(),
+                    note=narrative.anomaly_note_for(anomaly.anomaly_id),
+                    evidence=tuple(f"{obs.name}: {obs.value}" for obs in anomaly.evidence),
+                )
+                for anomaly in state.anomalies
+            ),
+            key=lambda item: (-item.deviation_score, item.anomaly_id),
+        )
+    )
+
+
 def _recommendation_block(state: ScanState, recommendation: Recommendation) -> EvidenceBlock:
     classification = state.classification_for(recommendation.recommendation_id)
     requires_approval = (
@@ -337,6 +415,10 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
                 EvidenceField(name="awaiting_approval_count", value=str(len(gated))),
                 EvidenceField(name="blocked_count", value=str(blocked)),
                 EvidenceField(name="unpriced_findings_count", value=str(unpriced)),
+                EvidenceField(name="anomaly_count", value=str(len(state.anomalies))),
+                EvidenceField(
+                    name="unassessed_scope_count", value=str(len(state.unassessed_scopes))
+                ),
                 EvidenceField(name="exempt_findings_count", value=str(len(exempt_items))),
                 EvidenceField(
                     name="exempt_monthly_cost",
@@ -354,6 +436,7 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
                 evidence=(
                     totals_block,
                     *(_recommendation_block(state, rec) for rec in state.recommendations),
+                    *(_anomaly_block(anomaly) for anomaly in state.anomalies),
                 ),
             ),
             schema=ReportNarrative,
@@ -362,6 +445,10 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
         findings = tuple(
             _finding(state, rec, narrative.note_for(rec.recommendation_id))
             for rec in state.recommendations
+        )
+        anomalies = _report_anomalies(state, narrative)
+        unassessed = tuple(
+            f"{assessment.scope}: {assessment.detail}" for assessment in state.unassessed_scopes
         )
         queue = tuple(
             ApprovalQueueItem(
@@ -389,6 +476,23 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
                 f"they rank below every priced finding -- we will not tell you that "
                 f"something we cannot cost is your bigger opportunity. Each one says why "
                 f"no figure could be derived."
+            )
+        if anomalies:
+            # Node-authored. The one sentence a client must not read as a savings
+            # opportunity is the one introducing a figure that is not a saving.
+            notes.append(
+                f"{len(anomalies)} spend change(s) were detected and are listed "
+                f"separately from the findings. A spend change is something to "
+                f"investigate, not something to act on: its difference is what you are "
+                f"now paying differently, not an amount anyone has identified a way to "
+                f"recover, and none of it appears in the projected savings above."
+            )
+        if unassessed:
+            notes.append(
+                f"{len(unassessed)} subscription(s) could not be assessed for spend "
+                f"changes -- too little history, or days missing from the cost series. "
+                f"Those days are unknown rather than zero, so no conclusion was drawn. "
+                f"Each one says why."
             )
         if exempt_items:
             # Node-authored rather than model-authored, like the unpriced note above
@@ -443,10 +547,14 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
                 automatable_count=automatable,
                 blocked_count=blocked,
                 unpriced_findings_count=unpriced,
+                anomaly_count=len(anomalies),
+                unassessed_scope_count=len(unassessed),
                 exempt_findings_count=len(exempt_items),
                 exempt_monthly_cost=exempt_cost,
             ),
             findings=findings,
+            anomalies=anomalies,
+            unassessed_spend=unassessed,
             exempt_findings=exempt_items,
             waste_breakdown=_waste_breakdown(findings),
             approval_queue=queue,
@@ -466,6 +574,8 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
                     "awaiting_approval": str(len(gated)),
                     "blocked": str(blocked),
                     "unpriced": str(unpriced),
+                    "anomalies": str(len(anomalies)),
+                    "unassessed_scopes": str(len(unassessed)),
                     "exempt": str(len(exempt_items)),
                     "exempt_monthly_cost": (
                         exempt_cost.display() if exempt_cost is not None else "none"
@@ -499,6 +609,7 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
                 "blocked": blocked,
                 "unpriced": unpriced,
                 "exempt": len(exempt_items),
+                "anomalies": len(anomalies),
                 "severity": report.severity.value,
                 "complete": report.is_complete,
             },

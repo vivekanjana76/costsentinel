@@ -16,8 +16,11 @@ asks whether the client has said the resource is like that on purpose. Keeping t
 two apart is what lets a disaster-recovery standby be reported as idle *and* left
 alone, rather than quietly not reported at all.
 
-Phase 7 adds statistical cost-anomaly detection over the cost series this node
-already retrieves.
+The node finally earns its name in Phase 7: it runs the statistical spend-anomaly
+detector over the cost series it already retrieves. Anomalies are a **separate
+stream** from the waste signals, and nothing downstream merges them -- an anomaly says
+"spend changed, investigate" and a waste signal says "this resource is wasteful, act",
+and only the second has a remediation path (ARCHITECTURE.md D106).
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime
 
+from costsentinel.agents.anomalies import assess_estate
 from costsentinel.agents.base import Node, NodeUpdate, audit, with_audit
 from costsentinel.agents.detectors import run_detectors, run_reservation_detectors
 from costsentinel.config import Settings
@@ -39,7 +43,7 @@ from costsentinel.domain.estate import (
 )
 from costsentinel.domain.exemption import ExemptionVerdict
 from costsentinel.domain.governance import AuditEventType
-from costsentinel.domain.signals import WasteSignal
+from costsentinel.domain.signals import CostAnomaly, WasteSignal
 from costsentinel.domain.state import ScanState
 from costsentinel.guardrails.exemption import ExemptionPolicy, get_exemption_policy
 from costsentinel.observability.logging import get_logger
@@ -163,6 +167,12 @@ def make_anomaly_scout(
         exempt = _exempt(signals, estate, exemption_policy, client=state.client)
         signalled_resources = len({signal.resource_id for signal in signals})
 
+        assessments = assess_estate(estate.cost_series, client=state.client)
+        anomalies: tuple[CostAnomaly, ...] = tuple(
+            anomaly for assessment in assessments for anomaly in assessment.anomalies
+        )
+        unassessed = tuple(a for a in assessments if not a.verdict.is_conclusive)
+
         events = [
             audit(
                 state,
@@ -180,6 +190,9 @@ def make_anomaly_scout(
                     "exemption_ruleset": exemption_policy.name,
                     "exemptions_checked": str(signalled_resources),
                     "exemptions_applied": str(len(exempt)),
+                    "spend_scopes_assessed": str(len(assessments)),
+                    "spend_scopes_unassessed": str(len(unassessed)),
+                    "anomalies": str(len(anomalies)),
                 },
             )
         ]
@@ -224,6 +237,32 @@ def make_anomaly_scout(
             )
             for offset, verdict in enumerate(exempt)
         ]
+        # One event per spend assessment, conclusive or not. An inconclusive scope is
+        # the interesting case: it means a client's series had gaps, and a trail that
+        # only recorded findings would make that indistinguishable from a clean month.
+        events += [
+            audit(
+                state,
+                actor=ACTOR,
+                event_type=(
+                    AuditEventType.ANOMALY_DETECTED
+                    if assessment.anomalies
+                    else AuditEventType.SPEND_ASSESSED
+                ),
+                subject=assessment.scope,
+                detail={
+                    "verdict": assessment.verdict.value,
+                    "days_observed": str(assessment.days_observed),
+                    "days_missing": str(assessment.days_missing),
+                    "anomalies": str(len(assessment.anomalies)),
+                    "kinds": ",".join(a.kind.value for a in assessment.anomalies) or "none",
+                    "detail": assessment.detail,
+                    "routes_to": "investigation and the report; never an action",
+                },
+                offset=len(signals) + len(exempt) + 1 + offset,
+            )
+            for offset, assessment in enumerate(assessments)
+        ]
 
         _log.info(
             "estate scanned",
@@ -237,6 +276,8 @@ def make_anomaly_scout(
                 "signals": len(signals),
                 "exemptions": len(exempt),
                 "exemption_ruleset": exemption_policy.name,
+                "anomalies": len(anomalies),
+                "spend_scopes_unassessed": len(unassessed),
             },
         )
 
@@ -244,6 +285,8 @@ def make_anomaly_scout(
             "estate": estate,
             "signals": tuple(signals),
             "exemptions": exempt,
+            "anomalies": anomalies,
+            "anomaly_assessments": assessments,
             "audit": with_audit(state, events),
         }
 
