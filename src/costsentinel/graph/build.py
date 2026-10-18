@@ -28,7 +28,7 @@ approval seam one mechanism instead of four: the supervisor's decision is a reco
 fact in state, and :func:`route_from_supervisor` simply reads it back.
 
 State is checkpointed after every node, so a sweep resumes from the last completed
-node rather than re-reading the estate -- and from Phase 7 the same mechanism lets a
+node rather than re-reading the estate -- and from Phase 9 the same mechanism lets a
 run halt for days awaiting a human approval.
 """
 
@@ -50,6 +50,7 @@ from costsentinel.agents.savings_estimator import make_savings_estimator
 from costsentinel.agents.supervisor import make_supervisor, route_from_supervisor
 from costsentinel.config import Settings
 from costsentinel.domain.state import ScanState
+from costsentinel.guardrails.exemption import ExemptionPolicy, get_exemption_policy
 from costsentinel.guardrails.policy import PolicyStore
 from costsentinel.llm.base import LLM
 from costsentinel.memory.base import MemoryStore
@@ -110,6 +111,7 @@ def build_graph(
     llm: LLM,
     settings: Settings,
     policy: PolicyStore | None = None,
+    exemptions: ExemptionPolicy | None = None,
     memory: MemoryStore | None = None,
     embedder: Embedder | None = None,
     checkpointer: BaseCheckpointSaver[str] | None = None,
@@ -123,6 +125,9 @@ def build_graph(
             :class:`~costsentinel.llm.traced.TracedLLM` to get per-call metrics.
         settings: Resolved configuration.
         policy: The policy store. Defaults to the built-in one.
+        exemptions: The tag conventions that mark a resource as idle, stale or
+            oversized on purpose. Defaults to whatever ``settings`` selects, which
+            is the built-in ruleset unless an operator pointed at their own.
         memory: Episodic and semantic memory. Defaults to the no-op store, so a
             graph built without memory behaves exactly as it did before memory
             existed -- the consult node still runs and records that it found
@@ -137,12 +142,16 @@ def build_graph(
         The compiled graph, ready to invoke with a :class:`ScanState`.
     """
     store = policy or PolicyStore()
+    exempt = exemptions or get_exemption_policy(settings)
     recall = memory or NullMemoryStore()
 
     graph: StateGraph[ScanState, None, ScanState, ScanState] = StateGraph(ScanState)
 
     graph.add_node(NODE_SUPERVISOR, make_supervisor(settings=settings))
-    graph.add_node(NODE_ANOMALY_SCOUT, make_anomaly_scout(provider=provider, settings=settings))
+    graph.add_node(
+        NODE_ANOMALY_SCOUT,
+        make_anomaly_scout(provider=provider, settings=settings, exemptions=exempt),
+    )
     graph.add_node(
         NODE_ROOT_CAUSE_ANALYST,
         make_root_cause_analyst(llm=llm, settings=settings, memory=recall, embedder=embedder),

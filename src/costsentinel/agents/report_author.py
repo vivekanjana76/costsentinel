@@ -11,10 +11,19 @@ says so through its own :class:`~costsentinel.domain.common.Provenance`.
 The report also carries the things a client needs in order to *disagree* with it:
 the root cause behind each finding, the computed ranking components, the evidence,
 and the preconditions that would be re-checked before anything changed.
+
+**Actionable savings and flagged-but-exempt waste are separate sections with
+separate figures.** A single total that quietly absorbed exempt waste would misstate
+both: it would promise savings nobody can realise, and it would hide the fact that a
+decision was taken on the client's behalf. So ``projected_monthly_savings`` is the
+sum of the actionable findings and nothing else, and the exempt items carry their
+*current cost* -- a provider fact, never a saving -- alongside the reason nothing is
+proposed.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -33,6 +42,7 @@ from costsentinel.domain.recommendations import Recommendation
 from costsentinel.domain.report import (
     ApprovalQueueItem,
     ClientReport,
+    ExemptFinding,
     ReportFinding,
     ReportPeriod,
     ReportSeverity,
@@ -173,6 +183,80 @@ def _waste_breakdown(findings: tuple[ReportFinding, ...]) -> tuple[WasteKindSumm
     )
 
 
+def _exempt_findings(state: ScanState) -> tuple[ExemptFinding, ...]:
+    """The waste that is real and deliberately not actioned.
+
+    Built from the signals rather than from the recommendations, because an exempt
+    resource has no recommendation -- which is the whole point. Ordered by cost, so
+    the most expensive thing the client has told us to leave alone leads: that is the
+    one they are most likely to want to revisit.
+    """
+    items: list[ExemptFinding] = []
+    for signal in state.exempt_signals:
+        verdict = state.exemption_for(signal.resource_id)
+        if verdict is None:  # pragma: no cover -- exempt_signals is derived from these
+            continue
+        items.append(
+            ExemptFinding(
+                signal_id=signal.signal_id,
+                waste_kind=signal.kind,
+                subscription_id=signal.subscription_id,
+                resource_id=signal.resource_id,
+                resource_name=signal.resource_name,
+                current_monthly_cost=signal.monthly_cost,
+                confidence=signal.confidence,
+                detector=signal.detector,
+                exemption_reason=verdict.reason,
+                exemption_rule=verdict.rule_reference,
+                exemption_statement=verdict.statement,
+                matched_tag=verdict.matched_tag,
+                evidence=tuple(f"{obs.name}: {obs.value}" for obs in signal.evidence),
+            )
+        )
+    return tuple(
+        sorted(
+            items,
+            key=lambda item: (-(item.current_monthly_cost.amount or Decimal(-1)), item.signal_id),
+        )
+    )
+
+
+def _exempt_cost(items: Sequence[ExemptFinding]) -> MoneyAmount | None:
+    """What the client spends on the resources they have told us to leave alone.
+
+    ``None`` when nothing was exempt, which is an absence rather than an unknown
+    amount. An unknown would render as "unknown spend on exempt resources", which is
+    a different and considerably more alarming claim.
+
+    A sum of provider-reported costs, so it is a calculation over verified inputs --
+    and deliberately a cost rather than a saving, because nobody is proposing to
+    recover it.
+    """
+    if not items:
+        return None
+    known = [
+        item.current_monthly_cost.amount
+        for item in items
+        if item.current_monthly_cost.amount is not None
+    ]
+    if not known:
+        return MoneyAmount.undetermined(
+            f"none of the {len(items)} exempt finding(s) could be priced from provider data"
+        )
+    currency = next(
+        item.current_monthly_cost.currency
+        for item in items
+        if item.current_monthly_cost.amount is not None
+    )
+    return MoneyAmount.of(
+        sum(known, start=Decimal(0)),
+        currency=currency,
+        provenance=Provenance.calculated(
+            f"sum of the current monthly cost of {len(known)} exempt resource(s)"
+        ),
+    )
+
+
 def _recommendation_block(state: ScanState, recommendation: Recommendation) -> EvidenceBlock:
     classification = state.classification_for(recommendation.recommendation_id)
     requires_approval = (
@@ -232,6 +316,9 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
             and not c.is_automatable
         )
 
+        exempt_items = _exempt_findings(state)
+        exempt_cost = _exempt_cost(exempt_items)
+
         period = _period(state)
         subscriptions = tuple(
             sub.subscription_id for sub in (state.estate.subscriptions if state.estate else ())
@@ -250,6 +337,11 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
                 EvidenceField(name="awaiting_approval_count", value=str(len(gated))),
                 EvidenceField(name="blocked_count", value=str(blocked)),
                 EvidenceField(name="unpriced_findings_count", value=str(unpriced)),
+                EvidenceField(name="exempt_findings_count", value=str(len(exempt_items))),
+                EvidenceField(
+                    name="exempt_monthly_cost",
+                    value=exempt_cost.display() if exempt_cost is not None else "none",
+                ),
                 EvidenceField(name="period_days", value=str(period.days)),
             ),
         )
@@ -295,6 +387,21 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
                 f"{unpriced} finding(s) could not be priced from provider data and are "
                 f"excluded from the projected savings rather than assumed to be zero."
             )
+        if exempt_items:
+            # Node-authored rather than model-authored, like the unpriced note above
+            # it. The reason a client is not being advised to act on something is not
+            # a sentence worth letting a model paraphrase.
+            exempt_spend = exempt_cost.display() if exempt_cost is not None else "unknown"
+            notes.append(
+                f"{len(exempt_items)} finding(s) are flagged but exempt: real waste "
+                f"signals on resources your own tags mark as protected -- a "
+                f"disaster-recovery standby, a retention requirement, or an explicit "
+                f"cost exemption. Each is listed with the tag that caused it and the "
+                f"reason nothing is proposed, and all of them are excluded from the "
+                f"projected savings above. Their current monthly cost is {exempt_spend}, "
+                f"which is what you spend on them rather than a saving available to "
+                f"you."
+            )
         if blocked:
             notes.append(
                 f"{blocked} finding(s) are classified as blocked: they are reported as "
@@ -333,8 +440,11 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
                 automatable_count=automatable,
                 blocked_count=blocked,
                 unpriced_findings_count=unpriced,
+                exempt_findings_count=len(exempt_items),
+                exempt_monthly_cost=exempt_cost,
             ),
             findings=findings,
+            exempt_findings=exempt_items,
             waste_breakdown=_waste_breakdown(findings),
             approval_queue=queue,
             incomplete_reasons=state.escalations,
@@ -353,6 +463,10 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
                     "awaiting_approval": str(len(gated)),
                     "blocked": str(blocked),
                     "unpriced": str(unpriced),
+                    "exempt": str(len(exempt_items)),
+                    "exempt_monthly_cost": (
+                        exempt_cost.display() if exempt_cost is not None else "none"
+                    ),
                     "projected_monthly_savings": monthly.display(),
                     "projected_annual_savings": annual.display(),
                     "observed_monthly_spend": spend.display(),
@@ -381,6 +495,7 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
                 "awaiting_approval": len(gated),
                 "blocked": blocked,
                 "unpriced": unpriced,
+                "exempt": len(exempt_items),
                 "severity": report.severity.value,
                 "complete": report.is_complete,
             },

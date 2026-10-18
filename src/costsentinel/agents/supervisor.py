@@ -15,7 +15,7 @@ Four decisions live here:
   records *why* it is incomplete, rather than either looping or dying silently;
 * **require-approval** -- gated actions route to the approval seam.
 
-Phase 7 turns that last branch into a durable interrupt. This phase builds the seam
+Phase 9 turns that last branch into a durable interrupt. This phase builds the seam
 and the records it will act on, which is why :class:`RouteAction` already has a
 ``REQUIRE_APPROVAL`` member that currently routes onward to the report.
 """
@@ -131,15 +131,32 @@ def _decide(state: ScanState) -> SupervisorDecision:
             reason="no estate has been read yet, so the sweep starts with discovery",
         )
 
-    # Read, but nothing wasteful found. There is nothing for four nodes to do.
-    if not state.signals:
+    # Read, but nothing *actionable* found. There is nothing for four nodes to do.
+    #
+    # Keyed on actionable signals rather than on signals, because an estate whose
+    # every finding is exempt has nothing to diagnose, price or plan either -- and
+    # routing it onward would send it round the retry path until the planner
+    # escalated, for no reason. The reason line distinguishes the two cases, since
+    # "nothing found" and "everything found is protected by your own tags" are very
+    # different things to tell a client.
+    if not state.actionable_signals:
+        exempt = len(state.exemptions)
+        examined = (
+            f"{len(state.estate.resources)} resource(s) and "
+            f"{len(state.estate.reservations)} reservation(s) examined"
+        )
         return _record(
             action=RouteAction.SHORT_CIRCUIT,
             to_node="report_author",
             reason=(
-                f"{len(state.estate.resources)} resource(s) and "
-                f"{len(state.estate.reservations)} reservation(s) examined with no "
-                f"waste detected, so there is nothing to diagnose, price or classify"
+                f"{examined} with no waste detected, so there is nothing to "
+                f"diagnose, price or classify"
+                if not exempt
+                else (
+                    f"{examined}; every one of the {len(state.signals)} signal(s) "
+                    f"found is on a resource the client's tags exempt, so all "
+                    f"{exempt} are reported with their reason and none is actioned"
+                )
             ),
         )
 
@@ -161,7 +178,7 @@ def _decide(state: ScanState) -> SupervisorDecision:
             action=RouteAction.RETRY if attempts else RouteAction.PROCEED,
             to_node="root_cause_analyst",
             reason=(
-                f"{len(state.signals)} signal(s) await diagnosis"
+                f"{len(state.actionable_signals)} signal(s) await diagnosis"
                 if not attempts
                 else f"retrying diagnosis, attempt {attempts + 1}"
             ),
@@ -173,7 +190,7 @@ def _decide(state: ScanState) -> SupervisorDecision:
         return _record(
             action=RouteAction.PROCEED,
             to_node="savings_estimator",
-            reason=f"{len(state.signals)} signal(s) await pricing",
+            reason=f"{len(state.actionable_signals)} signal(s) await pricing",
         )
 
     # Priced but not planned.
@@ -185,7 +202,8 @@ def _decide(state: ScanState) -> SupervisorDecision:
                 to_node="report_author",
                 reason=(
                     f"optimization_planner produced no recommendations after "
-                    f"{attempts} attempt(s) despite {len(state.signals)} signal(s); "
+                    f"{attempts} attempt(s) despite {len(state.actionable_signals)} "
+                    f"actionable signal(s); "
                     f"reporting the findings without remediations"
                 ),
                 attempt=attempts,

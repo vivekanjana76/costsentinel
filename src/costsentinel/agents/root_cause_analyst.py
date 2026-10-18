@@ -204,7 +204,7 @@ def make_root_cause_analyst(
 
     def root_cause_analyst(state: ScanState) -> NodeUpdate:
         """Diagnose every signal, keeping only evidence-grounded factors."""
-        if not state.signals:
+        if not state.actionable_signals:
             return {
                 "audit": with_audit(
                     state,
@@ -230,11 +230,11 @@ def make_root_cause_analyst(
                     client=state.client,
                     limit=GUIDANCE_LIMIT,
                 )
-                for signal in state.signals
+                for signal in state.actionable_signals
             }
 
         evidence: list[EvidenceBlock] = []
-        for signal in state.signals:
+        for signal in state.actionable_signals:
             evidence.append(_signal_evidence(signal))
             block = _guidance_evidence(guidance.get(signal.signal_id, ()))
             if block is not None:
@@ -250,7 +250,7 @@ def make_root_cause_analyst(
         errors: list[str] = list(state.errors)
         root_causes: list[RootCause] = []
 
-        for signal in state.signals:
+        for signal in state.actionable_signals:
             explanation = analysis.for_signal(signal.signal_id)
             if explanation is None:
                 errors.append(
@@ -310,7 +310,7 @@ def make_root_cause_analyst(
             extra={
                 "run_id": state.run_id,
                 "client": state.client,
-                "signals": len(state.signals),
+                "signals": len(state.actionable_signals),
                 "root_causes": len(root_causes),
                 "dropped_factors": len(errors) - len(state.errors),
                 "guidance_passages": sum(len(found) for found in guidance.values()),

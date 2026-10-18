@@ -16,6 +16,12 @@ every signal, not just a chosen one. Two reasons:
 The node also resolves the resource-versus-reservation distinction once, into a
 :class:`~costsentinel.agents.savings.SavingsTarget`, so no savings function has to
 care which it is looking at.
+
+It prices ``state.actionable_signals`` rather than every signal. Pricing an exempt
+resource would compute a saving nobody may take, and that figure would then be one
+edit away from reaching a headline total -- so the arithmetic is never done at all.
+The exempt finding carries its *current cost*, which is a provider fact, and no
+saving, which is the truth.
 """
 
 from __future__ import annotations
@@ -64,7 +70,7 @@ def make_savings_estimator(
 
     def savings_estimator(state: ScanState) -> NodeUpdate:
         """Price every permitted remediation for every signal."""
-        if state.estate is None or not state.signals:
+        if state.estate is None or not state.actionable_signals:
             return {
                 "audit": with_audit(
                     state,
@@ -85,7 +91,7 @@ def make_savings_estimator(
         price_cache: dict[str, Sequence[SkuPrice]] = {}
         options: list[PricedOption] = []
 
-        for signal in state.signals:
+        for signal in state.actionable_signals:
             target = target_for(estate, signal.resource_id)
             candidates = store.candidate_actions(signal.kind)
 
@@ -151,7 +157,8 @@ def make_savings_estimator(
             extra={
                 "run_id": state.run_id,
                 "client": state.client,
-                "signals": len(state.signals),
+                "signals": len(state.actionable_signals),
+                "exempt": len(state.exemptions),
                 "options": len(options),
                 "priced": priced,
                 "unpriced": len(options) - priced,

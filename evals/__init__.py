@@ -3,5 +3,5 @@
 Evals are a first-class deliverable, not an afterthought, because "did we find the
 waste" and "did we gate the dangerous thing" are the product's actual claims.
 
-See ARCHITECTURE.md section 9 and ROADMAP.md Phase 5.
+See ARCHITECTURE.md section 10 and ROADMAP.md Phase 5.
 """

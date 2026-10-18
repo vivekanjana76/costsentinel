@@ -253,6 +253,15 @@ class Scorecard(Frozen):
             "Listed individually and never folded into the aggregate: an adversarial",
             "failure hidden inside a 95% precision figure is a failure nobody sees.",
             "",
+            "For a resource that is idle or stale *by design*, **handled correctly means",
+            "not actionably recommended, and exempt is the correct outcome.** The",
+            "disaster-recovery standby really is idle and the retained snapshot really is",
+            "old; the right behaviour is to surface both, say which tag withholds the",
+            "advice, and leave them out of the savings total. A label that expects an",
+            "exemption is only satisfied when that exemption is visible -- scoring on",
+            "absence alone would award full marks to a system that never noticed the",
+            "standby at all, which is a different and worse system.",
+            "",
         ]
         if not self.adversarial:
             lines.append("_No adversarial cases in this run._")

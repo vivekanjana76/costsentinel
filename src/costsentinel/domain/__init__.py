@@ -38,6 +38,12 @@ from costsentinel.domain.estate import (
     SkuPrice,
     Subscription,
 )
+from costsentinel.domain.exemption import (
+    MAX_RENDERED_TAG_CHARS,
+    ExemptionReason,
+    ExemptionVerdict,
+    render_tag_value,
+)
 from costsentinel.domain.governance import (
     ActionClassification,
     ApprovalDecision,
@@ -83,6 +89,7 @@ from costsentinel.domain.recommendations import (
 from costsentinel.domain.report import (
     ApprovalQueueItem,
     ClientReport,
+    ExemptFinding,
     ReportFinding,
     ReportPeriod,
     ReportSeverity,
@@ -100,6 +107,7 @@ from costsentinel.domain.signals import (
 from costsentinel.domain.state import ScanState
 
 __all__ = [
+    "MAX_RENDERED_TAG_CHARS",
     "MONTHS_PER_YEAR",
     "ActionClass",
     "ActionClassification",
@@ -122,6 +130,9 @@ __all__ = [
     "EpisodicEntry",
     "EpisodicRecord",
     "Estate",
+    "ExemptFinding",
+    "ExemptionReason",
+    "ExemptionVerdict",
     "FactorKind",
     "Frozen",
     "GuidanceKind",
@@ -173,5 +184,6 @@ __all__ = [
     "WasteKind",
     "WasteKindSummary",
     "WasteSignal",
+    "render_tag_value",
     "utc_now",
 ]

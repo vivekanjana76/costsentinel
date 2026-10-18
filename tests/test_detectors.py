@@ -12,6 +12,7 @@ from decimal import Decimal
 from costsentinel.agents.detectors import (
     IDLE_CPU_MAX_PCT,
     MIN_OBSERVATION_DAYS,
+    OVERSIZED_CPU_MAX_PCT,
     detect_idle_virtual_machine,
     detect_orphaned_managed_disk,
     detect_oversized_virtual_machine,
@@ -173,6 +174,89 @@ def test_oversized_virtual_machine_is_detected() -> None:
     assert signal.confidence < Decimal("0.9")
 
 
+def test_a_large_machine_cannot_hide_above_the_threshold() -> None:
+    """The defect the Phase 5 scorecard measured, pinned so it cannot come back.
+
+    A D32s_v5 at 22% average and 42% peak sat just above the old 20% average and 40%
+    peak ceilings and was reported as appropriately sized. It is not: 42% of 32 vCPU
+    is 13.4 vCPU of demand on a machine of 32.
+    """
+    vm = _resource(
+        name="vm-claims-batch",
+        kind=ResourceKind.VIRTUAL_MACHINE,
+        state=ResourceState.RUNNING,
+        sku="Standard_D32s_v5",
+        cost="1121.28",
+    )
+    signal = detect_oversized_virtual_machine(
+        vm, _metrics(vm, cpu_avg="22.0", cpu_max="42.0"), client="acme", as_of=AS_OF
+    )
+    assert signal is not None
+    assert signal.kind is WasteKind.OVERSIZED_VIRTUAL_MACHINE
+
+
+def test_a_steady_load_is_the_easiest_rightsizing_call_not_a_disqualifier() -> None:
+    """The former average ceiling was backwards, and this is the case that shows it.
+
+    A machine whose average sits close to its peak is predictable, which makes it the
+    *safest* thing to resize. The old rule excluded it for being too well-behaved.
+    """
+    vm = _resource(
+        name="vm-steady",
+        kind=ResourceKind.VIRTUAL_MACHINE,
+        state=ResourceState.RUNNING,
+        sku="Standard_D16s_v5",
+        cost="560.64",
+    )
+    metrics = _metrics(vm, cpu_avg="44.0", cpu_max="47.0")
+    assert detect_oversized_virtual_machine(vm, metrics, client="acme", as_of=AS_OF) is not None
+
+
+def test_the_peak_threshold_is_one_sku_step_of_spare_capacity() -> None:
+    """Fifty is the geometry of a halving SKU family, not a tuned constant.
+
+    At or below a 50% peak, the next size down in the family physically holds the
+    observed demand. Above it, it does not. The boundary is therefore where the
+    detector's question changes answer, and it is asserted on both sides of exactly
+    50 rather than somewhere comfortably either side of it.
+    """
+    vm = _resource(
+        name="vm-boundary",
+        kind=ResourceKind.VIRTUAL_MACHINE,
+        state=ResourceState.RUNNING,
+        sku="Standard_D16s_v5",
+        cost="560.64",
+    )
+    assert Decimal("50.0") == OVERSIZED_CPU_MAX_PCT
+    at = _metrics(vm, cpu_avg="20.0", cpu_max="50.0")
+    just_above = _metrics(vm, cpu_avg="20.0", cpu_max="50.1")
+    assert detect_oversized_virtual_machine(vm, at, client="acme", as_of=AS_OF) is not None
+    assert detect_oversized_virtual_machine(vm, just_above, client="acme", as_of=AS_OF) is None
+
+
+def test_the_average_is_still_required_and_still_reported() -> None:
+    """It no longer disqualifies anything; it is still evidence, and still mandatory.
+
+    Requiring both signals keeps the conservative half of the old rule: a sizing
+    conclusion is drawn only where the utilisation was actually measured.
+    """
+    vm = _resource(
+        name="vm-big",
+        kind=ResourceKind.VIRTUAL_MACHINE,
+        state=ResourceState.RUNNING,
+        sku="Standard_D8s_v5",
+        cost="280.32",
+    )
+    signal = detect_oversized_virtual_machine(
+        vm, _metrics(vm, cpu_avg="6.1", cpu_max="18.5"), client="acme", as_of=AS_OF
+    )
+    assert signal is not None
+    assert signal.evidence_value("cpu_avg_pct") == "6.1"
+    assert signal.evidence_value("peak_threshold_pct") == str(OVERSIZED_CPU_MAX_PCT)
+    # And the constant the old rule used is gone rather than left lying around.
+    assert signal.evidence_value("avg_threshold_pct") is None
+
+
 # ---------------------------------------------------------------------------
 # Precision: the detectors stay quiet on healthy resources
 # ---------------------------------------------------------------------------
@@ -219,7 +303,13 @@ def test_busy_virtual_machine_is_not_flagged() -> None:
 
 
 def test_spiky_workload_is_not_shrunk() -> None:
-    """Low average but a high peak is a spiky workload, not an oversized one."""
+    """A high peak is what rules out a resize, and it always was.
+
+    The old rule paired this peak test with an average ceiling and credited the pair
+    with guarding against spiky workloads. Only the peak test ever did: a spiky
+    workload has a *low* average, so the average ceiling could not have been what
+    excluded one. Dropping it leaves this case correctly untouched.
+    """
     vm = _resource(
         name="vm-spiky",
         kind=ResourceKind.VIRTUAL_MACHINE,

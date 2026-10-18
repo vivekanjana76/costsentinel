@@ -6,7 +6,7 @@ classification without a gate cannot cause a mutation. What it produces is the
 audit-grade record of *what class each action is*, plus an
 :class:`~costsentinel.domain.governance.ApprovalRequest` for everything gated.
 
-Phase 3 turns the gate into a durable LangGraph interrupt at exactly this point
+Phase 9 turns the gate into a durable LangGraph interrupt at exactly this point
 (ARCHITECTURE.md D7): the graph halts, state persists, a human decides hours or days
 later, and the run resumes on the recorded decision.
 """
@@ -137,7 +137,7 @@ def make_policy_guard(*, settings: Settings, policy: PolicyStore | None = None) 
                     "action": request.action.value,
                     "action_class": request.action_class.value,
                     "monthly_saving": request.monthly_saving_display,
-                    "gate": "not yet wired (Phase 3); no execution path exists",
+                    "gate": "not yet wired (Phase 9); no execution path exists",
                 },
                 offset=len(classifications) + offset,
             )

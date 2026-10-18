@@ -9,12 +9,20 @@ Reservations are fetched alongside resources and run through their own detector,
 because a commitment is not a resource and its waste is money already spent rather
 than a charge that can simply be stopped.
 
-Phase 3 adds statistical cost-anomaly detection over the cost series this node
+Detection and *exemption* both happen here, in that order. The detectors are not
+told about tags, so they keep answering the question they are good at -- is this
+resource's utilisation consistent with waste -- and a separate deterministic pass
+asks whether the client has said the resource is like that on purpose. Keeping the
+two apart is what lets a disaster-recovery standby be reported as idle *and* left
+alone, rather than quietly not reported at all.
+
+Phase 7 adds statistical cost-anomaly detection over the cost series this node
 already retrieves.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 
 from costsentinel.agents.base import Node, NodeUpdate, audit, with_audit
@@ -29,9 +37,11 @@ from costsentinel.domain.estate import (
     ResourceMetrics,
     Subscription,
 )
+from costsentinel.domain.exemption import ExemptionVerdict
 from costsentinel.domain.governance import AuditEventType
 from costsentinel.domain.signals import WasteSignal
 from costsentinel.domain.state import ScanState
+from costsentinel.guardrails.exemption import ExemptionPolicy, get_exemption_policy
 from costsentinel.observability.logging import get_logger
 from costsentinel.providers.base import AzureProvider
 
@@ -55,9 +65,47 @@ def _as_of(subscriptions: tuple[Subscription, ...]) -> datetime:
     return max(sub.provenance.retrieved_at for sub in subscriptions)
 
 
-def make_anomaly_scout(*, provider: AzureProvider, settings: Settings) -> Node:
+def _exempt(
+    signals: Sequence[WasteSignal],
+    estate: Estate,
+    policy: ExemptionPolicy,
+    *,
+    client: str,
+) -> tuple[ExemptionVerdict, ...]:
+    """Verdicts for the signalled resources the client's tags protect.
+
+    Only signalled resources are examined. Exemption exists to withhold a
+    recommendation, so asking the question about a resource nothing was detected on
+    would be work with no answer to give -- and an estate's worth of "we looked and
+    found nothing" carried in every checkpoint for no reason.
+
+    A reservation never appears here: a commitment carries no tags, so there is
+    nothing to read and nothing to exempt from. That is a statement about the Azure
+    API surface rather than a policy choice.
+    """
+    verdicts: list[ExemptionVerdict] = []
+    seen: set[str] = set()
+    for signal in signals:
+        if signal.resource_id in seen:
+            continue
+        seen.add(signal.resource_id)
+        resource = estate.resource(signal.resource_id)
+        if resource is None:
+            continue
+        verdict = policy.for_resource(resource, client=client)
+        if verdict.is_exempt:
+            verdicts.append(verdict)
+    return tuple(verdicts)
+
+
+def make_anomaly_scout(
+    *,
+    provider: AzureProvider,
+    settings: Settings,
+    exemptions: ExemptionPolicy | None = None,
+) -> Node:
     """Build the Anomaly Scout node."""
-    _ = settings
+    exemption_policy = exemptions or get_exemption_policy(settings)
 
     def anomaly_scout(state: ScanState) -> NodeUpdate:
         """Read one client's estate and emit the waste signals found in it."""
@@ -112,6 +160,9 @@ def make_anomaly_scout(*, provider: AzureProvider, settings: Settings) -> Node:
         # Deterministic ordering, so a checkpoint resume and a re-run agree.
         signals.sort(key=lambda s: (s.subscription_id, s.resource_id, s.kind.value))
 
+        exempt = _exempt(signals, estate, exemption_policy, client=state.client)
+        signalled_resources = len({signal.resource_id for signal in signals})
+
         events = [
             audit(
                 state,
@@ -126,6 +177,9 @@ def make_anomaly_scout(*, provider: AzureProvider, settings: Settings) -> Node:
                     "metrics": str(len(metrics)),
                     "reservations": str(len(reservations)),
                     "window_days": str(WINDOW_DAYS),
+                    "exemption_ruleset": exemption_policy.name,
+                    "exemptions_checked": str(signalled_resources),
+                    "exemptions_applied": str(len(exempt)),
                 },
             )
         ]
@@ -148,6 +202,28 @@ def make_anomaly_scout(*, provider: AzureProvider, settings: Settings) -> Node:
             )
             for offset, signal in enumerate(signals, start=1)
         ]
+        # One event per exemption, so "why was this not recommended?" is answerable
+        # from the trail alone rather than by re-running the sweep.
+        events += [
+            audit(
+                state,
+                actor=ACTOR,
+                event_type=AuditEventType.EXEMPTION_APPLIED,
+                subject=verdict.resource_id,
+                detail={
+                    "resource": verdict.resource_name,
+                    "reason": verdict.reason.value,
+                    "rule": verdict.rule_reference,
+                    "matched_tag": verdict.matched_tag,
+                    "effect": (
+                        "surfaced as a finding; no remediation proposed and excluded "
+                        "from the actionable savings total"
+                    ),
+                },
+                offset=len(signals) + 1 + offset,
+            )
+            for offset, verdict in enumerate(exempt)
+        ]
 
         _log.info(
             "estate scanned",
@@ -159,12 +235,15 @@ def make_anomaly_scout(*, provider: AzureProvider, settings: Settings) -> Node:
                 "resources": len(resources),
                 "reservations": len(reservations),
                 "signals": len(signals),
+                "exemptions": len(exempt),
+                "exemption_ruleset": exemption_policy.name,
             },
         )
 
         return {
             "estate": estate,
             "signals": tuple(signals),
+            "exemptions": exempt,
             "audit": with_audit(state, events),
         }
 

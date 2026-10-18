@@ -26,6 +26,7 @@ from evals.harness.dataset import (
     AdversarialKind,
     DatasetError,
     LabelledEstate,
+    ResourceLabel,
     Tier,
     control_for,
     datasets_dir,
@@ -42,12 +43,20 @@ from evals.harness.gates import (
 from evals.harness.judge import _DECIMAL, FakeJudge
 from evals.harness.metrics import Mismatch, Score, detection_scores, ranking_concordance
 from evals.harness.provider import DatasetProvider
-from evals.harness.runner import eval_settings, evaluate, run_pipeline, write_report
+from evals.harness.runner import (
+    adversarial_outcomes,
+    eval_settings,
+    evaluate,
+    run_pipeline,
+    write_report,
+)
 from evals.harness.scorecard import BLOCKING_GATES
+from pydantic import ValidationError
 
 from costsentinel.cli import main
 from costsentinel.config import MemoryBackend, RunMode
-from costsentinel.domain.recommendations import ActionClass
+from costsentinel.domain.exemption import ExemptionReason
+from costsentinel.domain.recommendations import ActionClass, ActionType
 from costsentinel.domain.report import ClientReport
 from costsentinel.domain.signals import WasteKind
 
@@ -316,19 +325,180 @@ def test_the_quality_metrics_are_measured_and_report_their_denominators() -> Non
         assert str(score.denominator) in score.display()
 
 
-def test_the_scorecard_names_the_gaps_rather_than_hiding_them() -> None:
-    """The adversarial cases currently fail, and the scorecard must say so.
+def test_every_adversarial_case_is_handled_correctly() -> None:
+    """3 of 3, and this is the acceptance test for Phase 6.
 
-    This test will need updating when the detectors gain tag exemptions. That is the
-    point: a scorecard whose numbers never move is not measuring anything.
+    It read the other way round until Phase 6: it asserted that at least one
+    adversarial case was failing, with a comment saying it would need updating when
+    the detectors gained tag exemptions. They did, so it does -- which was the point
+    of writing it that way rather than leaving the gap unmeasured.
     """
     card = evaluate()
     assert card.adversarial
-    failing = [o for o in card.adversarial if not o.passed]
-    assert failing, "if the adversarial cases now pass, update this test and the report"
-    for outcome in failing:
-        assert outcome.note
-        assert outcome.expected != outcome.actual
+    failing = [outcome.line() for outcome in card.adversarial if not outcome.passed]
+    assert not failing, failing
+    assert card.adversarial_passed == len(card.adversarial) == 3
+
+
+def test_an_exempt_case_is_only_correct_when_the_exemption_is_visible() -> None:
+    """The redefinition that closes the two look-alike cases, asserted three ways.
+
+    "Not actionably recommended" is reachable by exempting a resource *or* by failing
+    to notice it, and only the first is correct behaviour. So the scoring rule is
+    checked against all three outcomes: exempt for the right reason (pass), exempt
+    for the wrong reason (fail), and never detected at all (fail). Without the third,
+    the ground truth would reward a detector that had simply gone blind.
+    """
+    dataset = next(d for d in load_all() if d.dataset_id == "adversarial-lookalikes")
+    report, _ = run_pipeline(dataset, eval_settings(_STATE))
+    standby = next(
+        o for o in adversarial_outcomes(dataset, report) if o.resource == "vm-dr-standby"
+    )
+    assert standby.passed
+    assert "surfaced but exempt" in standby.actual
+    assert "disaster_recovery" in standby.actual
+    assert "role=disaster-recovery-standby" in standby.actual
+
+    # Exempt, but attributed to the wrong rule.
+    mislabelled = report.model_copy(
+        update={
+            "exempt_findings": tuple(
+                item.model_copy(update={"exemption_reason": ExemptionReason.COST_EXEMPTION})
+                if item.resource_name == "vm-dr-standby"
+                else item
+                for item in report.exempt_findings
+            )
+        }
+    )
+    wrong_reason = next(
+        o for o in adversarial_outcomes(dataset, mislabelled) if o.resource == "vm-dr-standby"
+    )
+    assert not wrong_reason.passed
+    assert "wrong reason" in wrong_reason.actual
+
+    # Never detected. Silence is not the same as a decision.
+    blind = report.model_copy(
+        update={
+            "exempt_findings": tuple(
+                item for item in report.exempt_findings if item.resource_name != "vm-dr-standby"
+            )
+        }
+    )
+    undetected = next(
+        o for o in adversarial_outcomes(dataset, blind) if o.resource == "vm-dr-standby"
+    )
+    assert not undetected.passed
+    assert "never exercised" in undetected.actual
+
+
+def test_an_actionable_recommendation_fails_an_exempt_case() -> None:
+    """The original defect: the standby recommended for deallocation."""
+    dataset = next(d for d in load_all() if d.dataset_id == "adversarial-lookalikes")
+    report, _ = run_pipeline(dataset, eval_settings(_STATE))
+    survivor = report.findings[0]
+    regressed = report.model_copy(
+        update={
+            "findings": (
+                *report.findings,
+                survivor.model_copy(
+                    update={
+                        "resource_name": "vm-dr-standby",
+                        "proposed_action": ActionType.DEALLOCATE_VIRTUAL_MACHINE,
+                    }
+                ),
+            )
+        }
+    )
+    outcome = next(
+        o for o in adversarial_outcomes(dataset, regressed) if o.resource == "vm-dr-standby"
+    )
+    assert not outcome.passed
+    assert "actionably recommended" in outcome.actual
+
+
+def test_a_label_cannot_expect_an_exemption_and_be_wasteful() -> None:
+    """An exempt resource is not actionable waste, so it is not in the denominator.
+
+    Labelling it both ways would count a correct non-recommendation as a miss, which
+    is the shape of mistake that makes a recall figure meaningless.
+    """
+    with pytest.raises(ValidationError, match="expects an exemption and is also labelled"):
+        ResourceLabel(
+            resource="vm-dr-standby",
+            is_wasteful=True,
+            waste_kind=WasteKind.IDLE_VIRTUAL_MACHINE,
+            expected_action=ActionType.DEALLOCATE_VIRTUAL_MACHINE,
+            expected_action_class=ActionClass.REVIEW,
+            expected_exemption=ExemptionReason.DISASTER_RECOVERY,
+            note="contradictory on purpose",
+        )
+
+
+def test_a_label_cannot_expect_the_not_exempt_verdict() -> None:
+    """``not_exempt`` is what happens when nothing matched, not something to expect."""
+    with pytest.raises(ValidationError, match="Leave the field unset"):
+        ResourceLabel(
+            resource="vm-api-01",
+            is_wasteful=False,
+            expected_exemption=ExemptionReason.NOT_EXEMPT,
+            note="contradictory on purpose",
+        )
+
+
+def test_both_look_alike_cases_expect_an_exemption() -> None:
+    """The committed ground truth, so the redefinition cannot quietly be undone."""
+    dataset = next(d for d in load_all() if d.dataset_id == "adversarial-lookalikes")
+    expecting = {label.resource: label.expected_exemption for label in dataset.expected_exempt}
+    assert expecting == {
+        "vm-dr-standby": ExemptionReason.DISASTER_RECOVERY,
+        "snap-clinical-retained": ExemptionReason.RETENTION_REQUIRED,
+    }
+    for label in dataset.expected_exempt:
+        assert not label.is_wasteful
+        assert "surfaced-but-exempt" in label.note
+
+
+def test_the_report_explains_what_handled_correctly_means() -> None:
+    """A redefinition nobody can find reads as a bar being quietly lowered."""
+    rendered = evaluate(tier=Tier.SMOKE).markdown()
+    assert "handled correctly means" in rendered
+    assert "exempt is the correct outcome" in rendered
+    assert "scoring on" in rendered
+
+
+def test_the_scorecard_names_a_gap_rather_than_hiding_it() -> None:
+    """An adversarial failure inside an aggregate is a failure nobody reads.
+
+    Asserted against a forced failure rather than a real one, now that there are no
+    real ones. What matters is that a failing case is named with its dataset, its
+    resource, what was expected and what happened -- and that it stays outside the
+    aggregate precision, so a reader cannot mistake "0.92 precision" for "the hard
+    cases are fine".
+    """
+    card = evaluate()
+    broken = (
+        card.datasets[0]
+        .adversarial[0]
+        .model_copy(update={"passed": False, "actual": "flagged as idle_virtual_machine"})
+    )
+    degraded = card.model_copy(
+        update={
+            "datasets": (
+                card.datasets[0].model_copy(update={"adversarial": (broken,)}),
+                *card.datasets[1:],
+            )
+        }
+    )
+
+    assert degraded.adversarial_passed < len(degraded.adversarial)
+    rendered = degraded.markdown()
+    assert broken.dataset_id in rendered
+    assert broken.resource in rendered
+    assert broken.expected in rendered
+    assert broken.actual in rendered
+    assert broken.note in rendered
+    # Reported, and still not blocking: the gates decide the verdict.
+    assert degraded.precision.value == card.precision.value
 
 
 # ---------------------------------------------------------------------------
@@ -562,11 +732,29 @@ def test_a_quality_drop_does_not_fail_the_run() -> None:
 
     Wiring quality into the verdict would mean the first person to add a hard dataset
     broke the build -- which is the surest way to get hard datasets removed.
+
+    Asserted against a *forced* quality drop rather than against a real one. This
+    test used to read ``precision < 1`` with the comment "the lookalikes dataset
+    drags it down", which was true while the detectors had no tag exemption and the
+    lookalikes dataset held two measured false positives. Phase 6 fixed them, and the
+    test went red -- for the best possible reason, but it showed the assertion was
+    pinned to a defect rather than to the design. A precision of 1.00 should not make
+    this claim unprovable.
     """
     card = evaluate()
-    assert card.precision.value is not None
-    assert card.precision.value < Decimal(1)  # the lookalikes dataset drags it down
     assert card.passed
+
+    degraded = card.model_copy(
+        update={
+            "precision": Score.of("detection.precision", 1, 2),
+            "recall": Score.of("detection.recall", 1, 2),
+            "ranking": Score.of("ranking.concordance", 1, 4),
+            "calibration": Score.of("savings.calibration", 0, 3),
+        }
+    )
+    assert degraded.precision.value == Decimal("0.5000")
+    assert degraded.passed, "a quality metric must never decide the verdict"
+    assert not degraded.failures
 
 
 # ---------------------------------------------------------------------------

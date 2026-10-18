@@ -1,0 +1,55 @@
+{
+  "ruleset": "builtin-exemptions-v1",
+  "defaults": [
+    {
+      "reason": "disaster_recovery",
+      "keys": ["role", "purpose", "workload-role", "dr-role", "ha-role"],
+      "match": "value_in",
+      "values": [
+        "disaster-recovery",
+        "disaster-recovery-standby",
+        "disaster_recovery",
+        "dr",
+        "dr-standby",
+        "dr-secondary",
+        "standby",
+        "warm-standby",
+        "cold-standby",
+        "passive",
+        "passive-standby",
+        "failover",
+        "failover-target"
+      ],
+      "statement": "This resource is tagged as a disaster-recovery standby. Being idle is what a standby is for, so its utilisation is not evidence of waste and CostSentinel proposes no action on it."
+    },
+    {
+      "reason": "retention_required",
+      "keys": [
+        "retention",
+        "retention-policy",
+        "legal-hold",
+        "compliance",
+        "hipaa",
+        "gdpr",
+        "data-classification-retention"
+      ],
+      "match": "any_value",
+      "statement": "This resource is tagged as being held to satisfy a retention requirement. Deleting it would be a compliance matter rather than a saving, so CostSentinel proposes no action on it."
+    },
+    {
+      "reason": "do_not_deallocate",
+      "keys": ["do-not-deallocate", "do-not-stop", "always-on", "keep-running"],
+      "match": "value_in",
+      "values": ["true", "yes", "y", "1", "on", "enforced", "required"],
+      "statement": "This resource is tagged as one that must keep running whatever its utilisation shows. CostSentinel proposes no action that would stop or resize it."
+    },
+    {
+      "reason": "cost_exemption",
+      "keys": ["cost-exempt", "costsentinel-exempt", "finops-exempt", "optimisation-exempt"],
+      "match": "value_in",
+      "values": ["true", "yes", "y", "1", "on", "approved", "granted"],
+      "statement": "The client has explicitly placed this resource outside cost optimisation. It is reported so the spend stays visible, and no action is proposed."
+    }
+  ],
+  "clients": {}
+}

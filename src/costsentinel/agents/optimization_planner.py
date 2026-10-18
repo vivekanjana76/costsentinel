@@ -227,7 +227,7 @@ def make_optimization_planner(
 
     def optimization_planner(state: ScanState) -> NodeUpdate:
         """Choose, classify and deterministically rank a remediation per signal."""
-        if state.estate is None or not state.signals:
+        if state.estate is None or not state.actionable_signals:
             return {
                 "audit": with_audit(
                     state,
@@ -259,7 +259,7 @@ def make_optimization_planner(
                     for action in store.candidate_actions(signal.kind)
                 )
             )
-            for signal in state.signals
+            for signal in state.actionable_signals
         }
 
         plan = llm.structured(
@@ -277,7 +277,7 @@ def make_optimization_planner(
                             else None
                         ),
                     )
-                    for signal in state.signals
+                    for signal in state.actionable_signals
                 ),
             ),
             schema=RemediationPlan,
@@ -286,7 +286,7 @@ def make_optimization_planner(
         errors: list[str] = list(state.errors)
         proposed: list[Recommendation] = []
 
-        for signal in state.signals:
+        for signal in state.actionable_signals:
             options = options_by_signal[signal.signal_id]
             action, rationale = _resolve_action(
                 signal=signal,
@@ -389,7 +389,7 @@ def make_optimization_planner(
             extra={
                 "run_id": state.run_id,
                 "client": state.client,
-                "signals": len(state.signals),
+                "signals": len(state.actionable_signals),
                 "recommendations": len(ranked),
                 "top_ranked": ranked[0].target_resource_name if ranked else None,
                 "model": llm.name,
