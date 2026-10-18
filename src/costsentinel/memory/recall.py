@@ -21,6 +21,14 @@ under-reporting.
 
 Nothing is ever *removed*. A client declining advice does not make the waste
 disappear, and a report that silently dropped it would misstate the estate.
+
+**A penalty moves a finding within its ranking tier and never between tiers.** The
+order comes from :meth:`~costsentinel.domain.analysis.RankingScore.order_key`, the
+same method the planner uses, and it accepts an overridden *composite* while keeping
+the tier and the safety component its own. So a demoted finding with a quantified
+saving still outranks every unquantified one (D104). That follows from the rule above
+rather than extending it: the tier is a property of the money, and memory may not
+touch the money.
 """
 
 from __future__ import annotations
@@ -29,7 +37,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 
-from costsentinel.domain.analysis import RankingScore
+from costsentinel.domain.analysis import TIER_UNQUANTIFIED, RankingScore
 from costsentinel.domain.common import Provenance, ProvenanceSource, Verification
 from costsentinel.domain.memory import (
     MemoryRecall,
@@ -180,6 +188,7 @@ def consult(
 
     base_rank = {rec.recommendation_id: rec.rank for rec in recommendations}
     composite = {score.recommendation_id: score.composite for score in ranking}
+    score_by_id = {score.recommendation_id: score for score in ranking}
     signal_by_id = {signal.signal_id: signal for signal in signals}
 
     matches: dict[str, tuple[RecallKind, RecommendationOutcome]] = {}
@@ -202,10 +211,13 @@ def consult(
 
     # Ties break on the recommendation id, exactly as the base ranking does, so the
     # order is total and reproducible.
-    ordered = sorted(
-        recommendations,
-        key=lambda rec: (-adjusted[rec.recommendation_id], rec.recommendation_id),
-    )
+    def key(rec: Recommendation) -> tuple[int, Decimal, Decimal, str]:
+        score = score_by_id.get(rec.recommendation_id)
+        if score is None:
+            return (TIER_UNQUANTIFIED, Decimal(0), Decimal(0), rec.recommendation_id)
+        return score.order_key(composite=adjusted[rec.recommendation_id])
+
+    ordered = sorted(recommendations, key=key)
     new_rank = {rec.recommendation_id: position for position, rec in enumerate(ordered, start=1)}
 
     reranked = tuple(

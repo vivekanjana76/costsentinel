@@ -7,6 +7,8 @@ inward on it.
 """
 
 from costsentinel.domain.analysis import (
+    TIER_QUANTIFIED,
+    TIER_UNQUANTIFIED,
     ContributingFactor,
     FactorKind,
     RankingScore,
@@ -109,6 +111,8 @@ from costsentinel.domain.state import ScanState
 __all__ = [
     "MAX_RENDERED_TAG_CHARS",
     "MONTHS_PER_YEAR",
+    "TIER_QUANTIFIED",
+    "TIER_UNQUANTIFIED",
     "ActionClass",
     "ActionClassification",
     "ActionType",

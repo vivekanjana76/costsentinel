@@ -125,7 +125,7 @@ def _recommendation(
     signal_id: str,
     resource_id: str,
     action: ActionType,
-    monthly: str,
+    monthly: str | None,
     risk: ActionClass = ActionClass.REVIEW,
     rank: int = 1,
 ) -> Recommendation:
@@ -141,10 +141,14 @@ def _recommendation(
         rationale="because the detector said so",
         rationale_provenance=PROV,
         preconditions=("re-check before acting",),
-        savings=SavingsEstimate.from_monthly(
-            MoneyAmount.of(Decimal(monthly), provenance=PROV),
-            basis="test",
-            is_estimated=False,
+        savings=(
+            SavingsEstimate.from_monthly(
+                MoneyAmount.of(Decimal(monthly), provenance=PROV),
+                basis="test",
+                is_estimated=False,
+            )
+            if monthly is not None
+            else SavingsEstimate.undetermined("no cheaper tier exists")
         ),
         confidence=Decimal("0.9"),
         rank=rank,
@@ -453,7 +457,62 @@ def test_an_empty_memory_leaves_the_order_exactly_as_it_was() -> None:
 
 
 def test_consulting_about_nothing_returns_nothing() -> None:
+    """The empty case, so the node can run unconditionally rather than behind a guard."""
     assert consult(recommendations=(), signals=(), ranking=(), outcomes=()) == ((), ())
+
+
+def test_a_penalty_cannot_lift_an_unquantified_finding_above_a_quantified_one() -> None:
+    """The ranking tier survives a memory penalty (ARCHITECTURE.md D104).
+
+    The order comes from ``RankingScore.order_key``, which accepts an overridden
+    composite and keeps the tier its own -- so this is a property of the method rather
+    than a convention ``consult`` is trusted to honour. The case is constructed to be
+    as unfavourable as possible: the quantified finding is declined outright, taking a
+    70% penalty, and the unquantified one is untouched and perfectly safe.
+    """
+    signals = (
+        _signal("sig-known", WasteKind.ORPHANED_MANAGED_DISK, "/disk/known"),
+        _signal("sig-unknown", WasteKind.IDLE_SQL_DATABASE, "/sql/unknown"),
+    )
+    known = _recommendation(
+        "rec-known",
+        signal_id="sig-known",
+        resource_id="/disk/known",
+        action=ActionType.DELETE_ORPHANED_MANAGED_DISK,
+        monthly="40",
+        risk=ActionClass.BLOCK,
+        rank=1,
+    )
+    unknown = _recommendation(
+        "rec-unknown",
+        signal_id="sig-unknown",
+        resource_id="/sql/unknown",
+        action=ActionType.SCALE_DOWN_SQL_DATABASE,
+        monthly=None,
+        rank=2,
+    )
+    recommendations = (known, unknown)
+    ranking = score_recommendations(recommendations)
+
+    declined = _outcome(
+        "rec-known",
+        resource_id="/disk/known",
+        action=ActionType.DELETE_ORPHANED_MANAGED_DISK,
+        kind=WasteKind.ORPHANED_MANAGED_DISK,
+        reason="that disk is referenced by an image",
+    )
+    reranked, recalls = consult(
+        recommendations=recommendations,
+        signals=signals,
+        ranking=ranking,
+        outcomes=(declined,),
+    )
+
+    # The penalty landed...
+    assert [r.recommendation_id for r in recalls] == ["rec-known"]
+    assert recalls[0].penalty > 0
+    # ...and the quantified finding still leads, because the tier is not penalisable.
+    assert [r.recommendation_id for r in reranked] == ["rec-known", "rec-unknown"]
 
 
 # ---------------------------------------------------------------------------

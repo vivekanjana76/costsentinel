@@ -10,6 +10,25 @@ here with no model involvement. The weights are explicit policy constants, state
 below and reported on every finding, so a client can see the trade-off being made
 rather than having to trust an opaque ordering.
 
+**An unknown saving ranks low until quantified.** A finding with a quantified saving
+outranks one without, whatever their composites say. This is a *tier* applied in
+:func:`ordering_key` rather than a term in the weighted sum, and the difference
+matters: expressed as a weight it would hold only for the current weights and would
+break silently the first time somebody retuned them. Expressed as a tier it cannot be
+broken by a weight at all (ARCHITECTURE.md D104).
+
+The reason is a product one. A FinOps tool must not tell a client that the thing it
+cannot cost is their biggest opportunity -- that is a claim about money made without a
+number, which is the same failure ``MoneyAmount`` refusing to hold an unknown as zero
+exists to prevent, arriving by a different route.
+
+:meth:`RankingScore.order_key` is the *only* definition of the order, and it lives on
+the domain type rather than here with the weights. The planner uses it and so does the
+memory consult step, so a penalty applied to a composite cannot lift an unquantified
+finding above a quantified one. One definition rather than two that drift -- and in
+``domain`` rather than ``agents`` because ``agents`` already depends on ``memory``, so
+the reverse import would close a cycle.
+
 The model's only contribution to ranking is the *rationale* attached afterwards. A
 hostile model can change the wording and cannot change the rank -- which is a
 property the tests assert directly.
@@ -20,7 +39,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from decimal import ROUND_HALF_UP, Decimal
 
-from costsentinel.domain.analysis import RankingScore
+from costsentinel.domain.analysis import TIER_UNQUANTIFIED, RankingScore
 from costsentinel.domain.common import Provenance
 from costsentinel.domain.recommendations import ActionClass, Recommendation
 
@@ -99,6 +118,7 @@ def score_recommendations(
         scores.append(
             RankingScore(
                 recommendation_id=recommendation.recommendation_id,
+                savings_known=recommendation.savings.monthly.is_known,
                 savings_component=savings,
                 risk_component=safety,
                 confidence_component=confidence,
@@ -116,23 +136,18 @@ def score_recommendations(
 def rank_order(
     recommendations: Sequence[Recommendation], scores: Sequence[RankingScore]
 ) -> tuple[str, ...]:
-    """Recommendation ids in rank order, highest composite first.
+    """Recommendation ids in rank order, by :meth:`RankingScore.order_key`.
 
-    Ties break on the recommendation id, so the order is total and reproducible
-    rather than dependent on input ordering.
+    A recommendation with no score ranks last. That should not happen -- the planner
+    scores everything it proposes -- but ranking something *above* a scored finding
+    on the strength of a missing score would be the wrong way to fail.
     """
     by_id = {score.recommendation_id: score for score in scores}
-    return tuple(
-        recommendation.recommendation_id
-        for recommendation in sorted(
-            recommendations,
-            key=lambda r: (
-                -(
-                    by_id[r.recommendation_id].composite
-                    if r.recommendation_id in by_id
-                    else Decimal(0)
-                ),
-                r.recommendation_id,
-            ),
-        )
-    )
+
+    def key(recommendation: Recommendation) -> tuple[int, Decimal, Decimal, str]:
+        score = by_id.get(recommendation.recommendation_id)
+        if score is None:
+            return (TIER_UNQUANTIFIED, Decimal(0), Decimal(0), recommendation.recommendation_id)
+        return score.order_key()
+
+    return tuple(r.recommendation_id for r in sorted(recommendations, key=key))

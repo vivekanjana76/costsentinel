@@ -384,8 +384,11 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
         ]
         if unpriced:
             notes.append(
-                f"{unpriced} finding(s) could not be priced from provider data and are "
-                f"excluded from the projected savings rather than assumed to be zero."
+                f"{unpriced} finding(s) could not be priced from provider data. They are "
+                f"excluded from the projected savings rather than assumed to be zero, and "
+                f"they rank below every priced finding -- we will not tell you that "
+                f"something we cannot cost is your bigger opportunity. Each one says why "
+                f"no figure could be derived."
             )
         if exempt_items:
             # Node-authored rather than model-authored, like the unpriced note above
