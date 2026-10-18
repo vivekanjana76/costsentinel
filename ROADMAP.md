@@ -1,6 +1,6 @@
 # CostSentinel — Roadmap
 
-**Current phase: 7** — spend anomalies and the ranking rule.
+**Current phase: 8** — anomaly attribution and real-model hardening.
 
 Phases are sequential. Do not start work in a later phase before the current phase
 is complete and its exit criteria are met. If an idea arrives mid-phase, record it
@@ -423,31 +423,31 @@ open would mean every anomaly inheriting an unsettled rule.
 
 Milestone: *Phase 7 - Spend anomalies and the ranking rule*.
 
-- [ ] The phase split recorded, and CLAUDE.md section 14 gains the rule that a
+- [x] The phase split recorded, and CLAUDE.md section 14 gains the rule that a
       test asserts *intended* behaviour: a deliberately open gap is a strict
       `xfail` naming its closing issue, never a wrong answer asserted as correct
       (#58)
-- [ ] **The ranking rule, resolved and documented:** an unknown or unquantified saving
+- [x] **The ranking rule, resolved and documented:** an unknown or unquantified saving
       ranks **low until quantified**, so a known saving of any positive magnitude
       outranks an unknown one, and reversibility breaks ties between comparable known
       magnitudes rather than letting an unknown outrank a known (#59)
-- [ ] The eval's expected ranks updated to the chosen rule, with the previously
+- [x] The eval's expected ranks updated to the chosen rule, with the previously
       documented discordant pair resolved **by rule** rather than by relabelling one
       case, and concordance reported before and after (#60)
-- [ ] A deterministic statistical detector over a cost or usage series, per
+- [x] A deterministic statistical detector over a cost or usage series, per
       subscription and per resource where available, finding level shifts and spikes
       against a trailing baseline by a transparent method. Every alert states the
       baseline, the observed value and the deviation in plain numbers (#61)
-- [ ] Committed, seeded synthetic series in the mock provider: a genuine step change,
+- [x] Committed, seeded synthetic series in the mock provider: a genuine step change,
       a one-off spike that reverts, a steady healthy series, and a seasonal pattern
       that must **not** alert (#62)
-- [ ] `CostAnomaly` as a first-class finding distinct from a waste signal. It says
+- [x] `CostAnomaly` as a first-class finding distinct from a waste signal. It says
       "spend changed, investigate", never "this resource is wasteful, act", and
       **cannot** produce an automatable recommendation -- asserted, not asserted-about
       (#65)
-- [ ] Labelled anomaly cases in the eval with precision and recall as a quality
+- [x] Labelled anomaly cases in the eval with precision and recall as a quality
       metric, plus an adversarial case the seasonal pattern must not fire on (#63)
-- [ ] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.7.0 (#64)
+- [x] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.7.0 (#64)
 
 **Exit criteria:** `uv run costsentinel eval` detects the step change and the spike,
 does **not** alert on the seasonal pattern or the healthy series, and reports anomaly
@@ -460,6 +460,30 @@ it, egress and data-transfer anomalies, real-model retry and fallback, a token-s
 guardrail, and threshold recalibration against real estates. All of those are Phase 8,
 because none of them can be scored without a real subscription or a real model, and a
 phase whose exit criteria CI cannot check is a phase nobody can close honestly.
+
+**Landed.** The ranking rule is settled (ARCHITECTURE.md D104) and ranking concordance
+moved from 0.97 (29/30) to 1.00 (30/30) -- by rule, applied to every label carrying an
+unquantified saving, rather than by editing the one case that disagreed. Spend-anomaly
+detection finds the step change and the spike, reports nothing on the seasonal pattern
+or the steady series, and scores 1.00 precision and 1.00 recall over four labelled
+shapes. Adversarial coverage went from 3/3 to 4/4 and detection from 13/13 to 14/14,
+with all three gates green and no money figure moved.
+
+Three things to carry forward rather than claim as finished:
+
+- **The detector does not attribute.** It says a subscription's spend changed, not
+  which resource changed it, because a per-resource cost series is not in the provider
+  seam and the mock provider cannot usefully fake one. Phase 8, and the reason
+  `assess_series` takes a bare series and a scope label.
+- **The constants are defensible, not calibrated.** 3.5 and 5.0 are the conventional
+  cuts, the 2% scale floor and the 15% materiality floor are product judgements, and
+  all four were chosen against four synthetic shapes rather than against real
+  estates. Phase 8's calibration item is where they meet real data; the scorecard is
+  what will show the move.
+- **The weekday profile handles a weekly rhythm and nothing else.** A month-end batch,
+  a quarterly close or a ramp would all read as a level shift. That is the right
+  trade for now -- a client can check a weekday median by hand and cannot check an STL
+  decomposition -- but it is a known limitation rather than a complete answer.
 
 ---
 

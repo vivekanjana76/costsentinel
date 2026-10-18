@@ -9,5 +9,5 @@ of anything its agent can propose, so an external caller inherits the same appro
 gate and cannot route around it. MCP is for tools we consume; A2A is for agents we
 expose (ARCHITECTURE.md D16).
 
-See ARCHITECTURE.md section 11 and ROADMAP.md Phase 11.
+See ARCHITECTURE.md section 12 and ROADMAP.md Phase 11.
 """
