@@ -48,6 +48,8 @@ from evals.harness.metrics import (
     DetectorScore,
     Mismatch,
     aggregate_detection,
+    anomaly_by_scope,
+    anomaly_scores,
     detection_scores,
     finding_by_resource,
     merge_detector_scores,
@@ -154,6 +156,48 @@ def _exempt_outcome(label: ResourceLabel, report: ClientReport) -> tuple[bool, s
     )
 
 
+def _subscription_outcomes(
+    dataset: LabelledEstate, report: ClientReport
+) -> tuple[AdversarialOutcome, ...]:
+    """Adversarial cases about *spend* rather than about a resource.
+
+    The seasonal non-event is the one this exists for. A weekly batch window is the
+    case a detector without a seasonal correction reports every week, and folding it
+    into an aggregate precision would hide a defect that would make the whole alerting
+    feed unreadable.
+    """
+    found = anomaly_by_scope(report)
+    outcomes: list[AdversarialOutcome] = []
+
+    for label in dataset.adversarial_subscriptions:
+        if label.adversarial is None:  # pragma: no cover -- filtered by the property
+            continue
+        subscription = dataset.estate.subscriptions[label.subscription]
+        anomaly = found.get(subscription.subscription_id)
+        if label.expects_anomaly:
+            passed = anomaly is not None and anomaly.kind is label.expected_kind
+            expected = f"reported as {label.expected_kind.value if label.expected_kind else '?'}"
+        else:
+            passed = anomaly is None
+            expected = "no anomaly reported"
+        outcomes.append(
+            AdversarialOutcome(
+                dataset_id=dataset.dataset_id,
+                resource=subscription.display_name,
+                kind=label.adversarial,
+                passed=passed,
+                expected=expected,
+                actual=(
+                    "no anomaly reported"
+                    if anomaly is None
+                    else f"reported as {anomaly.kind.value} at {anomaly.deviation_score} sigma"
+                ),
+                note=label.note,
+            )
+        )
+    return tuple(outcomes)
+
+
 def adversarial_outcomes(
     dataset: LabelledEstate, report: ClientReport
 ) -> tuple[AdversarialOutcome, ...]:
@@ -196,7 +240,7 @@ def adversarial_outcomes(
                 note=label.note,
             )
         )
-    return tuple(outcomes)
+    return (*outcomes, *_subscription_outcomes(dataset, report))
 
 
 def score_dataset(
@@ -212,6 +256,7 @@ def score_dataset(
     detectors, detection_mismatches = detection_scores(dataset, report)
     precision, recall = aggregate_detection(tuple(detectors.values()))
     ranking, rank_mismatches = ranking_concordance(dataset, report)
+    anomaly_precision, anomaly_recall, anomaly_mismatches = anomaly_scores(dataset, report)
     calibration, calibration_mismatches = savings_calibration(dataset, report)
     groundedness = judge.score(report, state)
 
@@ -225,6 +270,7 @@ def score_dataset(
     mismatches: tuple[Mismatch, ...] = (
         *detection_mismatches,
         *rank_mismatches,
+        *anomaly_mismatches,
         *calibration_mismatches,
     )
 
@@ -249,6 +295,8 @@ def score_dataset(
         precision=precision,
         recall=recall,
         ranking=ranking,
+        anomaly_precision=anomaly_precision,
+        anomaly_recall=anomaly_recall,
         calibration=calibration,
         groundedness=groundedness,
         gates=tuple(gates),
@@ -307,6 +355,10 @@ def evaluate(
         precision=precision,
         recall=recall,
         ranking=aggregate_score("ranking.concordance", [r.ranking for r in results]),
+        anomaly_precision=aggregate_score(
+            "anomaly.precision", [r.anomaly_precision for r in results]
+        ),
+        anomaly_recall=aggregate_score("anomaly.recall", [r.anomaly_recall for r in results]),
         calibration=aggregate_score("savings.calibration", [r.calibration for r in results]),
         groundedness=merge(groundedness),
         gates=merge_gates([gate for result in results for gate in result.gates]),

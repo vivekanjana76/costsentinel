@@ -39,6 +39,7 @@ from costsentinel.domain.estate import (
     Subscription,
 )
 from costsentinel.providers.catalogue import PriceCatalogue, catalogue_provenance, default_catalogue
+from costsentinel.providers.mock import synthetic_series
 from evals.harness.dataset import (
     EstateSpec,
     LabelledEstate,
@@ -153,9 +154,35 @@ class DatasetProvider:
     def get_cost_series(
         self, subscription_id: str, *, window_days: int = WINDOW_DAYS
     ) -> CostSeries:
-        """A flat daily series, so observed spend is exact rather than sampled."""
+        """The subscription's daily series: flat by default, shaped when it says so.
+
+        Flat is the right default and not laziness. A flat series makes the
+        observed-spend figure exact, which is what lets the cost-figure gate assert it
+        to the cent -- and every dataset before the anomaly cases is about waste, where
+        the spend series is background rather than subject.
+
+        A subscription that declares a ``series_shape`` gets one from
+        ``synthetic_series``: the same generator the demo estate uses, so a dataset
+        cannot have a second idea of what a step change looks like.
+        """
         days = max(1, window_days)
         end = self._as_of.date()
+        provenance = self._provenance(
+            f"dataset:{self._dataset.dataset_id}/cost/{subscription_id}/{days}d"
+        )
+        spec = next(
+            (s for s in self._spec.subscriptions if s.subscription_id == subscription_id), None
+        )
+        if spec is not None and spec.series_shape is not None and spec.daily_baseline is not None:
+            return synthetic_series(
+                subscription_id=subscription_id,
+                daily_baseline=spec.daily_baseline,
+                shape=spec.series_shape,
+                end=end,
+                window_days=days,
+                provenance=provenance,
+            )
+
         start = end - timedelta(days=days - 1)
         points = tuple(
             CostPoint(day=start + timedelta(days=offset), amount=self._spec.daily_spend)
@@ -164,9 +191,7 @@ class DatasetProvider:
         return CostSeries(
             subscription_id=subscription_id,
             points=points,
-            provenance=self._provenance(
-                f"dataset:{self._dataset.dataset_id}/cost/{subscription_id}/{days}d"
-            ),
+            provenance=provenance,
         )
 
     def get_resource_metrics(self, resource_id: str) -> ResourceMetrics | None:

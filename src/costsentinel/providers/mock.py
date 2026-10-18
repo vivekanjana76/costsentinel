@@ -40,7 +40,7 @@ driven by ``random.Random`` seeded with a string, which is stable across process
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 from typing import NamedTuple
@@ -182,12 +182,12 @@ _BATCH_WEEKDAY = 6
 _BATCH_MULTIPLE = Decimal("5.0")
 
 
-def _shape_multiple(shape: SeriesShape, *, offset: int, window_days: int, weekday: int) -> Decimal:
+def shape_multiple(shape: SeriesShape, *, offset: int, window_days: int, weekday: int) -> Decimal:
     """The shape's multiplier for one day of the window.
 
     ``offset`` counts from the start of the window, so ``window_days - 1`` is the most
     recent day. Deterministic arithmetic over committed constants: no randomness, and
-    no dependence on the wall clock beyond the provider's own ``as_of``.
+    no dependence on the wall clock beyond the caller's own anchor date.
     """
     days_from_end = window_days - 1 - offset
     if shape is SeriesShape.STEP_CHANGE:
@@ -197,6 +197,45 @@ def _shape_multiple(shape: SeriesShape, *, offset: int, window_days: int, weekda
     if shape is SeriesShape.SEASONAL:
         return _BATCH_MULTIPLE if weekday == _BATCH_WEEKDAY else Decimal(1)
     return Decimal(1)
+
+
+def synthetic_series(
+    *,
+    subscription_id: str,
+    daily_baseline: Decimal,
+    shape: SeriesShape,
+    end: date,
+    window_days: int,
+    provenance: Provenance,
+    currency: Currency = Currency.USD,
+) -> CostSeries:
+    """A committed daily series of the requested shape, ending on ``end``.
+
+    Public, and shared by two callers that would otherwise each grow their own copy:
+    :class:`MockAzureProvider` for the demo estate, and the evaluation harness's
+    dataset provider for the labelled anomaly cases. One definition reviewed once,
+    rather than two fixtures whose idea of "a step change" could drift apart while
+    both looked right.
+
+    Entirely deterministic -- a committed baseline times a committed shape times a
+    committed wobble -- so two runs of the same request produce byte-identical points
+    and therefore byte-identical anomaly verdicts.
+    """
+    first = end - timedelta(days=window_days - 1)
+    points: list[CostPoint] = []
+    for offset in range(window_days):
+        day = first + timedelta(days=offset)
+        wobble = Decimal(_DAILY_WOBBLE[offset % len(_DAILY_WOBBLE)])
+        multiple = shape_multiple(
+            shape, offset=offset, window_days=window_days, weekday=day.weekday()
+        )
+        points.append(CostPoint(day=day, amount=_money(daily_baseline * multiple * wobble)))
+    return CostSeries(
+        subscription_id=subscription_id,
+        currency=currency,
+        points=tuple(points),
+        provenance=provenance,
+    )
 
 
 class _SubSpec(NamedTuple):
@@ -883,24 +922,13 @@ class MockAzureProvider:
         matches the sum of list prices.
         """
         spec = next((s for s in _SUBSCRIPTIONS if s.subscription_id == subscription_id), None)
-        baseline = Decimal(spec.daily_baseline) if spec else Decimal(0)
         shape = spec.shape if spec else SeriesShape.STEADY
-        end = self._as_of.date()
-        first = end - timedelta(days=window_days - 1)
-
-        points: list[CostPoint] = []
-        for offset in range(window_days):
-            day = first + timedelta(days=offset)
-            wobble = Decimal(_DAILY_WOBBLE[offset % len(_DAILY_WOBBLE)])
-            multiple = _shape_multiple(
-                shape, offset=offset, window_days=window_days, weekday=day.weekday()
-            )
-            points.append(CostPoint(day=day, amount=_money(baseline * multiple * wobble)))
-
-        return CostSeries(
+        return synthetic_series(
             subscription_id=subscription_id,
-            currency=Currency.USD,
-            points=tuple(points),
+            daily_baseline=Decimal(spec.daily_baseline) if spec else Decimal(0),
+            shape=shape,
+            end=self._as_of.date(),
+            window_days=window_days,
             provenance=self._provenance(
                 f"mock:costmanagement.query/daily/{subscription_id}/{window_days}d"
                 f"?shape={shape.value}"

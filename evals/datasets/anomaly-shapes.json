@@ -1,0 +1,117 @@
+{
+  "dataset_id": "anomaly-shapes",
+  "title": "Spend anomalies: a step change, a reverting spike, a seasonal pattern and a steady series",
+  "purpose": "The four shapes a daily cost series takes, one per subscription, so anomaly precision and recall are both measurable. Two must be found and two must not. The seasonal case is the adversarial one and the reason the detector carries a weekday profile at all: a weekly batch window is what a naive detector reports every single week, and a client told their Sunday batch is a spike every Sunday stops reading the alerts. The series come from the same generator the demo estate uses, so a dataset cannot hold a second idea of what a step change looks like.",
+  "tier": "smoke",
+  "estate": {
+    "client": "helios-media",
+    "daily_spend": "40.00",
+    "subscriptions": [
+      {
+        "subscription_id": "00000000-0000-4000-8000-0000000e0004",
+        "display_name": "HM-PROD-Streaming",
+        "environment": "production",
+        "region": "eastus",
+        "series_shape": "step_change",
+        "daily_baseline": "220.00"
+      },
+      {
+        "subscription_id": "00000000-0000-4000-8000-0000000e0005",
+        "display_name": "HM-DEV-Encode",
+        "environment": "development",
+        "region": "eastus",
+        "series_shape": "reverting_spike",
+        "daily_baseline": "48.00"
+      },
+      {
+        "subscription_id": "00000000-0000-4000-8000-0000000e0006",
+        "display_name": "HM-PROD-Archive",
+        "environment": "production",
+        "region": "eastus",
+        "series_shape": "seasonal",
+        "daily_baseline": "75.00"
+      },
+      {
+        "subscription_id": "00000000-0000-4000-8000-0000000e0007",
+        "display_name": "HM-PROD-Billing",
+        "environment": "production",
+        "region": "eastus",
+        "series_shape": "steady",
+        "daily_baseline": "90.00"
+      }
+    ],
+    "resources": [
+      {
+        "name": "vm-transcode-01",
+        "kind": "virtual_machine",
+        "subscription": 0,
+        "resource_group": "rg-streaming",
+        "state": "running",
+        "sku": "Standard_D4s_v5",
+        "tags": {
+          "owner": "streaming-team",
+          "env": "prod"
+        },
+        "age_days": 400,
+        "cpu_avg_pct": "58.0",
+        "cpu_max_pct": "86.0",
+        "network_in_gb": "4200.0"
+      },
+      {
+        "name": "disk-encode-scratch",
+        "kind": "managed_disk",
+        "subscription": 1,
+        "resource_group": "rg-encode",
+        "state": "unattached",
+        "sku": "Premium_LRS_P10",
+        "tags": {
+          "owner": "encode-team"
+        },
+        "age_days": 180
+      }
+    ],
+    "reservations": []
+  },
+  "labels": [
+    {
+      "resource": "vm-transcode-01",
+      "is_wasteful": false,
+      "note": "58% average and 86% peak with heavy inbound traffic. Busy and correctly sized. Present so detection precision is measurable on this dataset rather than unmeasured, and so that a spend change on its subscription cannot be mistaken for the machine being wasteful -- the two findings are about different things, and the step change here belongs to the subscription, not to this VM."
+    },
+    {
+      "resource": "disk-encode-scratch",
+      "is_wasteful": true,
+      "waste_kind": "orphaned_managed_disk",
+      "expected_action": "delete_orphaned_managed_disk",
+      "expected_action_class": "review",
+      "expected_monthly_saving": "19.71",
+      "expected_rank": 1,
+      "note": "Unattached and billed in full: a Premium_LRS_P10 at the committed eastus rate of 19.71 a month. Deleting an orphaned disk has a review floor, and this is a development subscription so nothing tightens it to block. Present so this dataset carries at least one real saving, which is what lets it also check that an anomaly's difference never reaches the savings total -- the step change on HM-PROD-Streaming is worth far more per day than this disk is per month, and the headline must still read 19.71."
+    }
+  ],
+  "subscription_labels": [
+    {
+      "subscription": 0,
+      "expects_anomaly": true,
+      "expected_kind": "level_shift",
+      "note": "Daily spend sits at its baseline for twenty-three days and then at 1.75 times that level for the last seven, and stays there. That is a level shift rather than a spike: the run rate moved and did not come back, which is what a workload landing, a resize or something left running looks like. The distinction matters because it decides where a client looks -- 'your run rate is now higher' and 'something ran last Tuesday' are different investigations, and reporting the wrong one wastes the client's time rather than saving it."
+    },
+    {
+      "subscription": 1,
+      "expects_anomaly": true,
+      "expected_kind": "spike",
+      "note": "One day at four times the baseline, four days before the end of the window, with spend back to normal on either side. A spike: something ran once. Deliberately not the final day of the window, because a spike on the last day cannot be seen to revert and 'it spiked and came back' is the claim this case exists to make. Expected as a spike and not a level shift -- a single day cannot move a week's median, and a detector that called this a level shift would be telling the client their run rate had changed when it had not."
+    },
+    {
+      "subscription": 2,
+      "expects_anomaly": false,
+      "adversarial": "seasonal_non_event",
+      "note": "A weekly batch window: one weekday at five times every other, every week, for the whole window. This is a schedule, not an anomaly, and it is the case a detector without a seasonal correction gets wrong -- it reports the batch day as a spike every single week. That failure is worse than a missed finding: a client who is told their Sunday batch is an anomaly every Sunday stops reading the alerts, and then misses the real one. The detector compares each day against the median of its own weekday across the baseline, so the batch day is compared with batch days and the residual is near zero. Called out individually on the scorecard rather than folded into aggregate precision, because a false positive that repeats weekly is a product failure and not a percentage."
+    },
+    {
+      "subscription": 3,
+      "expects_anomaly": false,
+      "note": "Flat at its baseline within the committed day-to-day wobble for the whole window. Nothing to report, and it must report nothing. The null case, and it is not decorative: a detector with no steady series to be quiet about has no measurable precision, because precision needs something it could wrongly flag."
+    }
+  ]
+}

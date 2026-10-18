@@ -25,7 +25,7 @@ from itertools import combinations
 from pydantic import Field
 
 from costsentinel.domain.common import Frozen
-from costsentinel.domain.report import ClientReport, ReportFinding
+from costsentinel.domain.report import ClientReport, ReportAnomaly, ReportFinding
 from costsentinel.domain.signals import WasteKind
 from evals.harness.dataset import LabelledEstate, ResourceLabel
 
@@ -394,6 +394,112 @@ def savings_calibration(
             detail="exact agreement with the labelled figure",
         ),
         tuple(drifted),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Spend anomalies
+# ---------------------------------------------------------------------------
+
+
+def anomaly_by_scope(report: ClientReport) -> Mapping[str, ReportAnomaly]:
+    """Index a report's spend changes by the scope they were found in."""
+    return {anomaly.scope: anomaly for anomaly in report.anomalies}
+
+
+def anomaly_scores(
+    dataset: LabelledEstate, report: ClientReport
+) -> tuple[Score, Score, tuple[Mismatch, ...]]:
+    """Precision and recall for spend-anomaly detection, with every disagreement.
+
+    A quality metric and never a gate. An anomaly is advice to investigate, so a false
+    positive costs somebody an hour and a false negative costs a client some
+    unexplained spend -- neither is the kind of defect that should stop a merge, and
+    wiring either into the verdict would mean the first person to add a hard series
+    broke the build.
+
+    An anomaly of the **wrong kind** counts as a false positive for the kind claimed
+    and a false negative for the kind labelled, exactly as a mis-kinded waste finding
+    does. "Your run rate moved" and "something ran on Tuesday" send a client to
+    different places, so the shape is part of the answer rather than a detail of it.
+    """
+    if not dataset.subscription_labels:
+        reason = "this dataset labels no subscription spend"
+        return (
+            Score.unmeasured("anomaly.precision", reason),
+            Score.unmeasured("anomaly.recall", reason),
+            (),
+        )
+
+    found = anomaly_by_scope(report)
+    true_positives = 0
+    false_positives = 0
+    false_negatives = 0
+    mismatches: list[Mismatch] = []
+
+    for index, subscription in enumerate(dataset.estate.subscriptions):
+        label = next(
+            (one for one in dataset.subscription_labels if one.subscription == index), None
+        )
+        if label is None:  # pragma: no cover -- the schema requires a label for each
+            continue
+        anomaly = found.get(subscription.subscription_id)
+
+        if label.expects_anomaly:
+            if anomaly is None:
+                false_negatives += 1
+                mismatches.append(
+                    Mismatch(
+                        dataset_id=dataset.dataset_id,
+                        resource=subscription.display_name,
+                        kind="anomaly",
+                        expected=f"{label.expected_kind.value if label.expected_kind else '?'}",
+                        actual="no anomaly reported",
+                        note=label.note,
+                    )
+                )
+            elif anomaly.kind is label.expected_kind:
+                true_positives += 1
+            else:
+                false_positives += 1
+                false_negatives += 1
+                mismatches.append(
+                    Mismatch(
+                        dataset_id=dataset.dataset_id,
+                        resource=subscription.display_name,
+                        kind="anomaly",
+                        expected=f"{label.expected_kind.value if label.expected_kind else '?'}",
+                        actual=anomaly.kind.value,
+                        note="reported, but as the wrong shape of change",
+                    )
+                )
+        elif anomaly is not None:
+            false_positives += 1
+            mismatches.append(
+                Mismatch(
+                    dataset_id=dataset.dataset_id,
+                    resource=subscription.display_name,
+                    kind="anomaly",
+                    expected="no anomaly",
+                    actual=anomaly.kind.value,
+                    note=label.note,
+                )
+            )
+
+    return (
+        Score.of(
+            "anomaly.precision",
+            true_positives,
+            true_positives + false_positives,
+            detail="of the spend changes reported, how many were real",
+        ),
+        Score.of(
+            "anomaly.recall",
+            true_positives,
+            true_positives + false_negatives,
+            detail="of the real spend changes, how many were found",
+        ),
+        tuple(mismatches),
     )
 
 

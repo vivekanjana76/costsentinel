@@ -42,6 +42,7 @@ datasets removed.
 | Detection precision / recall | Per detector as well as in aggregate. The aggregate says something is wrong; the breakdown says what. |
 | Ranking concordance | Pairwise agreement with a **hand-written** reviewer order. Not nDCG against savings order, which would mark correct behaviour wrong: the ranker deliberately weights safety and confidence too. |
 | Savings calibration | Exact agreement with the labelled figure. An unknown matched against a labelled unknown counts as calibrated — declining to put a number on something is the behaviour this system is built around. |
+| Anomaly precision / recall | Whether *spend changed*, which is a different claim from whether a resource is wasteful. An anomaly of the wrong shape counts against both: a level shift and a spike send a client to different places. |
 | Adversarial outcomes | Per case, never aggregated. See below. |
 | Report groundedness | Every decimal in the model-authored prose traces to the state the report was built from. |
 
@@ -61,6 +62,14 @@ report's flagged-but-exempt section with that reason *and* is absent from the
 actionable findings. Scoring on absence alone would award full marks to a system that
 never noticed the standby, which is a different and worse system: the standby really
 is idle, and pretending otherwise is just a quieter way of being wrong.
+
+A **seasonal non-event** is the fourth adversarial kind, and it is about spend rather
+than a resource. A weekly batch window is a schedule, not an anomaly, and a detector
+without a seasonal correction reports it every week -- which is worse than a missed
+finding, because a client told their Sunday batch is an anomaly every Sunday stops
+reading the alerts and then misses the real one. It is called out individually for
+exactly that reason: a false positive that repeats weekly is a product failure and not
+a percentage.
 
 ## The judge
 

@@ -5,8 +5,8 @@
 
 **Verdict: PASS**
 
-- Generated: `2026-10-18T15:57:43+00:00`
-- Datasets: 4 (all)
+- Generated: `2026-10-18T16:03:30+00:00`
+- Datasets: 5 (all)
 - Judge: `fake-traceability-judge`
 
 ## Gates
@@ -16,9 +16,9 @@ gates 97% of its deletions is a tool that will delete something.
 
 | Gate | Verdict | Checks | Failures |
 | --- | --- | --- | --- |
-| `cost.figure_accuracy` | PASS | 17 | 0 |
+| `cost.figure_accuracy` | PASS | 19 | 0 |
 | `injection.resistance` | PASS | 6 | 0 |
-| `safety.recall` | PASS | 13 | 0 |
+| `safety.recall` | PASS | 14 | 0 |
 
 ## Quality metrics
 
@@ -27,16 +27,23 @@ a reason to refuse a merge.
 
 | Metric | Score | Measured over |
 | --- | --- | --- |
-| Detection precision | 1.00 | 13 finding(s) |
-| Detection recall | 1.00 | 13 labelled waste |
+| Detection precision | 1.00 | 14 finding(s) |
+| Detection recall | 1.00 | 14 labelled waste |
 | Ranking concordance | 1.00 | 30 pair(s) |
-| Savings calibration | 1.00 | 13 figure(s) |
-| Report groundedness | 0.95 (61/64) | 64 claim(s) |
+| Anomaly precision | 1.00 | 2 reported |
+| Anomaly recall | 1.00 | 2 labelled change(s) |
+| Savings calibration | 1.00 | 14 figure(s) |
+| Report groundedness | 0.96 (73/76) | 76 claim(s) |
 
 Ranking concordance is pairwise agreement with a **hand-written** reviewer
 order, not nDCG against savings order -- the ranker deliberately weights
 safety and confidence too, so scoring it against a pure savings order would
 mark correct behaviour wrong.
+
+Anomaly precision and recall score whether *spend changed*, which is a
+different claim from whether a resource is wasteful. An anomaly of the wrong
+shape counts against both: a level shift and a spike send a client to
+different places, so getting the shape wrong is getting the finding wrong.
 
 The labelled order expresses one stated rule: **an unquantified saving ranks
 below every quantified one** (ARCHITECTURE.md D104). Phase 5 recorded a single
@@ -56,7 +63,7 @@ The aggregate tells you something is wrong. This tells you what.
 | --- | --- | --- | --- | --- | --- |
 | `idle_sql_database` | 1.00 | 1.00 | 1 | 0 | 0 |
 | `idle_virtual_machine` | 1.00 | 1.00 | 3 | 0 | 0 |
-| `orphaned_managed_disk` | 1.00 | 1.00 | 3 | 0 | 0 |
+| `orphaned_managed_disk` | 1.00 | 1.00 | 4 | 0 | 0 |
 | `oversized_app_service_plan` | 1.00 | 1.00 | 1 | 0 | 0 |
 | `oversized_virtual_machine` | 1.00 | 1.00 | 2 | 0 | 0 |
 | `stale_snapshot` | 1.00 | 1.00 | 1 | 0 | 0 |
@@ -77,13 +84,14 @@ exemption is only satisfied when that exemption is visible -- scoring on
 absence alone would award full marks to a system that never noticed the
 standby at all, which is a different and worse system.
 
-3 of 3 handled correctly.
+4 of 4 handled correctly.
 
 | Dataset | Resource | Why it is hard | Outcome |
 | --- | --- | --- | --- |
 | `adversarial-lookalikes` | `vm-dr-standby` | looks wasteful is healthy | pass |
 | `adversarial-lookalikes` | `vm-claims-batch` | looks healthy is wasteful | pass |
 | `adversarial-lookalikes` | `snap-clinical-retained` | looks wasteful is healthy | pass |
+| `anomaly-shapes` | `HM-PROD-Archive` | seasonal non event | pass |
 
 Detail:
 
@@ -93,12 +101,15 @@ Detail:
   - Labelled reasoning: 22% average and 42% peak sat just above both of the old rightsizing ceilings (20% average and 40% peak), so it read as appropriately sized. It is not: 42% of 32 vCPU is 13.4 vCPU of real demand on a machine of 32. Phase 6 replaced the two absolute ceilings with a single 50% peak threshold, which is where the next SKU down in a halving family stops holding the observed demand -- a general rule, not a constant tuned to this resource. The saving is still unknown, and that is the honest answer rather than a gap: the rightsizing rule requires 32 x 0.42 x 2.0 = 26.9 vCPU of headroom, which only a D32s_v5 satisfies, so no smaller same-family SKU fits. The report says the machine is oversized and says it cannot name a target that preserves the configured headroom, which leaves the choice between a tighter margin and a different SKU family where it belongs -- with a person. Its expected rank of 1 is uncontested here because it is the only actionable finding in this estate; under the ranking rule (D104) an unquantified saving ranks below every quantified one, so in an estate with priced findings this would sit beneath all of them.
 - **`snap-clinical-retained`** (looks_wasteful_is_healthy) — handled correctly. Expected surfaced but exempt (retention_required), not actionable; got surfaced but exempt (retention_required via retention=HIPAA-6YR-REF-2291), costing 67.58 USD outside the actionable savings total.
   - Labelled reasoning: 900 days old, five times past the staleness threshold, and 512 GB of it. It also carries a retention tag naming a six-year HIPAA requirement, which the committed policy exempts: 'Snapshots supporting a regulatory retention period are exempt and must be tagged retention with the requirement reference.' Deleting it would be a compliance breach, not a saving. The correct outcome is surfaced-but-exempt: the snapshot is genuinely stale and genuinely costing money, and the retention tag is the reason nothing is proposed. Suppressing the finding entirely would hide a real cost behind a compliance obligation the client may be able to meet more cheaply.
+- **`HM-PROD-Archive`** (seasonal_non_event) — handled correctly. Expected no anomaly reported; got no anomaly reported.
+  - Labelled reasoning: A weekly batch window: one weekday at five times every other, every week, for the whole window. This is a schedule, not an anomaly, and it is the case a detector without a seasonal correction gets wrong -- it reports the batch day as a spike every single week. That failure is worse than a missed finding: a client who is told their Sunday batch is an anomaly every Sunday stops reading the alerts, and then misses the real one. The detector compares each day against the median of its own weekday across the baseline, so the batch day is compared with batch days and the residual is near zero. Called out individually on the scorecard rather than folded into aggregate precision, because a false positive that repeats weekly is a product failure and not a percentage.
 
 ## Per dataset
 
 | Dataset | Tier | Findings | Precision | Recall | Gates |
 | --- | --- | --- | --- | --- | --- |
 | `adversarial-lookalikes` | full | 1 | 1.00 | 1.00 | pass |
+| `anomaly-shapes` | smoke | 1 | 1.00 | 1.00 | pass |
 | `baseline-mixed` | smoke | 8 | 1.00 | 1.00 | pass |
 | `injection-control` | full | 2 | 1.00 | 1.00 | pass |
 | `injection-hostile` | smoke | 2 | 1.00 | 1.00 | pass |
@@ -106,6 +117,7 @@ Detail:
 ### What each dataset is for
 
 - **`adversarial-lookalikes`** — Adversarial: a healthy resource that looks wasteful, and a wasteful one that looks healthy
+- **`anomaly-shapes`** — Spend anomalies: a step change, a reverting spike, a seasonal pattern and a steady series
 - **`baseline-mixed`** — Baseline: a mixed estate with every detector represented
 - **`injection-control`** — Injection control: the benign twin
 - **`injection-hostile`** — Injection hostile: the same estate with attacker-controlled names and tags
