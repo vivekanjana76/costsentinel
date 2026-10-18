@@ -8,6 +8,7 @@ is unknown, is the kind of defect nobody notices until a client sees it.
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from typing import cast
 
@@ -30,7 +31,7 @@ from costsentinel.domain.common import (
 from costsentinel.domain.estate import Environment, Estate
 from costsentinel.domain.recommendations import ActionClass, ActionType
 from costsentinel.domain.report import ReportSeverity
-from costsentinel.domain.signals import AnomalyDirection, CostAnomaly
+from costsentinel.domain.signals import AnomalyDirection, AnomalyKind, CostAnomaly
 from costsentinel.domain.state import ScanState
 from costsentinel.tools.invoker import ToolInvoker
 
@@ -151,7 +152,7 @@ def test_environment_enum_covers_the_lifecycle() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CostAnomaly (modelled in Phase 1, emitted in Phase 3)
+# CostAnomaly (modelled in Phase 1, emitted from Phase 7)
 # ---------------------------------------------------------------------------
 
 
@@ -161,13 +162,19 @@ def _anomaly(baseline: str | None, delta: str | None) -> CostAnomaly:
         client="acme",
         subscription_id="sub-1",
         service="Microsoft.Storage",
+        kind=AnomalyKind.LEVEL_SHIFT,
         direction=AnomalyDirection.INCREASE,
         baseline=_money(baseline) if baseline else MoneyAmount.undetermined("no baseline"),
         observed=_money("1200.00"),
         delta=_money(delta) if delta else MoneyAmount.undetermined("no delta"),
+        observed_from=date(2026, 10, 1),
+        observed_to=date(2026, 10, 7),
         window_days=7,
+        baseline_days=23,
+        deviation_score=Decimal("8.4"),
+        threshold_score=Decimal("3.5"),
         confidence=Decimal("0.8"),
-        detector="egress/v1",
+        detector="spend_level_shift/v1",
         provenance=PROVENANCE,
     )
 

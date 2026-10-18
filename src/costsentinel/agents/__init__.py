@@ -6,6 +6,15 @@ dependencies, so each is testable without a graph -- which is what lets the rout
 tests construct a state and assert a decision rather than running a sweep.
 """
 
+from costsentinel.agents.anomalies import (
+    LEVEL_SHIFT_SCORE,
+    MIN_BASELINE_DAYS,
+    MIN_RELATIVE_CHANGE,
+    OBSERVATION_DAYS,
+    SPIKE_SCORE,
+    assess_estate,
+    assess_series,
+)
 from costsentinel.agents.anomaly_scout import make_anomaly_scout
 from costsentinel.agents.base import Node, NodeUpdate
 from costsentinel.agents.detectors import (
@@ -49,10 +58,15 @@ __all__ = [
     "DETECTORS",
     "IDLE_CPU_MAX_PCT",
     "IDLE_SQL_MAX_CONNECTIONS",
+    "LEVEL_SHIFT_SCORE",
     "MAX_ATTEMPTS",
+    "MIN_BASELINE_DAYS",
     "MIN_OBSERVATION_DAYS",
+    "MIN_RELATIVE_CHANGE",
+    "OBSERVATION_DAYS",
     "OVERSIZED_CPU_MAX_PCT",
     "OVERSIZED_PLAN_UTILISATION_PCT",
+    "SPIKE_SCORE",
     "STALE_SNAPSHOT_AGE_DAYS",
     "UNUSED_RESERVATION_UTILISATION_PCT",
     "WEIGHT_CONFIDENCE",
@@ -61,6 +75,8 @@ __all__ = [
     "Node",
     "NodeUpdate",
     "SavingsTarget",
+    "assess_estate",
+    "assess_series",
     "choose_rightsize_target",
     "estimate_savings",
     "make_anomaly_scout",

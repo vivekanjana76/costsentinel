@@ -100,7 +100,10 @@ from costsentinel.domain.report import (
     WasteKindSummary,
 )
 from costsentinel.domain.signals import (
+    AnomalyAssessment,
     AnomalyDirection,
+    AnomalyKind,
+    AnomalyVerdict,
     CostAnomaly,
     Observation,
     WasteKind,
@@ -116,7 +119,10 @@ __all__ = [
     "ActionClass",
     "ActionClassification",
     "ActionType",
+    "AnomalyAssessment",
     "AnomalyDirection",
+    "AnomalyKind",
+    "AnomalyVerdict",
     "ApprovalDecision",
     "ApprovalQueueItem",
     "ApprovalRequest",
