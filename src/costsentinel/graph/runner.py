@@ -307,7 +307,7 @@ def load_checkpointed_state(
 
     This is what makes resumability demonstrable rather than merely configured: a
     test reads a completed run's state back from SQLite in a fresh connection, and
-    Phase 9 uses the same path to resume a run that halted for approval.
+    Phase 10 uses the same path to resume a run that halted for approval.
 
     Returns:
         The persisted state, or ``None`` if the thread has no checkpoint.

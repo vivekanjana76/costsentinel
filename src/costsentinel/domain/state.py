@@ -32,7 +32,7 @@ from costsentinel.domain.memory import MemoryMetrics, MemoryRecall
 from costsentinel.domain.observability import RunMetrics
 from costsentinel.domain.recommendations import ActionType, PricedOption, Recommendation
 from costsentinel.domain.report import ClientReport
-from costsentinel.domain.signals import CostAnomaly, WasteSignal
+from costsentinel.domain.signals import AnomalyAssessment, CostAnomaly, WasteSignal
 
 
 class ScanState(BaseModel):
@@ -55,7 +55,22 @@ class ScanState(BaseModel):
 
     # --- detection -------------------------------------------------------
     signals: tuple[WasteSignal, ...] = ()
-    anomalies: tuple[CostAnomaly, ...] = ()
+    anomalies: tuple[CostAnomaly, ...] = Field(
+        default=(),
+        description=(
+            "Spend changes. A separate stream from the waste signals on purpose: an "
+            "anomaly says 'investigate', never 'act', and nothing downstream turns one "
+            "into a recommendation."
+        ),
+    )
+    anomaly_assessments: tuple[AnomalyAssessment, ...] = Field(
+        default=(),
+        description=(
+            "One per scope examined, including the clean ones and the inconclusive "
+            "ones. 'We looked and spend is steady' and 'nine days are missing so we "
+            "cannot tell' are both worth saying, and neither is an empty tuple."
+        ),
+    )
 
     # --- exemption -------------------------------------------------------
     exemptions: tuple[ExemptionVerdict, ...] = Field(
@@ -167,6 +182,11 @@ class ScanState(BaseModel):
         """
         exempt = self.exempt_resource_ids
         return tuple(signal for signal in self.signals if signal.resource_id not in exempt)
+
+    @property
+    def unassessed_scopes(self) -> tuple[AnomalyAssessment, ...]:
+        """Scopes whose spend could not be assessed, with the reason each time."""
+        return tuple(a for a in self.anomaly_assessments if not a.verdict.is_conclusive)
 
     def signal(self, signal_id: str) -> WasteSignal | None:
         """One signal by id, or ``None``."""

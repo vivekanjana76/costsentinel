@@ -15,7 +15,7 @@ Four decisions live here:
   records *why* it is incomplete, rather than either looping or dying silently;
 * **require-approval** -- gated actions route to the approval seam.
 
-Phase 9 turns that last branch into a durable interrupt. This phase builds the seam
+Phase 10 turns that last branch into a durable interrupt. This phase builds the seam
 and the records it will act on, which is why :class:`RouteAction` already has a
 ``REQUIRE_APPROVAL`` member that currently routes onward to the report.
 """
@@ -141,6 +141,15 @@ def _decide(state: ScanState) -> SupervisorDecision:
     # different things to tell a client.
     if not state.actionable_signals:
         exempt = len(state.exemptions)
+        # An anomaly is reported, not remediated, so it does not keep the sweep
+        # running -- but a short-circuit that said "nothing found" while a spend change
+        # was waiting in the report would be the wrong thing to record.
+        found = (
+            f" {len(state.anomalies)} spend change(s) were found and are reported for "
+            f"investigation."
+            if state.anomalies
+            else ""
+        )
         examined = (
             f"{len(state.estate.resources)} resource(s) and "
             f"{len(state.estate.reservations)} reservation(s) examined"
@@ -150,12 +159,13 @@ def _decide(state: ScanState) -> SupervisorDecision:
             to_node="report_author",
             reason=(
                 f"{examined} with no waste detected, so there is nothing to "
-                f"diagnose, price or classify"
+                f"diagnose, price or classify.{found}"
                 if not exempt
                 else (
                     f"{examined}; every one of the {len(state.signals)} signal(s) "
                     f"found is on a resource the client's tags exempt, so all "
-                    f"{exempt} are reported with their reason and none is actioned"
+                    f"{exempt} are reported with their reason and none is "
+                    f"actioned.{found}"
                 )
             ),
         )

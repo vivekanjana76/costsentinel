@@ -1,4 +1,4 @@
-"""Agent2Agent (A2A) layer (Phase 10).
+"""Agent2Agent (A2A) layer (Phase 11).
 
 A2A v1 Agent Cards publish each specialist as a discoverable, invocable agent, so an
 Azure AI Foundry orchestrator or a client's own agent can call, say, the Savings
@@ -9,5 +9,5 @@ of anything its agent can propose, so an external caller inherits the same appro
 gate and cannot route around it. MCP is for tools we consume; A2A is for agents we
 expose (ARCHITECTURE.md D16).
 
-See ARCHITECTURE.md section 11 and ROADMAP.md Phase 10.
+See ARCHITECTURE.md section 12 and ROADMAP.md Phase 11.
 """

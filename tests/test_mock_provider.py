@@ -12,18 +12,21 @@ from decimal import Decimal
 
 import pytest
 
+from costsentinel.agents.anomalies import OBSERVATION_DAYS
 from costsentinel.domain.common import ProvenanceSource, Verification
 from costsentinel.domain.estate import Environment, ResourceKind, ResourceState
 from costsentinel.providers.base import AzureProvider
 from costsentinel.providers.mock import (
+    _STEP_DAYS_FROM_END,
     CLIENT_MINISTRY,
     CLIENT_NORTHWIND,
     DEFAULT_WINDOW_DAYS,
     MOCK_AS_OF,
     MockAzureProvider,
+    SeriesShape,
 )
 
-EXPECTED_SUBSCRIPTIONS = 3
+EXPECTED_SUBSCRIPTIONS = 4
 EXPECTED_RESOURCES = 21
 EXPECTED_ORPHANED_DISKS = 2
 EXPECTED_RESERVATIONS = 3
@@ -71,14 +74,45 @@ def test_repeated_calls_on_one_instance_are_identical(provider: MockAzureProvide
     )
 
 
-def test_different_seeds_change_the_cost_series(provider: MockAzureProvider) -> None:
-    """The seed is real: it must actually vary the day-to-day series."""
-    other = MockAzureProvider(seed=99)
-    sub_id = provider.list_subscriptions()[0].subscription_id
-    assert (
-        provider.get_cost_series(sub_id).model_dump_json()
-        != other.get_cost_series(sub_id).model_dump_json()
-    )
+def test_the_cost_series_is_committed_and_does_not_depend_on_the_seed() -> None:
+    """A deliberate change in Phase 7, and a stronger property than seed-variance.
+
+    The series used to be the subscription's resource total spread over the window
+    with seeded noise, which meant two things worth being rid of. Refreshing Azure's
+    prices silently changed every series and therefore every anomaly verdict, and the
+    seed changed them too -- so an anomaly scorecard would have depended on which seed
+    happened to be configured.
+
+    It is now a committed daily baseline times a committed shape times a committed
+    wobble: the same bytes for any seed, which is what lets the eval harness score the
+    detector at all.
+    """
+    sub_id = MockAzureProvider(seed=1337).list_subscriptions()[0].subscription_id
+    series = [MockAzureProvider(seed=seed).get_cost_series(sub_id) for seed in (1, 99, 1337)]
+    rendered = {one.model_dump_json() for one in series}
+    assert len(rendered) == 1
+
+
+def test_every_series_shape_is_present_in_the_estate() -> None:
+    """A detector with nothing to detect over is untested.
+
+    The seasonal shape is the one that matters most: it is where a detector without a
+    weekday profile fails, and it fails every week.
+    """
+    provider = MockAzureProvider(seed=1337)
+    shapes = {provider.series_shape(sub.subscription_id) for sub in provider.list_subscriptions()}
+    assert shapes == set(SeriesShape)
+
+
+def test_a_step_change_sits_entirely_inside_the_observation_window() -> None:
+    """A coupling between the detector's policy and the fixture's data, asserted.
+
+    The mock provider deliberately does not import the detector -- a provider must not
+    depend on an agent -- so the two constants are independent and would drift
+    silently. A step straddling the boundary would put the new level into the baseline
+    and partly hide itself, which is the failure this pins.
+    """
+    assert _STEP_DAYS_FROM_END == OBSERVATION_DAYS
 
 
 def test_timestamps_derive_from_as_of_not_the_wall_clock(provider: MockAzureProvider) -> None:
@@ -117,7 +151,7 @@ def test_subscriptions_can_be_narrowed_by_client(provider: MockAzureProvider) ->
     northwind = provider.list_subscriptions(client=CLIENT_NORTHWIND)
     ministry = provider.list_subscriptions(client=CLIENT_MINISTRY)
     assert len(northwind) == 2
-    assert len(ministry) == 1
+    assert len(ministry) == 2
     assert all(s.client == CLIENT_NORTHWIND for s in northwind)
     assert provider.list_subscriptions(client="no-such-client") == ()
 

@@ -1,7 +1,7 @@
 # CostSentinel — Architecture
 
 Status: living document. Every design decision made while building CostSentinel is
-recorded here, in section 13 (Decision log), with its rationale and the alternatives
+recorded here, in section 14 (Decision log), with its rationale and the alternatives
 rejected. If a decision is ambiguous, it is written down here and the simplest
 defensible option is taken.
 
@@ -700,14 +700,119 @@ operator who pointed CostSentinel at the wrong file and got silent defaults woul
 believe their client's conventions were in force, and would find out otherwise from a
 recommendation to deallocate a standby.
 
-## 10. Evaluation approach
+## 10. Spend anomalies, and the ranking rule they forced
+
+Implemented in Phase 7. Everything up to here answers *is this resource wasteful?*
+This answers a different question -- *did spend change?* -- and the two are not the
+same claim.
+
+### 10.1 Three kinds of finding
+
+| Finding | Says | Carries | Routes to |
+| --- | --- | --- | --- |
+| `ReportFinding` | this resource is wasteful, **act** | an action, a class, a saving, preconditions | the approval queue |
+| `ExemptFinding` | this is waste we are **not** acting on | a current cost and the tag that withheld the advice | nothing |
+| `ReportAnomaly` | spend changed, **investigate** | a baseline, an observed value, a difference | an investigation |
+
+A spend change has no wasteful resource to point at, no saving to recover and no
+precondition to re-check. A "remediation" for one would be an action against a
+resource nobody has identified, which is why the three are different types rather
+than one type with a flag.
+
+### 10.2 The method, and why each part of it
+
+**Robust statistics, because the obvious method is blinded by what it looks for.** A
+mean and a standard deviation are both pulled by a large spike, so the spike lowers
+its own z-score and a second comparable spike is hidden entirely. A median and a
+median absolute deviation are not moved by a minority of extreme points, which is
+exactly the property wanted: the baseline should describe normal days, and an
+anomalous day should not get a vote on what normal looks like.
+
+The statistic is the modified z-score of Iglewicz and Hoaglin,
+`0.6745 x (value - median) / MAD`. Two medians and a subtraction, which matters as
+much as the robustness: a client can recompute the whole conclusion from the numbers
+in the alert.
+
+**A weekday profile, because a weekly batch window is the case a naive detector gets
+wrong every week.** Each day is compared against the median of its *own weekday*
+across the baseline, and the statistics run on the residual. A Sunday that is five
+times a Tuesday then has a residual near zero; a genuine change still shows, because
+it moves every weekday together. Deliberately the simplest seasonal correction that
+works -- a Fourier or STL decomposition handles more shapes and costs the client the
+ability to check the arithmetic, which is a bad trade for a figure that drives spend
+decisions.
+
+**A scale floor, because a robust scale estimate can collapse toward zero.** A
+subscription whose resource set has not changed bills almost the same amount every
+day, so its residual MAD can be a few cents -- at which point ordinary wobble scores a
+dozen standard deviations and the statistic is arithmetic rather than evidence. This
+was *measured*, not predicted: the committed mock estate's steady and seasonal series
+scored their worst day at 8.9 and 13.5 against a spike threshold of 5.0, and produced
+no alert only because the materiality test below caught them. The scale is now floored
+at 2% of the baseline level.
+
+**Two conditions, both required.** An alert must be statistically *and* materially
+significant. A change can be many standard deviations out and still be 1% of spend;
+reporting it would be correct and useless, and a feed of correct, useless alerts is
+how an alerting system gets ignored. With the scale floor in place the two are
+genuinely complementary -- before it, materiality was carrying the whole decision.
+
+**Spikes and level shifts are different findings.** A spike is "something ran"; a
+level shift is "something changed". The level-shift question is asked first and wins,
+because a week whose median has moved is the more important finding and reporting both
+would say the same thing twice. Their thresholds differ for a stated reason: 3.5 for a
+week's median, 5.0 for a single day, because a claim resting on one observation should
+need more evidence than one resting on seven.
+
+### 10.3 Unknown stays unknown, in a time series
+
+An `AnomalyAssessment` is produced for **every scope examined**, including the clean
+ones, so "we looked and spend is steady" is a recorded fact rather than an absence.
+Two verdicts are inconclusive and first-class:
+
+- `INSUFFICIENT_HISTORY` -- fewer than two weeks of baseline, from which a weekday
+  profile cannot be estimated at all;
+- `INCOMPLETE_SERIES` -- more than 10% of the series' own date range missing.
+
+The second is the one that matters. A gap read as a zero would produce a confident,
+enormous, entirely fictional spend collapse: the worst false positive this detector
+could generate and the easiest to create by accident. One missing day in thirty is
+tolerated as a late-arriving bill; a quarter of the month is refused, with the reason
+printed on the report.
+
+### 10.4 What this does not do
+
+**Attribution.** Naming the resource behind a spike needs a cost series broken down by
+resource, which the provider seam does not expose and the mock provider cannot
+usefully fake -- the whole point of attribution is matching a real spike to a real
+resource. That is Phase 8. `assess_series` takes a bare series and a scope label
+precisely so a per-resource series needs no new detector when one arrives.
+
+### 10.5 The ranking rule
+
+An anomaly carries no saving at all, which forced a question Phase 5 had deliberately
+left open: how does a finding with no quantified saving rank?
+
+**An unquantified saving ranks low until quantified.** A quantified saving of any
+positive magnitude outranks an unquantified one, and reversibility breaks ties between
+comparable known magnitudes rather than promoting an unknown above a known.
+
+The order lives on `RankingScore.order_key`, in `domain`, and has four keys: the
+**tier**, the **composite**, **safety**, and the **recommendation id**. It is used by
+the planner and by the memory consult step, so a memory penalty moves a finding within
+its tier and can never move it between tiers -- the tier is a property of the money,
+and memory may not touch the money (D68).
+
+---
+
+## 11. Evaluation approach
 
 Implemented in Phase 5. Evals are a deliverable, not an afterthought, because "did we
 find the waste" and "did we gate the dangerous thing" are the product's actual claims
 — and for four phases those claims rested entirely on hand-written tests of specific
 cases.
 
-### 9.1 The one invariant
+### 11.1 The one invariant
 
 **The harness observes the pipeline. It never mutates or special-cases it.** Nothing
 in `src/costsentinel` knows it is being evaluated. Asserted four ways in
@@ -727,7 +832,7 @@ in `src/costsentinel` knows it is being evaluated. Asserted four ways in
    compiles it directly only because the judge needs the final state and
    `run_client_scan` returns only the report.
 
-### 9.2 Datasets
+### 11.2 Datasets
 
 Four labelled estates under `evals/datasets/`, each **one** committed JSON file
 holding both the estate and the right answers. Two files would drift, and a label that
@@ -762,7 +867,7 @@ that the easy cases work:
 | A wasteful one that looks healthy | A `D32s_v5` at 42% peak, sitting just above both rightsizing thresholds |
 | A prompt-injection attempt | A resource name that closes the evidence fence and issues a system instruction; tags asking for an action outside the closed vocabulary and forging a whole evidence block with a fabricated figure |
 
-### 9.3 Gates, not scores
+### 11.3 Gates, not scores
 
 Two of CLAUDE.md section 8's metrics are not percentages, and the distinction is drawn
 in the code — `gates.py` versus `metrics.py` — rather than only in the prose.
@@ -784,7 +889,7 @@ dataset varies exactly those names, so a name-keyed comparison could not align t
 runs — and keying a security comparison on a value under the attacker's control is the
 wrong instinct regardless. What must be invariant is the *shape of the advice*.
 
-### 9.4 Quality metrics
+### 11.4 Quality metrics
 
 These report a number and never fail a run. Wiring a quality floor into the verdict
 would mean the first person to add a hard dataset broke the build, which is the surest
@@ -806,7 +911,7 @@ A finding of the *wrong kind* on a genuinely wasteful resource counts as a false
 positive for the kind claimed *and* a false negative for the kind labelled. Calling a
 disk an idle VM is not a partially right answer.
 
-### 9.5 The judge
+### 11.5 The judge
 
 `FakeJudge` is the default and the only one CI uses, and it is not a stub. It checks
 the one thing about prose that is mechanically checkable: **every decimal the report
@@ -820,7 +925,7 @@ verdict is schema-validated like any other response and cannot introduce a numbe
 job is the claims traceability cannot see — a confident sentence about a cause nobody
 observed — not re-checking the arithmetic.
 
-### 9.6 The scorecard
+### 11.6 The scorecard
 
 A typed `Scorecard`, rendered as a committed Markdown report (`evals/REPORT.md`, so a
 diff shows what moved) and a terminal summary. Three presentation rules, all serving
@@ -832,7 +937,7 @@ the same end:
 - **Adversarial cases are listed individually,** never folded into the aggregate. An
   adversarial failure inside a 95% figure is a failure nobody sees.
 
-### 9.7 Running it
+### 11.7 Running it
 
 `costsentinel eval` runs everything; `--smoke` runs the fast subset. The smoke tier is
 a genuine subset — two of four datasets, under four seconds — and enforces **every**
@@ -848,7 +953,7 @@ reproducible.
 
 ---
 
-## 11. MCP and A2A boundaries
+## 12. MCP and A2A boundaries
 
 These are two different seams and are deliberately not conflated.
 
@@ -915,7 +1020,7 @@ both ways is defined once in the domain layer and adapted at both edges.
 
 ---
 
-## 12. Non-functional posture
+## 13. Non-functional posture
 
 - **Zero-credential by default.** `MODE=mock` is the default. CI never has secrets or
   network access to a cloud or LLM provider.
@@ -927,7 +1032,7 @@ both ways is defined once in the domain layer and adapted at both edges.
 
 ---
 
-## 13. Decision log
+## 14. Decision log
 
 Each entry records the decision, the alternatives considered, and why.
 
@@ -1759,3 +1864,77 @@ behind a compliance obligation the client may be able to meet more cheaply. So
 with that reason *and* to be absent from the actionable findings, and the scoring rule
 is tested against exempt-for-the-right-reason, exempt-for-the-wrong-reason and
 never-detected.
+
+**D103. The anomaly phase split in two: detection now, attribution and real-model
+hardening later.** *Alternatives:* ship the original Phase 7 whole. *Why:* the split
+falls along one line -- what can be measured offline against committed data, and what
+needs a real estate or a real model to mean anything. A statistical detector over a
+cost series can be scored completely against committed synthetic series, so it belongs
+in a phase whose exit criteria CI can check. Retry-and-fallback between two real
+backends, a token-spend guardrail and red-teaming a live model cannot. Bundling them
+would have produced a phase nobody could close without a subscription and an API key,
+which is the opposite of how every phase so far has been closed. The ranking rule
+joined this phase rather than waiting, because an anomaly is a finding with no saving
+and shipping one while that question was open would mean every anomaly inheriting an
+unsettled rule.
+
+**D104. An unquantified saving ranks low until quantified, as a tier rather than a
+weight.** *Alternatives:* let reversibility carry an unquantified finding above a
+small known one, which is the position ROADMAP recorded and which lost; or encode the
+rule as a large weight on a "is priced" component. *Why the rule:* a FinOps tool must
+not tell a client that the thing it cannot cost is their biggest opportunity. That is
+a claim about money made with no number behind it, which is the same failure
+`MoneyAmount` refusing to hold an unknown as zero exists to prevent, arriving by a
+different route. The losing position's appeal is real -- a reversible action with no
+figure is often a better first move than an irreversible one with a small figure --
+and `sql-reporting` sitting beneath a 3.65 address release is the uncomfortable
+consequence, accepted on purpose and recorded in the label.
+
+*Why a tier:* expressed as a weight the rule would hold only for the current weights
+and would break silently the first time somebody retuned them -- and the weights are
+already scheduled to become per-client configuration (Phase 10). Expressed as the
+first key of the order, no weighting can break it: a test constructs the degenerate
+case where the unknown scores a perfect 1.0 and the known scores 0, and the known
+still leads.
+
+The rule's stated risk -- that a large unquantified waste sinks out of sight -- is
+mitigated by the *report* rather than by the ranking: an unpriced finding is counted,
+listed, excluded from the total rather than zeroed, and carries the reason no figure
+could be derived. If that proves insufficient, the answer is a better price for the
+finding, not a better rank for an unknown.
+
+**D105. Robust statistics with a weekday profile and a scale floor, not a mean and a
+sigma.** *Alternatives:* a three-sigma rule over a trailing mean (the obvious choice);
+an STL or Fourier seasonal decomposition (handles more shapes); a learned model.
+*Why:* a mean and a standard deviation are both pulled by the event being looked for,
+so a spike partly hides itself and a second one hides entirely. A learned model cannot
+be explained to a client who is about to spend money on the strength of it. STL would
+handle more shapes and would stop a client recomputing the conclusion by hand, which
+is a bad trade here -- the whole alert is a baseline, an observed value, a difference
+and a score, all recoverable from two medians and a subtraction.
+
+The weekday profile is the seasonal correction, and it is the simplest thing that
+defeats the case that matters: a weekly batch window reported as a spike every week.
+The scale floor was added after *measuring* the committed estate rather than reasoning
+about it -- the steady and seasonal series were scoring their worst day at 8.9 and 13.5
+against a threshold of 5.0, and only materiality was keeping them quiet, which means
+the statistical test was contributing nothing. All four constants are policy, stated
+with their reasoning, and `MIN_RELATIVE_CHANGE` is the one an operator might
+reasonably want to move.
+
+**D106. An anomaly can never become an automatable action.** *Alternatives:* let the
+planner treat an anomaly as a signal and propose `notify_owner` for it, which would
+reuse the existing path. *Why:* the existing path ends in a remediation against a
+named resource, and an anomaly names a *scope*. Reusing it would mean the system could
+one refactor later propose an action against a resource nobody had identified. So the
+separation is structural: `CostAnomaly` and `ReportAnomaly` have no action field, no
+action class and no saving; `agents/anomalies.py` imports no action vocabulary and no
+policy store; an anomaly is not a `WasteSignal`, so the planner cannot reach it; and
+its difference reaches no savings total. Asserted representationally, structurally,
+end to end and arithmetically, because an invariant with one proof has one place to
+break.
+
+The model may write prose explaining a change. `AnomalyNote` carries an id and prose
+and nothing else, so the kind, the direction and every figure are unreachable from a
+response -- and a hostile-model test confirms that a note instructing the system to
+delete the subscription changes nothing but the note.

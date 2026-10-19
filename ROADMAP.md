@@ -1,6 +1,6 @@
 # CostSentinel — Roadmap
 
-**Current phase: 7** — cost anomalies and real-model hardening.
+**Current phase: 8** — anomaly attribution and real-model hardening.
 
 Phases are sequential. Do not start work in a later phase before the current phase
 is complete and its exit criteria are met. If an idea arrives mid-phase, record it
@@ -48,6 +48,24 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 > against the scorecard; calibrating against a scorecard that contains known false
 > positives would tune the detectors around a defect. Fixing what is already measured
 > comes before measuring more. Phases 8-12 were renumbered.
+>
+> After Phase 6, **the anomaly phase was split in two**: spend-anomaly detection and
+> the ranking rule are now Phase 7, and anomaly attribution plus real-model hardening
+> become Phase 8 (ARCHITECTURE.md D103). Phases 8-13 renumbered again.
+>
+> The split is along one line: **what can be measured offline against committed data,
+> and what needs a real estate or a real model to mean anything.** A statistical
+> detector over a cost series can be scored completely against committed synthetic
+> series -- step change, reverting spike, seasonal pattern -- so it belongs in a phase
+> whose exit criteria CI can check. Retry-and-fallback between two real backends, a
+> token-spend guardrail and red-teaming against a live model cannot. Bundling them
+> would have produced a phase that could not be verified without a subscription and an
+> API key, which is the opposite of how every phase so far has been closed.
+>
+> The ranking rule joins this phase rather than waiting, because an anomaly is a
+> finding with **no saving at all**. Shipping anomalies while "how does an unquantified
+> finding rank" was still an open question would have meant every anomaly inheriting an
+> unsettled rule, and the open decision becoming load-bearing before it was decided.
 
 ---
 
@@ -117,9 +135,8 @@ coverage, with `domain`, `graph` and `guardrails` at 98-100%; `ruff`, `ruff form
 and `pyright` (strict on `src`) all clean.
 
 **Deliberately *not* in this phase:** the approval-gate adapters and the durable
-interrupt (Phase 9), real LLM backends (Phase 3), and statistical cost-anomaly
-detection (Phase 7, where real cost history and a clean scorecard make it
-calibratable).
+interrupt (Phase 10), real LLM backends (Phase 3), and statistical cost-anomaly
+detection (Phase 7, where a clean scorecard makes it calibratable).
 
 **New dependencies to flag:** `langfuse` as an *optional* extra only. It is imported
 lazily behind a `Tracer` protocol so that tracing is never a hard dependency, CI does
@@ -171,9 +188,9 @@ runbook. The first real run is the operator's call, not the build's -- and it is
 exactly the step this phase was built to make safe rather than to take on somebody's
 behalf.
 
-**Deliberately *not* in this phase:** any write, delete or mutate path (Phase 11);
-statistical cost-anomaly detection and real-model hardening (Phase 4, split out of
-this one).
+**Deliberately *not* in this phase:** any write, delete or mutate path (Phase 13);
+statistical cost-anomaly detection (Phase 7) and real-model hardening (Phase 8), both
+split out of this one.
 
 **New dependencies, all optional extras so CI stays lean and offline:** `fastmcp`,
 `azure-identity`, `azure-mgmt-resourcegraph`, `azure-mgmt-costmanagement`,
@@ -236,7 +253,7 @@ Worth watching rather than acting on; if it keeps climbing, the end-to-end deter
 tests are the ones to consolidate.
 
 **Deliberately *not* in this phase:** the approval gate itself and its Teams and Slack
-adapters (Phase 9). `decide` is a recording CLI, not a gate -- it writes an outcome
+adapters (Phase 10). `decide` is a recording CLI, not a gate -- it writes an outcome
 after the fact rather than halting a run. Separating them is what lets the learning
 loop be demonstrated now instead of waiting for the adapters.
 
@@ -387,22 +404,99 @@ Three things to carry forward rather than claim as finished:
 
 ---
 
-## Phase 7 — Cost anomalies and real-model hardening
+## Phase 7 — Spend anomalies and the ranking rule
 
-**Goal:** the work that only becomes meaningful once real cost history and real models
-are in hand. Split out of the original Phase 3 so that the safety-critical capability
-unlock and this ordinary feature work are separately reviewable, then deferred twice:
-behind the memory layer because threshold calibration wants history that only real
-sweeps accumulate (D67), behind the evaluation harness because tuning a threshold
-without a measurement is guessing (D85), and behind context-aware detection because
-calibrating against a scorecard containing known false positives would tune the
-detectors around a defect (D97). This is the first phase that can calibrate against a
-clean measurement.
+**Goal:** detect that spend *changed* -- as distinct from "this resource is wasteful"
+-- using transparent arithmetic over a cost series, and settle how a finding with no
+quantified saving ranks.
 
-- [ ] Statistical cost-anomaly detection over the cost series, emitting `CostAnomaly`.
-      Needs real cost history to calibrate thresholds against, which is why it waited.
-- [ ] Anomaly root-cause correlation: tie a spend spike to the resource or service
-      that caused it
+Deferred three times to get here: behind the memory layer because threshold
+calibration wants history (D67), behind the evaluation harness because tuning a
+threshold without a measurement is guessing (D85), and behind context-aware detection
+because calibrating against a scorecard containing known false positives would tune
+the detectors around a defect (D97). This is the first phase that can calibrate
+against a clean measurement.
+
+The ranking rule comes first, in its own issue, because an anomaly carries **no saving
+at all**. Shipping anomalies while "how does an unquantified finding rank" was still
+open would mean every anomaly inheriting an unsettled rule.
+
+Milestone: *Phase 7 - Spend anomalies and the ranking rule*.
+
+- [x] The phase split recorded, and CLAUDE.md section 14 gains the rule that a
+      test asserts *intended* behaviour: a deliberately open gap is a strict
+      `xfail` naming its closing issue, never a wrong answer asserted as correct
+      (#58)
+- [x] **The ranking rule, resolved and documented:** an unknown or unquantified saving
+      ranks **low until quantified**, so a known saving of any positive magnitude
+      outranks an unknown one, and reversibility breaks ties between comparable known
+      magnitudes rather than letting an unknown outrank a known (#59)
+- [x] The eval's expected ranks updated to the chosen rule, with the previously
+      documented discordant pair resolved **by rule** rather than by relabelling one
+      case, and concordance reported before and after (#60)
+- [x] A deterministic statistical detector over a cost or usage series, per
+      subscription and per resource where available, finding level shifts and spikes
+      against a trailing baseline by a transparent method. Every alert states the
+      baseline, the observed value and the deviation in plain numbers (#61)
+- [x] Committed, seeded synthetic series in the mock provider: a genuine step change,
+      a one-off spike that reverts, a steady healthy series, and a seasonal pattern
+      that must **not** alert (#62)
+- [x] `CostAnomaly` as a first-class finding distinct from a waste signal. It says
+      "spend changed, investigate", never "this resource is wasteful, act", and
+      **cannot** produce an automatable recommendation -- asserted, not asserted-about
+      (#65)
+- [x] Labelled anomaly cases in the eval with precision and recall as a quality
+      metric, plus an adversarial case the seasonal pattern must not fire on (#63)
+- [x] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.7.0 (#64)
+
+**Exit criteria:** `uv run costsentinel eval` detects the step change and the spike,
+does **not** alert on the seasonal pattern or the healthy series, and reports anomaly
+precision and recall; a test proves no unknown saving can outrank a known one and no
+anomaly can reach an automatable action; and a gap in a series is reported as unknown
+rather than as a zero or an anomaly.
+
+**Deliberately *not* in this phase:** attributing a spike to the resource that caused
+it, egress and data-transfer anomalies, real-model retry and fallback, a token-spend
+guardrail, and threshold recalibration against real estates. All of those are Phase 8,
+because none of them can be scored without a real subscription or a real model, and a
+phase whose exit criteria CI cannot check is a phase nobody can close honestly.
+
+**Landed.** The ranking rule is settled (ARCHITECTURE.md D104) and ranking concordance
+moved from 0.97 (29/30) to 1.00 (30/30) -- by rule, applied to every label carrying an
+unquantified saving, rather than by editing the one case that disagreed. Spend-anomaly
+detection finds the step change and the spike, reports nothing on the seasonal pattern
+or the steady series, and scores 1.00 precision and 1.00 recall over four labelled
+shapes. Adversarial coverage went from 3/3 to 4/4 and detection from 13/13 to 14/14,
+with all three gates green and no money figure moved.
+
+Three things to carry forward rather than claim as finished:
+
+- **The detector does not attribute.** It says a subscription's spend changed, not
+  which resource changed it, because a per-resource cost series is not in the provider
+  seam and the mock provider cannot usefully fake one. Phase 8, and the reason
+  `assess_series` takes a bare series and a scope label.
+- **The constants are defensible, not calibrated.** 3.5 and 5.0 are the conventional
+  cuts, the 2% scale floor and the 15% materiality floor are product judgements, and
+  all four were chosen against four synthetic shapes rather than against real
+  estates. Phase 8's calibration item is where they meet real data; the scorecard is
+  what will show the move.
+- **The weekday profile handles a weekly rhythm and nothing else.** A month-end batch,
+  a quarterly close or a ramp would all read as a level shift. That is the right
+  trade for now -- a client can check a weekday median by hand and cannot check an STL
+  decomposition -- but it is a known limitation rather than a complete answer.
+
+---
+
+## Phase 8 — Anomaly attribution and real-model hardening
+
+**Goal:** the work that only becomes meaningful once a real estate and a real model
+are in hand. Split out of the anomaly phase (D103) precisely because none of it can be
+measured offline: a fallback between two backends needs two backends, a token-spend
+guardrail needs real token spend, and recalibrating a threshold needs real history.
+
+- [ ] Anomaly root-cause correlation: tie a spend change to the resource or service
+      that caused it. Needs a real cost series broken down by resource, which the
+      synthetic series deliberately does not model
 - [ ] Egress and data-transfer anomaly detection
 - [ ] Real-model hardening: retry and fallback from the primary backend to the
       secondary on failure or schema violation, with the fallback recorded in the trace
@@ -412,13 +506,14 @@ clean measurement.
       names and tags drawn from the evidence path
 - [ ] Calibrate detector thresholds and the ranking weights against the Phase 5
       scorecard and observed real estates, replacing the Phase 2 defaults
-**Exit criteria:** a spend spike in a real subscription is detected, attributed and
-reported; a primary-backend failure falls back to the secondary without failing the
-sweep; a hostile resource name cannot alter a recommendation.
+
+**Exit criteria:** a spend change in a real subscription is attributed to a resource
+and reported; a primary-backend failure falls back to the secondary without failing
+the sweep; a hostile resource name cannot alter a recommendation on a real backend.
 
 ---
 
-## Phase 8 — Reporting
+## Phase 9 — Reporting
 
 **Goal:** output a client would actually accept as a deliverable.
 
@@ -453,7 +548,7 @@ template engine (`jinja2`).
 
 ---
 
-## Phase 9 — The approval gate and its adapters
+## Phase 10 — The approval gate and its adapters
 
 **Goal:** a gated action halts the graph until a human decides, wherever that human
 already works.
@@ -483,7 +578,7 @@ verification library.
 
 ---
 
-## Phase 10 — A2A layer
+## Phase 11 — A2A layer
 
 **Goal:** specialists are discoverable and invocable by external agents, without
 routing around governance.
@@ -502,7 +597,7 @@ typed result; an external attempt to execute a gated action is refused.
 
 ---
 
-## Phase 11 — Dashboard
+## Phase 12 — Dashboard
 
 **Goal:** an operator view across the estate.
 
@@ -520,7 +615,7 @@ action entirely from the dashboard.
 
 ---
 
-## Phase 12 — Execution and hardening
+## Phase 13 — Execution and hardening
 
 **Goal:** approved changes are actually applied, safely.
 
@@ -548,7 +643,7 @@ a complete audit chain from signal to execution, and the outcome recorded.
 
 ## Later features, scheduled
 
-- **Config-tunable ranking weights per client** (Phase 9, with the client policy
+- **Config-tunable ranking weights per client** (Phase 10, with the client policy
   overlays the approval gate needs anyway).
   The Phase 2 weights -- 0.60 savings, 0.25 safety, 0.15 confidence -- are a product
   judgement baked into a module constant. Different clients have genuinely different
@@ -560,7 +655,7 @@ a complete audit chain from signal to execution, and the outcome recorded.
   model output.
 
 - **Report residual spend alongside the saving, for every conservative action**
-  (Phase 8, with reporting). A finding currently says "resize this VM, saves
+  (Phase 9, with reporting). A finding currently says "resize this VM, saves
   $140/month". For a conservative action it does not say what remains: downsizing
   `Standard_D8s_v5` to `Standard_D4s_v5` saves half and leaves the other half
   running. A client reading a report with a $12,000 annual savings headline cannot
@@ -594,45 +689,39 @@ a complete audit chain from signal to execution, and the outcome recorded.
 ## Open decisions
 
 Things that need a judgement rather than an implementation. Recorded here rather than
-settled quietly in code, because each one changes what a client is told.
+settled quietly in code, because each one changes what a client is told. Resolved ones
+stay, with the reasoning and the position that lost, because the argument is worth more
+than the conclusion.
 
-- **How should an unknown saving participate in ranking?** Unresolved, and visible in
-  the Phase 5 scorecard as the single discordant ranking pair.
+- ~~**How should an unknown saving participate in ranking?**~~ **Resolved in Phase 7**
+  (ARCHITECTURE.md D104): an unquantified saving ranks **low until quantified**. A
+  quantified saving of any positive magnitude outranks an unquantified one, and
+  reversibility breaks ties between comparable known magnitudes rather than promoting
+  an unknown above a known.
 
-  Today an unpriced finding scores zero on the savings component and keeps its safety
-  and confidence components (`agents/ranking.py`), so a reversible-but-unquantified
-  finding can outrank an irreversible one carrying a small but known figure. That is
-  what happens to `sql-reporting` (zero connections, no cheaper tier, saving unknown)
-  against `snap-web-01-pre-migration` (33.79, irreversible): the pipeline puts the
-  unquantified one higher and the hand-written label puts it lower.
+  Of the two positions recorded here, the first won. The deciding argument was the
+  product one: a FinOps tool must not tell a client that the thing it cannot cost is
+  their biggest opportunity, because that is a claim about money made with no number
+  behind it. The second position's appeal -- that a reversible action with no figure
+  is still a better first move than an irreversible one with a small figure -- is
+  real, and it is exactly what the rule now overrules. `sql-reporting` (scale down an
+  idle database, reversible, unquantifiable) sits beneath `pip-decommissioned-lb`
+  (release an address, 3.65, irreversible), and on a reviewer's instinct that reads
+  backwards. It is accepted on purpose and recorded in the label.
 
-  Two defensible positions, and they disagree:
+  The stated risk of the winning position -- that a large unquantified waste sinks to
+  the bottom and is never actioned, which is how an unknown quietly becomes a zero --
+  is **not** mitigated by the ranking and is mitigated instead by the report: an
+  unpriced finding is counted, listed, excluded from the total rather than zeroed, and
+  carries the reason no figure could be derived. If that proves insufficient in
+  practice, the answer is a better *price* for the finding, not a better rank for an
+  unknown.
 
-  1. **Treat unknown as low until quantified.** A client prioritises by money, and a
-     finding nobody can cost cannot be compared on the axis that matters. Ranking it
-     above a known figure asks them to take it on faith. Risk: a genuinely large
-     unquantified waste sinks to the bottom and is never actioned, which is how an
-     unknown quietly becomes a zero -- the exact failure the domain model's
-     unknown-is-not-zero rule exists to prevent.
-  2. **Let reversibility carry it.** "Scale down an idle database" is safe and
-     obviously worth doing whether or not the catalogue can price the target, and a
-     reversible action with no number attached is still a better first move than an
-     irreversible one with a small number. Risk: the order stops tracking money at
-     all for a subset of findings, and a client reading top-to-bottom is no longer
-     reading in value order.
-
-  The discordant pair stays as **documented discordance** rather than being resolved
-  by changing the label to match the code, which would make the ranking metric
-  vacuous. Whichever way it goes, the reasoning belongs in ARCHITECTURE and the
-  expected ranks need revisiting -- and the scorecard will show the move, which is
-  the point of having one.
-
-  *Phase 6 made this less theoretical.* The generalised oversized-VM rule
-  (ARCHITECTURE.md D101) deliberately opens a band where a machine is reported as
-  oversized with an explicitly unknown saving, because no same-family SKU preserves
-  the configured headroom. `vm-claims-batch` is the first such finding and there will
-  be more, so unpriced findings are no longer an edge case in the ranking -- they are
-  a category the rule now produces on purpose.
+  The rule is a tier rather than a weight, so it survives the per-client weight
+  configuration scheduled for Phase 10. Ranking concordance moved from 0.97 (29/30) to
+  1.00 (30/30) when the labels were updated to express the rule -- by rule, across
+  every label carrying an unquantified saving, rather than by editing the one case that
+  disagreed.
 
 ---
 

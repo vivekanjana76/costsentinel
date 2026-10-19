@@ -39,10 +39,10 @@ driven by ``random.Random`` seeded with a string, which is stable across process
 
 from __future__ import annotations
 
-import random
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
+from enum import StrEnum
 from typing import NamedTuple
 
 from costsentinel.domain.common import (
@@ -89,6 +89,155 @@ def _money(value: Decimal) -> Decimal:
 # ---------------------------------------------------------------------------
 
 
+class SeriesShape(StrEnum):
+    """What a subscription's daily spend does over the window.
+
+    Four shapes, because a detector with nothing to detect over is untested and a
+    detector tested only on the easy shapes is worse than that. Three of these should
+    produce a finding or no finding unambiguously; the fourth, :attr:`SEASONAL`, is the
+    one a naive detector gets wrong, and it is in the committed estate rather than only
+    in a unit test for exactly that reason.
+    """
+
+    #: Flat, within the daily wobble. Nothing to report.
+    STEADY = "steady"
+
+    #: Flat, then a new level for the last week and staying there. A level shift.
+    STEP_CHANGE = "step_change"
+
+    #: Flat, with one day far above and the next day back to normal. A spike.
+    REVERTING_SPIKE = "reverting_spike"
+
+    #: A weekly batch window: one weekday several times the others, every week. A
+    #: pattern rather than an anomaly, and it must produce no alert.
+    SEASONAL = "seasonal"
+
+
+#: Day-to-day wobble applied to every series, as a multiplier on the daily baseline.
+#:
+#: Committed rather than drawn from a seeded generator, and thirty values rather than a
+#: repeating seven. A seven-day cycle would be absorbed entirely by the detector's
+#: weekday profile, leaving the residual deviation at zero -- so every shape would
+#: exercise only the flat-baseline fallback and the robust statistics would never run.
+_DAILY_WOBBLE: tuple[str, ...] = (
+    "1.000",
+    "1.011",
+    "0.993",
+    "1.005",
+    "0.986",
+    "1.009",
+    "0.996",
+    "1.015",
+    "0.990",
+    "1.002",
+    "1.012",
+    "0.994",
+    "1.007",
+    "0.988",
+    "1.004",
+    "1.010",
+    "0.995",
+    "1.013",
+    "0.991",
+    "1.006",
+    "0.989",
+    "1.001",
+    "1.016",
+    "0.997",
+    "1.008",
+    "0.985",
+    "1.011",
+    "0.999",
+    "1.005",
+    "0.992",
+)
+
+#: How many days from the end of the window a step change covers. Seven, to place the
+#: whole change inside the detector's observation window -- a step that straddled the
+#: boundary would put the new level into the baseline and partly hide itself.
+#:
+#: Deliberately a constant here rather than an import of
+#: ``agents.anomalies.OBSERVATION_DAYS``: a provider must not depend on an agent. The
+#: two are coupled, so ``tests/test_anomaly_series.py`` asserts they agree, which is
+#: where a coupling between a detector's policy and a fixture's data belongs.
+_STEP_DAYS_FROM_END = 7
+
+#: Which day of the last week the spike lands on, counted from the end of the window.
+#: Not the final day: a spike on the last day of the series cannot be seen to revert,
+#: and "it spiked and came back" is the claim this shape exists to make.
+_SPIKE_OFFSET_FROM_END = 4
+
+#: How many times the baseline a spike reaches. Large enough to be unmistakable and
+#: not so large it would be the only thing a test could detect.
+_SPIKE_MULTIPLE = Decimal("4.0")
+
+#: How much higher the new level sits after a step change. 1.75 is a workload landing,
+#: not a billing error -- the detector should catch a realistic change, not only an
+#: enormous one.
+_STEP_MULTIPLE = Decimal("1.75")
+
+#: The batch weekday, and how many times a normal day it costs. Sunday night, which is
+#: where a real estate puts a weekly job.
+_BATCH_WEEKDAY = 6
+_BATCH_MULTIPLE = Decimal("5.0")
+
+
+def shape_multiple(shape: SeriesShape, *, offset: int, window_days: int, weekday: int) -> Decimal:
+    """The shape's multiplier for one day of the window.
+
+    ``offset`` counts from the start of the window, so ``window_days - 1`` is the most
+    recent day. Deterministic arithmetic over committed constants: no randomness, and
+    no dependence on the wall clock beyond the caller's own anchor date.
+    """
+    days_from_end = window_days - 1 - offset
+    if shape is SeriesShape.STEP_CHANGE:
+        return _STEP_MULTIPLE if days_from_end < _STEP_DAYS_FROM_END else Decimal(1)
+    if shape is SeriesShape.REVERTING_SPIKE:
+        return _SPIKE_MULTIPLE if days_from_end == _SPIKE_OFFSET_FROM_END else Decimal(1)
+    if shape is SeriesShape.SEASONAL:
+        return _BATCH_MULTIPLE if weekday == _BATCH_WEEKDAY else Decimal(1)
+    return Decimal(1)
+
+
+def synthetic_series(
+    *,
+    subscription_id: str,
+    daily_baseline: Decimal,
+    shape: SeriesShape,
+    end: date,
+    window_days: int,
+    provenance: Provenance,
+    currency: Currency = Currency.USD,
+) -> CostSeries:
+    """A committed daily series of the requested shape, ending on ``end``.
+
+    Public, and shared by two callers that would otherwise each grow their own copy:
+    :class:`MockAzureProvider` for the demo estate, and the evaluation harness's
+    dataset provider for the labelled anomaly cases. One definition reviewed once,
+    rather than two fixtures whose idea of "a step change" could drift apart while
+    both looked right.
+
+    Entirely deterministic -- a committed baseline times a committed shape times a
+    committed wobble -- so two runs of the same request produce byte-identical points
+    and therefore byte-identical anomaly verdicts.
+    """
+    first = end - timedelta(days=window_days - 1)
+    points: list[CostPoint] = []
+    for offset in range(window_days):
+        day = first + timedelta(days=offset)
+        wobble = Decimal(_DAILY_WOBBLE[offset % len(_DAILY_WOBBLE)])
+        multiple = shape_multiple(
+            shape, offset=offset, window_days=window_days, weekday=day.weekday()
+        )
+        points.append(CostPoint(day=day, amount=_money(daily_baseline * multiple * wobble)))
+    return CostSeries(
+        subscription_id=subscription_id,
+        currency=currency,
+        points=tuple(points),
+        provenance=provenance,
+    )
+
+
 class _SubSpec(NamedTuple):
     """One synthetic subscription."""
 
@@ -97,6 +246,8 @@ class _SubSpec(NamedTuple):
     client: str
     environment: Environment
     region: str
+    daily_baseline: str
+    shape: SeriesShape
 
 
 class _ResSpec(NamedTuple):
@@ -140,6 +291,17 @@ class _RsvSpec(NamedTuple):
     expires_in_days: int
 
 
+#: The synthetic estate's subscriptions, one per series shape.
+#:
+#: Each shape is placed where it would plausibly occur: a workload landing in a
+#: production estate, a one-off load test in a sandbox, a weekly overnight batch on a
+#: government portal, and a quiet subscription where nothing is happening.
+#:
+#: ``daily_baseline`` is committed per subscription rather than derived from the
+#: resource catalogue, which it used to be. Deriving it meant that refreshing Azure's
+#: prices silently changed every cost series and therefore every anomaly verdict, and
+#: it is also the less realistic model: a real subscription's bill includes bandwidth,
+#: support and marketplace charges that no inventory query returns.
 _SUBSCRIPTIONS: tuple[_SubSpec, ...] = (
     _SubSpec(
         "00000000-0000-4000-8000-00000000a001",
@@ -147,6 +309,8 @@ _SUBSCRIPTIONS: tuple[_SubSpec, ...] = (
         CLIENT_NORTHWIND,
         Environment.PRODUCTION,
         "eastus",
+        daily_baseline="120.00",
+        shape=SeriesShape.STEP_CHANGE,
     ),
     _SubSpec(
         "00000000-0000-4000-8000-00000000a002",
@@ -154,6 +318,8 @@ _SUBSCRIPTIONS: tuple[_SubSpec, ...] = (
         CLIENT_NORTHWIND,
         Environment.DEVELOPMENT,
         "eastus",
+        daily_baseline="35.00",
+        shape=SeriesShape.REVERTING_SPIKE,
     ),
     _SubSpec(
         "00000000-0000-4000-8000-00000000b001",
@@ -161,6 +327,17 @@ _SUBSCRIPTIONS: tuple[_SubSpec, ...] = (
         CLIENT_MINISTRY,
         Environment.PRODUCTION,
         "qatarcentral",
+        daily_baseline="60.00",
+        shape=SeriesShape.SEASONAL,
+    ),
+    _SubSpec(
+        "00000000-0000-4000-8000-00000000b002",
+        "MOT-DEV-Portal",
+        CLIENT_MINISTRY,
+        Environment.DEVELOPMENT,
+        "qatarcentral",
+        daily_baseline="18.00",
+        shape=SeriesShape.STEADY,
     ),
 )
 
@@ -717,39 +894,44 @@ class MockAzureProvider:
             return self._reservations
         return tuple(r for r in self._reservations if r.client == client)
 
+    def series_shape(self, subscription_id: str) -> SeriesShape:
+        """What this subscription's spend does over the window.
+
+        A subscription the estate does not know about is steady: inventing an anomaly
+        for an unrecognised id would be inventing a finding.
+        """
+        spec = next((s for s in _SUBSCRIPTIONS if s.subscription_id == subscription_id), None)
+        return spec.shape if spec else SeriesShape.STEADY
+
     def get_cost_series(
         self, subscription_id: str, *, window_days: int = DEFAULT_WINDOW_DAYS
     ) -> CostSeries:
         """Daily actual spend for one subscription over the trailing window.
 
-        Dailies are the subscription's total monthly list cost spread over the
-        window with a deterministic day-to-day variation, which is why the summed
-        actual does not exactly equal the sum of list prices -- as in a real estate.
+        A committed daily baseline, multiplied by the subscription's committed
+        :class:`SeriesShape` and by a committed day-to-day wobble. Entirely
+        deterministic arithmetic: no generator, no seed and no wall clock, so two runs
+        of the same estate produce byte-identical series and therefore byte-identical
+        anomaly verdicts. A scorecard over a randomised series would mean nothing.
+
+        The baseline is the subscription's own figure rather than a share of its
+        resource costs, which is how this used to work. Deriving it meant refreshing
+        Azure's prices silently changed every cost series, and it is the less realistic
+        model besides -- a real bill includes bandwidth, support and marketplace
+        charges no inventory query returns, which is why the observed spend never
+        matches the sum of list prices.
         """
-        monthly_total = sum(
-            (
-                r.monthly_cost.amount
-                for r in self._resources
-                if r.subscription_id == subscription_id and r.monthly_cost.amount is not None
-            ),
-            start=Decimal(0),
-        )
-        rng = random.Random(f"{self._seed}:{subscription_id}:{window_days}")  # noqa: S311
-        daily_base = monthly_total / Decimal(window_days)
-        end = self._as_of.date()
-        points = tuple(
-            CostPoint(
-                day=end - timedelta(days=window_days - offset),
-                amount=_money(daily_base * Decimal(str(round(rng.uniform(0.92, 1.08), 4)))),
-            )
-            for offset in range(window_days)
-        )
-        return CostSeries(
+        spec = next((s for s in _SUBSCRIPTIONS if s.subscription_id == subscription_id), None)
+        shape = spec.shape if spec else SeriesShape.STEADY
+        return synthetic_series(
             subscription_id=subscription_id,
-            currency=Currency.USD,
-            points=points,
+            daily_baseline=Decimal(spec.daily_baseline) if spec else Decimal(0),
+            shape=shape,
+            end=self._as_of.date(),
+            window_days=window_days,
             provenance=self._provenance(
                 f"mock:costmanagement.query/daily/{subscription_id}/{window_days}d"
+                f"?shape={shape.value}"
             ),
         )
 

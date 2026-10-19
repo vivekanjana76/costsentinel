@@ -29,6 +29,7 @@ from costsentinel.llm.base import (
     StructuredResponseT,
 )
 from costsentinel.llm.contracts import (
+    AnomalyNote,
     FindingNote,
     PlannedRemediation,
     RankingNote,
@@ -45,6 +46,7 @@ from costsentinel.llm.contracts import (
 LABEL_WASTE_SIGNAL = "waste_signal"
 LABEL_RECOMMENDATION = "recommendation"
 LABEL_TOTALS = "totals"
+LABEL_ANOMALY = "spend_change"
 LABEL_RANKED = "ranked_recommendation"
 
 #: Which observation names map to which contributing-factor category. The fake
@@ -151,6 +153,32 @@ def _rationale_for(block: EvidenceBlock) -> str:
     )
 
 
+def _anomaly_note(block: EvidenceBlock) -> str:
+    """Explain one spend change from the block's own fields and nothing else.
+
+    Quotes the figures verbatim and adds only the interpretation a shape carries, which
+    is the division of labour the whole report rests on: the detector decides what
+    happened, the prose says what it usually means.
+    """
+    kind = block.field("kind") or "change"
+    direction = block.field("direction") or "change"
+    scope = block.field("scope") or "this subscription"
+    baseline = block.field("baseline") or "an unknown amount"
+    observed = block.field("observed") or "an unknown amount"
+    meaning = (
+        "the daily run rate has moved and stayed moved, so something was added, "
+        "resized or left running"
+        if kind == "level_shift"
+        else "one day stood out and spend then returned to normal, so something ran once"
+    )
+    return (
+        f"Spend in {scope} shows a {kind.replace('_', ' ')} ({direction}): "
+        f"{baseline} per day before, {observed} after. Typically {meaning}. "
+        f"Worth confirming against your change log for that window; nothing here is "
+        f"an action CostSentinel proposes."
+    )
+
+
 def _build_report_narrative(prompt: Prompt) -> ReportNarrative:
     """Compose an executive summary and per-finding notes from the evidence."""
     totals = prompt.blocks(LABEL_TOTALS)
@@ -187,6 +215,14 @@ def _build_report_narrative(prompt: Prompt) -> ReportNarrative:
         f"is changed; nothing has been or will be modified without it."
     )
 
+    anomaly_notes = tuple(
+        AnomalyNote(
+            anomaly_id=block.require("anomaly_id"),
+            note=_anomaly_note(block),
+        )
+        for block in prompt.blocks(LABEL_ANOMALY)
+    )
+
     notes = tuple(
         FindingNote(
             recommendation_id=block.require("recommendation_id"),
@@ -203,7 +239,7 @@ def _build_report_narrative(prompt: Prompt) -> ReportNarrative:
         )
         for block in recommendations
     )
-    return ReportNarrative(executive_summary=summary, notes=notes)
+    return ReportNarrative(executive_summary=summary, notes=notes, anomaly_notes=anomaly_notes)
 
 
 def _build_root_cause_analysis(prompt: Prompt) -> RootCauseAnalysis:

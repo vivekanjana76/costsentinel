@@ -16,6 +16,13 @@ from pydantic import Field
 
 from costsentinel.domain.common import Confidence, Frozen, Provenance, utc_now
 
+#: Findings whose monthly saving was quantified. They rank above everything else.
+TIER_QUANTIFIED = 0
+
+#: Findings with no quantified saving: an unpriceable rightsizing target, a resource
+#: missing from the estate snapshot, a spend anomaly. Reported in full, ranked last.
+TIER_UNQUANTIFIED = 1
+
 
 class FactorKind(StrEnum):
     """What sort of thing contributed to a root cause.
@@ -87,9 +94,23 @@ class RankingScore(Frozen):
     estimate, the action class and the detector confidence. The ``rationale`` is the
     only model-derived field, and it explains the ordering rather than deciding it --
     a hostile model can change the wording and cannot change the rank.
+
+    ``savings_known`` is not a fourth component. It is a *tier*: every finding with a
+    quantified saving ranks above every finding without one, whatever their composites
+    say (ARCHITECTURE.md D104). Keeping it out of the weighted sum is deliberate --
+    expressed as a weight, the rule would hold only for the current weights and would
+    break silently the first time somebody retuned them.
     """
 
     recommendation_id: str
+    savings_known: bool = Field(
+        description=(
+            "Whether a monthly saving was quantified. Decides the ranking tier: an "
+            "unquantified finding ranks below every quantified one, because a FinOps "
+            "tool must not assert that the thing it cannot cost is the bigger "
+            "opportunity."
+        )
+    )
     savings_component: Decimal = Field(
         ge=Decimal(0),
         le=Decimal(1),
@@ -108,10 +129,70 @@ class RankingScore(Frozen):
     rationale_provenance: Provenance | None = None
     provenance: Provenance
 
-    def explain(self) -> str:
-        """A compact, human-readable breakdown of the computed components."""
+    @property
+    def tier(self) -> int:
+        """Which ranking tier this finding belongs to.
+
+        The boundary is whether a number exists, not how big it is. A one-dollar
+        saving is in the upper tier and an unquantifiable one is not, because the
+        claim being made is "we can tell you what this is worth" -- and that claim is
+        either true or it is not.
+        """
+        return TIER_QUANTIFIED if self.savings_known else TIER_UNQUANTIFIED
+
+    @property
+    def tier_label(self) -> str:
+        """The ranking tier in words, for a report a client reads."""
+        if self.savings_known:
+            return "quantified"
+        return "unquantified (ranks below every priced finding)"
+
+    def order_key(self, *, composite: Decimal | None = None) -> tuple[int, Decimal, Decimal, str]:
+        """This finding's position in the total order, highest-ranked first.
+
+        Four keys, in this order and for these reasons:
+
+        1. **the tier** -- a quantified saving outranks an unquantified one, always;
+        2. **the composite** -- the weighted trade-off of savings, safety and
+           confidence, which orders findings within a tier;
+        3. **safety** -- so a genuine tie between two comparable known magnitudes
+           breaks toward the more reversible action. Safety is already inside the
+           composite; this is the fallback for when the composites come out equal,
+           and it is what "reversibility breaks ties" means literally;
+        4. **the recommendation id** -- so the order is total and reproducible rather
+           than dependent on input ordering.
+
+        Args:
+            composite: Overrides the stored composite. Used by the memory consult
+                step, which re-orders on a penalised composite. The tier and the
+                safety component are *not* overridable, which is what makes "a
+                penalty moves a finding within its tier and never between tiers"
+                (ARCHITECTURE.md D68, D104) a property of this method rather than a
+                convention its callers are trusted to honour.
+
+        The order lives here, on the type, rather than in
+        :mod:`costsentinel.agents.ranking` where the weights are. Two callers need it
+        -- the planner and the memory consult step -- and if memory had to import the
+        ranking module to get it, ``memory`` would depend on ``agents`` while
+        ``agents`` already depends on ``memory``. One definition, in the package both
+        can depend on.
+        """
         return (
-            f"savings {self.savings_component:.3f}, "
+            self.tier,
+            -(self.composite if composite is None else composite),
+            -self.risk_component,
+            self.recommendation_id,
+        )
+
+    def explain(self) -> str:
+        """A compact, human-readable breakdown of the computed components.
+
+        States the tier first, because it dominates the composite. A breakdown that
+        showed only the weighted score would leave a client unable to explain why a
+        finding with a higher-looking composite sits lower.
+        """
+        return (
+            f"{self.tier_label}; savings {self.savings_component:.3f}, "
             f"safety {self.risk_component:.3f}, "
             f"confidence {self.confidence_component:.3f} "
             f"-> {self.composite:.3f}"

@@ -17,7 +17,7 @@ from __future__ import annotations
 import ast
 import json
 import tempfile
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -27,6 +27,8 @@ from evals.harness.dataset import (
     DatasetError,
     LabelledEstate,
     ResourceLabel,
+    SubscriptionLabel,
+    SubscriptionSpec,
     Tier,
     control_for,
     datasets_dir,
@@ -41,7 +43,13 @@ from evals.harness.gates import (
     safety_recall,
 )
 from evals.harness.judge import _DECIMAL, FakeJudge
-from evals.harness.metrics import Mismatch, Score, detection_scores, ranking_concordance
+from evals.harness.metrics import (
+    Mismatch,
+    Score,
+    anomaly_scores,
+    detection_scores,
+    ranking_concordance,
+)
 from evals.harness.provider import DatasetProvider
 from evals.harness.runner import (
     adversarial_outcomes,
@@ -55,10 +63,12 @@ from pydantic import ValidationError
 
 from costsentinel.cli import main
 from costsentinel.config import MemoryBackend, RunMode
+from costsentinel.domain.common import Provenance
 from costsentinel.domain.exemption import ExemptionReason
 from costsentinel.domain.recommendations import ActionClass, ActionType
 from costsentinel.domain.report import ClientReport
-from costsentinel.domain.signals import WasteKind
+from costsentinel.domain.signals import AnomalyKind, WasteKind
+from costsentinel.providers.mock import SeriesShape, synthetic_series
 
 SRC = Path("src/costsentinel")
 
@@ -183,11 +193,21 @@ def test_every_label_states_its_reasoning() -> None:
             assert len(label.note) > 40, f"{dataset.dataset_id}/{label.resource}"
 
 
-def test_the_datasets_cover_all_three_kinds_of_adversarial_case() -> None:
+def test_the_datasets_cover_every_kind_of_adversarial_case() -> None:
+    """All four ways a cost tool is wrong in the field, each with a labelled case.
+
+    An enum member with no dataset behind it is a hard case nobody measures, which is
+    the same failure as an unlabelled resource: it looks like coverage.
+    """
     kinds = {
         label.adversarial
         for dataset in load_all()
         for label in dataset.adversarial
+        if label.adversarial is not None
+    } | {
+        label.adversarial
+        for dataset in load_all()
+        for label in dataset.adversarial_subscriptions
         if label.adversarial is not None
     }
     assert kinds == set(AdversarialKind)
@@ -326,18 +346,26 @@ def test_the_quality_metrics_are_measured_and_report_their_denominators() -> Non
 
 
 def test_every_adversarial_case_is_handled_correctly() -> None:
-    """3 of 3, and this is the acceptance test for Phase 6.
+    """Every hard case, with no count baked in.
 
     It read the other way round until Phase 6: it asserted that at least one
-    adversarial case was failing, with a comment saying it would need updating when
-    the detectors gained tag exemptions. They did, so it does -- which was the point
-    of writing it that way rather than leaving the gap unmeasured.
+    adversarial case was failing, with a comment saying it would need updating when the
+    detectors gained tag exemptions. They did, so it did -- which was the point of
+    writing it that way rather than leaving the gap unmeasured.
+
+    It then asserted a literal 3, and went red when Phase 7 added the seasonal case.
+    Right outcome, wrong assertion: the claim worth making is "all of them", and a
+    count is a number that has to be chased every time a case is added.
     """
     card = evaluate()
     assert card.adversarial
     failing = [outcome.line() for outcome in card.adversarial if not outcome.passed]
     assert not failing, failing
-    assert card.adversarial_passed == len(card.adversarial) == 3
+    assert card.adversarial_passed == len(card.adversarial)
+    # Every kind is represented, which is what stops "all of them" being vacuous.
+    assert {outcome.kind for outcome in card.adversarial} == set(AdversarialKind) - {
+        AdversarialKind.PROMPT_INJECTION
+    }
 
 
 def test_an_exempt_case_is_only_correct_when_the_exemption_is_visible() -> None:
@@ -458,12 +486,247 @@ def test_both_look_alike_cases_expect_an_exemption() -> None:
         assert "surfaced-but-exempt" in label.note
 
 
+def test_the_labelled_order_expresses_the_ranking_rule() -> None:
+    """Every labelled unquantified saving ranks below every labelled quantified one.
+
+    Pins the labels against the rule (ARCHITECTURE.md D104) rather than against a
+    remembered set of numbers. Without this, a future edit could quietly restore the
+    old order on one case, concordance would drop by a pair, and the scorecard would
+    read as a regression in the *ranker* rather than a disagreement in the *labels*.
+    """
+    checked = 0
+    for dataset in load_all():
+        ranked = [label for label in dataset.labels if label.expected_rank is not None]
+        quantified = [
+            label.expected_rank
+            for label in ranked
+            if label.expected_monthly_saving is not None and label.expected_rank is not None
+        ]
+        unquantified = [
+            label.expected_rank
+            for label in ranked
+            if label.expected_monthly_saving is None and label.expected_rank is not None
+        ]
+        if not quantified or not unquantified:
+            continue
+        checked += 1
+        assert min(unquantified) > max(quantified), (
+            f"{dataset.dataset_id}: an unquantified saving is labelled above a "
+            f"quantified one, which contradicts D104"
+        )
+    assert checked, "no dataset labels both a quantified and an unquantified rank"
+
+
+def test_the_report_explains_the_ranking_rule_it_is_scored_against() -> None:
+    """A metric scored against an unstated rule is a metric nobody can dispute."""
+    rendered = evaluate(tier=Tier.SMOKE).markdown()
+    assert "an unquantified saving ranks" in rendered
+    assert "below every quantified one" in rendered
+    assert "made this metric vacuous" in rendered
+
+
 def test_the_report_explains_what_handled_correctly_means() -> None:
     """A redefinition nobody can find reads as a bar being quietly lowered."""
     rendered = evaluate(tier=Tier.SMOKE).markdown()
     assert "handled correctly means" in rendered
     assert "exempt is the correct outcome" in rendered
     assert "scoring on" in rendered
+
+
+# ---------------------------------------------------------------------------
+# Spend anomalies
+# ---------------------------------------------------------------------------
+
+
+def _anomaly_dataset() -> tuple[LabelledEstate, ClientReport]:
+    dataset = next(d for d in load_all() if d.dataset_id == "anomaly-shapes")
+    report, _ = run_pipeline(dataset, eval_settings(_STATE))
+    return dataset, report
+
+
+def test_every_series_shape_is_labelled_and_scored() -> None:
+    """Four shapes, two expected to fire and two not, so both scores are measurable.
+
+    Precision needs something the detector could wrongly flag and recall needs
+    something it could miss. A dataset with only anomalies measures neither.
+    """
+    dataset, report = _anomaly_dataset()
+    assert len(dataset.subscription_labels) == 4
+    assert len(dataset.anomalous) == 2
+    assert len(dataset.steady) == 2
+
+    precision, recall, mismatches = anomaly_scores(dataset, report)
+    assert precision.value == Decimal(1)
+    assert recall.value == Decimal(1)
+    assert precision.denominator == 2
+    assert recall.denominator == 2
+    assert not mismatches, [m.describe() for m in mismatches]
+
+
+def test_the_seasonal_pattern_is_called_out_individually() -> None:
+    """A false positive that repeats weekly is a product failure, not a percentage.
+
+    Folded into aggregate precision it would be one point of a fraction. Named, it is
+    a client who stops reading their alerts.
+    """
+    dataset, report = _anomaly_dataset()
+    outcome = next(
+        o
+        for o in adversarial_outcomes(dataset, report)
+        if o.kind is AdversarialKind.SEASONAL_NON_EVENT
+    )
+    assert outcome.passed
+    assert outcome.resource == "HM-PROD-Archive"
+    assert outcome.actual == "no anomaly reported"
+    assert "stops reading the alerts" in outcome.note
+
+
+def test_a_seasonal_false_positive_is_reported_as_a_mismatch() -> None:
+    """Red, then green. A metric nobody has seen move is a metric nobody should trust.
+
+    The seasonal subscription is given a spike it did not have, and both the score and
+    the adversarial outcome must notice.
+    """
+    dataset, report = _anomaly_dataset()
+    forged = report.anomalies[0].model_copy(
+        update={
+            "anomaly_id": "ca-forged",
+            "scope": dataset.estate.subscriptions[2].subscription_id,
+            "subscription_id": dataset.estate.subscriptions[2].subscription_id,
+            "kind": AnomalyKind.SPIKE,
+        }
+    )
+    regressed = report.model_copy(update={"anomalies": (*report.anomalies, forged)})
+
+    precision, recall, mismatches = anomaly_scores(dataset, regressed)
+    assert precision.value is not None
+    assert precision.value < Decimal(1)
+    assert recall.value == Decimal(1)  # nothing was missed, something was invented
+    assert any(m.resource == "HM-PROD-Archive" for m in mismatches)
+
+    outcome = next(
+        o
+        for o in adversarial_outcomes(dataset, regressed)
+        if o.kind is AdversarialKind.SEASONAL_NON_EVENT
+    )
+    assert not outcome.passed
+    assert "spike" in outcome.actual
+
+
+def test_an_anomaly_of_the_wrong_shape_counts_against_both_scores() -> None:
+    """A level shift called a spike is not a partially right answer.
+
+    "Your run rate moved" and "something ran on Tuesday" send a client to different
+    places, so the shape is part of the finding rather than a detail of it.
+    """
+    dataset, report = _anomaly_dataset()
+    level_shift = next(a for a in report.anomalies if a.kind is AnomalyKind.LEVEL_SHIFT)
+    mis_kinded = report.model_copy(
+        update={
+            "anomalies": tuple(
+                a.model_copy(update={"kind": AnomalyKind.SPIKE})
+                if a.anomaly_id == level_shift.anomaly_id
+                else a
+                for a in report.anomalies
+            )
+        }
+    )
+    precision, recall, mismatches = anomaly_scores(dataset, mis_kinded)
+    assert precision.value == Decimal("0.5")
+    assert recall.value == Decimal("0.5")
+    assert any("wrong shape" in m.note for m in mismatches)
+
+
+def test_an_anomalys_difference_never_reaches_the_savings_total() -> None:
+    """Measured on a dataset built to make the mistake obvious if it were made.
+
+    The step change is worth 165.44 a day and the spike 141.55; the only real saving in
+    the estate is a 19.71 orphaned disk. A headline of anything but 19.71 would mean a
+    spend change had been counted as recoverable money.
+    """
+    _, report = _anomaly_dataset()
+    assert report.totals.anomaly_count == 2
+    assert report.totals.projected_monthly_savings.amount == Decimal("19.71")
+    deltas = {a.delta.amount for a in report.anomalies}
+    assert Decimal("19.71") not in deltas
+    assert all(delta is not None and delta > Decimal("100") for delta in deltas)
+
+
+def test_a_dataset_cannot_label_only_some_of_its_subscriptions() -> None:
+    """An unlabelled subscription is uncounted, which is worse than either verdict."""
+    dataset = next(d for d in load_all() if d.dataset_id == "anomaly-shapes")
+    partial = dataset.model_dump(mode="json")
+    partial["subscription_labels"] = partial["subscription_labels"][:2]
+    with pytest.raises(ValidationError, match="every subscription needs a spend label"):
+        LabelledEstate.model_validate(partial)
+
+
+def test_a_subscription_label_must_name_the_shape_it_expects() -> None:
+    """A half-labelled positive case scores nothing and silently weakens recall."""
+    with pytest.raises(ValidationError, match=r"does not say\s+which kind"):
+        SubscriptionLabel(subscription=0, expects_anomaly=True, note="incomplete on purpose")
+    with pytest.raises(ValidationError, match="expects no anomaly but names a kind"):
+        SubscriptionLabel(
+            subscription=0,
+            expects_anomaly=False,
+            expected_kind=AnomalyKind.SPIKE,
+            note="contradictory on purpose",
+        )
+
+
+def test_a_shaped_subscription_must_give_a_baseline() -> None:
+    """A shape with nothing to scale is a shape that generates a flat zero series."""
+    with pytest.raises(ValidationError, match=r"series_shape and a\s+daily_baseline"):
+        SubscriptionSpec(
+            subscription_id="00000000-0000-4000-8000-0000000e0009",
+            display_name="X",
+            region="eastus",
+            series_shape=SeriesShape.STEP_CHANGE,
+        )
+
+
+def test_the_anomaly_dataset_is_in_the_smoke_tier() -> None:
+    """A seasonal regression makes the whole alert feed unreadable, every week.
+
+    That is worth catching on every commit rather than on every merge to master, which
+    is the same argument that put the injection twin in the smoke tier.
+    """
+    dataset = next(d for d in load_all() if d.dataset_id == "anomaly-shapes")
+    assert dataset.tier is Tier.SMOKE
+    assert dataset in select(tier=Tier.SMOKE)
+
+
+def test_the_dataset_series_comes_from_the_shared_generator() -> None:
+    """One definition of "a step change", used by the demo estate and the datasets.
+
+    Two fixtures each growing their own copy is how they drift apart while both look
+    right, and only one of them would then be measuring the detector.
+    """
+    dataset = next(d for d in load_all() if d.dataset_id == "anomaly-shapes")
+    provider = DatasetProvider(dataset)
+    spec = dataset.estate.subscriptions[0]
+    assert spec.series_shape is not None
+    assert spec.daily_baseline is not None
+    expected = synthetic_series(
+        subscription_id=spec.subscription_id,
+        daily_baseline=spec.daily_baseline,
+        shape=spec.series_shape,
+        end=date(2026, 10, 1),
+        window_days=30,
+        provenance=Provenance.calculated("test"),
+    )
+    actual = provider.get_cost_series(spec.subscription_id)
+    assert [p.amount for p in actual.points] == [p.amount for p in expected.points]
+
+
+def test_a_flat_series_is_still_the_default() -> None:
+    """Because it keeps the observed-spend figure exact, which the cost gate needs."""
+    dataset = next(d for d in load_all() if d.dataset_id == "baseline-mixed")
+    assert all(sub.series_shape is None for sub in dataset.estate.subscriptions)
+    series = DatasetProvider(dataset).get_cost_series(
+        dataset.estate.subscriptions[0].subscription_id
+    )
+    assert len({point.amount for point in series.points}) == 1
 
 
 def test_the_scorecard_names_a_gap_rather_than_hiding_it() -> None:

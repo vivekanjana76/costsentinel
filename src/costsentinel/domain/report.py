@@ -24,7 +24,7 @@ from costsentinel.domain.common import (
 from costsentinel.domain.exemption import ExemptionReason
 from costsentinel.domain.observability import RunMetrics
 from costsentinel.domain.recommendations import ActionClass, ActionType
-from costsentinel.domain.signals import WasteKind
+from costsentinel.domain.signals import AnomalyDirection, AnomalyKind, WasteKind
 
 
 class ReportFinding(Frozen):
@@ -127,6 +127,51 @@ class ExemptFinding(Frozen):
     evidence: tuple[str, ...] = ()
 
 
+class ReportAnomaly(Frozen):
+    """A change in spend, surfaced for investigation.
+
+    Separate from :class:`ReportFinding` and from :class:`ExemptFinding`, because it is
+    a third kind of claim. A finding says *this resource is wasteful, act*; an exempt
+    item says *this is waste we are not acting on, and here is why*; an anomaly says
+    *spend changed, investigate*.
+
+    Carries **no action, no action class and no saving**, and the absence is the point:
+    there is no field through which an anomaly could acquire a remediation, and
+    ``delta`` is a change in spend rather than a recoverable amount. Presenting it as a
+    saving would promise money nobody has identified a way to recover
+    (ARCHITECTURE.md D106).
+
+    ``statement`` is composed by the detector from its own arithmetic. ``note`` is the
+    only model-derived field here, and it may explain the change without being able to
+    alter the numbers or the verdict.
+    """
+
+    anomaly_id: str
+    scope: str = Field(description="What changed: a subscription id today, a resource id later.")
+    subscription_id: str
+    service: str | None = None
+    kind: AnomalyKind
+    direction: AnomalyDirection
+    baseline: MoneyAmount
+    observed: MoneyAmount
+    delta: MoneyAmount
+    observed_from: date
+    observed_to: date
+    deviation_score: Decimal = Field(ge=Decimal(0))
+    confidence: Confidence
+    detector: str
+    statement: str = Field(
+        min_length=1,
+        description=(
+            "The finding in plain numbers, composed by the detector. Never model-authored."
+        ),
+    )
+    note: str = Field(
+        default="", description="Model-authored commentary. Explains; decides nothing."
+    )
+    evidence: tuple[str, ...] = ()
+
+
 class ApprovalQueueItem(Frozen):
     """A finding that cannot proceed without a human, surfaced for the client."""
 
@@ -188,6 +233,23 @@ class ReportTotals(Frozen):
             "absorbed them would promise savings nobody can realise."
         ),
     )
+    anomaly_count: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Spend changes surfaced for investigation. Counted separately from the "
+            "findings because they are a different claim and carry no saving."
+        ),
+    )
+    unassessed_scope_count: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Scopes whose spend could not be assessed -- too little history, or too "
+            "many missing days. Reported rather than silently omitted, so a clean "
+            "anomaly section is distinguishable from an unexamined one."
+        ),
+    )
     exempt_monthly_cost: MoneyAmount | None = Field(
         default=None,
         description=(
@@ -237,6 +299,22 @@ class ClientReport(Frozen):
             "indistinguishable from a clean estate."
         ),
     )
+    anomalies: tuple[ReportAnomaly, ...] = Field(
+        default=(),
+        description=(
+            "Spend changes, listed separately from the findings. An anomaly routes to "
+            "an investigation and never to a remediation, so it is not in the "
+            "approval queue and contributes nothing to the savings total."
+        ),
+    )
+    unassessed_spend: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "One line per scope whose spend could not be assessed, with the reason. "
+            "A gap in a cost series is unknown, not zero -- and an anomaly section "
+            "that was silent about it would read as a clean bill of health."
+        ),
+    )
     waste_breakdown: tuple[WasteKindSummary, ...] = ()
     approval_queue: tuple[ApprovalQueueItem, ...]
     incomplete_reasons: tuple[str, ...] = Field(
@@ -266,6 +344,11 @@ class ClientReport(Frozen):
     def has_exemptions(self) -> bool:
         """Whether anything was flagged and deliberately left alone."""
         return bool(self.exempt_findings)
+
+    @property
+    def has_anomalies(self) -> bool:
+        """Whether any spend change was surfaced for investigation."""
+        return bool(self.anomalies)
 
 
 class ScanResult(Frozen):

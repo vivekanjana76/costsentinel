@@ -68,6 +68,8 @@ class DatasetResult(Frozen):
     precision: Score
     recall: Score
     ranking: Score
+    anomaly_precision: Score = Score(name="anomaly.precision")
+    anomaly_recall: Score = Score(name="anomaly.recall")
     calibration: Score
     groundedness: Groundedness
     gates: tuple[GateResult, ...] = ()
@@ -91,6 +93,8 @@ class Scorecard(Frozen):
     precision: Score
     recall: Score
     ranking: Score
+    anomaly_precision: Score = Score(name="anomaly.precision")
+    anomaly_recall: Score = Score(name="anomaly.recall")
     calibration: Score
     groundedness: Groundedness
     gates: tuple[GateResult, ...] = ()
@@ -149,6 +153,8 @@ class Scorecard(Frozen):
             f"    detection precision   {self.precision.display()}",
             f"    detection recall      {self.recall.display()}",
             f"    ranking concordance   {self.ranking.display()}",
+            f"    anomaly precision     {self.anomaly_precision.display()}",
+            f"    anomaly recall        {self.anomaly_recall.display()}",
             f"    savings calibration   {self.calibration.display()}",
             f"    report groundedness   {_groundedness_display(self.groundedness)}",
         ]
@@ -228,10 +234,34 @@ class Scorecard(Frozen):
             f"{self.recall.denominator} labelled waste |",
             f"| Ranking concordance | {_value(self.ranking)} | "
             f"{self.ranking.denominator} pair(s) |",
+            f"| Anomaly precision | {_value(self.anomaly_precision)} | "
+            f"{self.anomaly_precision.denominator} reported |",
+            f"| Anomaly recall | {_value(self.anomaly_recall)} | "
+            f"{self.anomaly_recall.denominator} labelled change(s) |",
             f"| Savings calibration | {_value(self.calibration)} | "
             f"{self.calibration.denominator} figure(s) |",
             f"| Report groundedness | {_groundedness_display(self.groundedness)} | "
             f"{len(self.groundedness.claims)} claim(s) |",
+            "",
+            "Ranking concordance is pairwise agreement with a **hand-written** reviewer",
+            "order, not nDCG against savings order -- the ranker deliberately weights",
+            "safety and confidence too, so scoring it against a pure savings order would",
+            "mark correct behaviour wrong.",
+            "",
+            "Anomaly precision and recall score whether *spend changed*, which is a",
+            "different claim from whether a resource is wasteful. An anomaly of the wrong",
+            "shape counts against both: a level shift and a spike send a client to",
+            "different places, so getting the shape wrong is getting the finding wrong.",
+            "",
+            "The labelled order expresses one stated rule: **an unquantified saving ranks",
+            "below every quantified one** (ARCHITECTURE.md D104). Phase 5 recorded a single",
+            "discordant pair -- an unpriced idle database sitting above a small,",
+            "irreversible, priced snapshot deletion -- and deliberately left it, because",
+            "editing one label to match the code would have made this metric vacuous.",
+            "Phase 7 resolved it by **settling the rule and applying it to every label that",
+            "carries an unquantified saving**, which is a different thing: the pipeline and",
+            "the labels now agree because both follow a rule that is written down, tested",
+            "and reported on each finding.",
             "",
             "## Per-detector breakdown",
             "",

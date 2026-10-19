@@ -3,7 +3,7 @@
 SQLite locally, Postgres in compose from Phase 4 (ARCHITECTURE.md D15). SQLite is
 used in development deliberately rather than an in-memory saver: if the resume path
 is not exercised day to day, it will not work on the day it is needed -- and from
-Phase 9 the resume path is also how the approval gate works, since the graph halts,
+Phase 10 the resume path is also how the approval gate works, since the graph halts,
 the process exits, and the run continues days later on a recorded decision.
 """
 

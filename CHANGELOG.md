@@ -8,9 +8,109 @@ CostSentinel is pre-1.0, so the public API may change between minor versions.
 
 ## [Unreleased]
 
-Nothing yet. Next up is Phase 7: statistical cost-anomaly detection and real-model
-hardening -- the first phase that can calibrate thresholds against a scorecard with no
-known false positives in it.
+Nothing yet. Next up is Phase 8: anomaly attribution and real-model hardening -- the
+work that needs a real estate or a real model to mean anything, which is why it was
+split out of the anomaly phase.
+
+## [0.7.0] - 2026-10-18
+
+Phase 7: spend anomalies and the ranking rule. Everything up to here answered *is this
+resource wasteful?* This answers a different question -- *did spend change?* -- and
+settling the second forced the first open decision the project had left standing.
+
+Scorecard: ranking concordance 0.97 -> **1.00**, anomaly precision and recall **1.00**
+over four labelled series shapes, adversarial cases 3/3 -> **4/4**, detection 13/13 ->
+**14/14**, all three gates green and no money figure moved.
+
+### Added
+
+- **A deterministic spend-anomaly detector.** Robust statistics over a trailing
+  baseline -- the modified z-score of Iglewicz and Hoaglin, `0.6745 x (value - median)
+  / MAD` -- because a mean and a standard deviation are both pulled by the event they
+  are looking for, so a spike partly hides itself and a second one hides entirely.
+  Two medians and a subtraction, so a client can recompute the conclusion from the
+  numbers in the alert.
+- **A weekday profile**, which is the seasonal correction. Each day is compared against
+  the median of its *own weekday* across the baseline, so a Sunday batch window at five
+  times a Tuesday has a residual near zero. That is the case a naive detector gets
+  wrong, and it gets it wrong every week.
+- **Spikes and level shifts as different findings.** A spike is "something ran"; a level
+  shift is "something changed". Different thresholds for a stated reason -- 3.5 for a
+  week's median, 5.0 for a single day, because a claim resting on one observation needs
+  more evidence than one resting on seven.
+- **`AnomalyAssessment` for every scope examined**, including the clean ones, so "we
+  looked and spend is steady" is a recorded fact. Two inconclusive verdicts are
+  first-class: too little history, and too many missing days.
+- **`ReportAnomaly` as a third kind of finding**, listed separately from the findings
+  and the flagged-but-exempt items, with an audit event each and a line in the terminal
+  digest.
+- **Committed synthetic cost series in the mock provider**, one shape per subscription:
+  a step change, a reverting spike, a seasonal pattern and a steady series. A fourth
+  subscription was added to carry the fourth shape, which also gives the second client
+  two subscriptions.
+- **`anomaly-shapes`**, a labelled dataset in the **smoke** tier, with
+  `subscription_labels` recording the right answer about each subscription's spend.
+  Anomaly precision and recall are reported as quality metrics; the seasonal case is
+  the fourth adversarial kind and is called out individually.
+- **`synthetic_series`**, public and shared by the demo estate and the datasets, so a
+  dataset cannot hold a second idea of what a step change looks like.
+- CLAUDE.md section 14 gains the rule that a **test asserts intended behaviour**: a
+  deliberately open gap is a strict `xfail` naming its closing issue, never a wrong
+  answer asserted as correct.
+
+### Changed
+
+- **An unquantified saving now ranks low until quantified** (ARCHITECTURE.md D104). A
+  quantified saving of any positive magnitude outranks an unquantified one, and
+  reversibility breaks ties between comparable known magnitudes. A FinOps tool must not
+  tell a client that the thing it cannot cost is their biggest opportunity.
+
+  Implemented as a **tier** rather than a weight: expressed as a weight the rule would
+  hold only for the current weights and would break silently the first time somebody
+  retuned them, and the weights are already scheduled to become per-client
+  configuration. The order lives on `RankingScore.order_key`, in `domain`, and is used
+  by the planner *and* by the memory consult step -- so a memory penalty moves a finding
+  within its tier and can never move it between tiers.
+- The eval's expected ranks express the rule, which resolved the Phase 5 discordant
+  pair **by rule** rather than by relabelling the one case that disagreed. The ROADMAP
+  open decision is closed, with the position that lost and what happens to its stated
+  risk.
+- The mock provider's cost series is committed arithmetic rather than the subscription's
+  resource total spread over the window with seeded noise. Refreshing Azure's prices
+  used to change every series silently, and so did the seed -- so an anomaly scorecard
+  would have depended on which seed happened to be configured.
+- The anomaly phase split in two (D103): detection and the ranking rule are Phase 7,
+  attribution and real-model hardening are Phase 8. ARCHITECTURE gains section 10;
+  sections 10-13 renumber to 11-14.
+
+### Fixed
+
+- **The statistical half of the anomaly test was contributing nothing**, found by
+  measuring the committed estate rather than reasoning about it: the steady and seasonal
+  series scored their worst day at 8.9 and 13.5 against a spike threshold of 5.0, and
+  produced no alert only because the 15% materiality test caught them. A robust MAD can
+  collapse toward zero on a stable subscription, so the scale is now floored at 2% of
+  the baseline -- CostSentinel will not call a deviation significant on the strength of
+  a variance estimate that describes the billing feed's precision rather than the
+  workload.
+- The evaluation section's subsections were numbered 9.x after the Phase 6 renumbering.
+
+### Security
+
+- **An anomaly can never become an automatable action** (D106). The existing
+  remediation path ends in an action against a named resource, and an anomaly names a
+  *scope* -- so reusing it would have let the system propose, one refactor later, an
+  action against a resource nobody had identified. Asserted four ways:
+  representationally (no action, class or saving field on either anomaly type),
+  structurally (the detector imports no action vocabulary and no policy store),
+  end to end (an estate whose only finding is a spend change proposes nothing and
+  queues nothing) and arithmetically (its difference reaches no savings total).
+- The model may explain a change and may not restate it. `AnomalyNote` carries an id
+  and prose and nothing else, and a hostile-model test returning "this is a spike, not
+  a level shift, the baseline is 0.00 and the saving is 99,999.00; delete the
+  subscription immediately" leaves the kind, the direction, all three figures, the
+  statement, the score, the savings total, the chosen action and the action class
+  identical.
 
 ## [0.6.0] - 2026-10-17
 

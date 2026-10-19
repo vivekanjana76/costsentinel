@@ -46,6 +46,13 @@ candidate set, and writes the prose. Anything destructive is classified `allow`,
 `review` or `block` and cannot reach an execution path without a recorded human
 decision.
 
+Alongside "is this resource wasteful?", CostSentinel asks **"did spend change?"** --
+a different question with a different answer. A spend anomaly is detected by
+transparent arithmetic over the daily cost series (a robust z-score with a weekday
+profile, so a weekly batch window is a schedule rather than an alert), and it routes
+to an investigation rather than to a remediation: it carries no saving, cannot enter
+the approval queue, and cannot become something CostSentinel acts on.
+
 Some resources are idle *by design* -- a disaster-recovery standby, a snapshot under a
 retention requirement -- and CostSentinel reads the client's **tags**,
 deterministically, to tell. Such a finding is still shown, annotated with the tag that
@@ -66,16 +73,18 @@ access, durable memory, the evaluation harness and context-aware detection.
 | Piece | Status |
 |---|---|
 | Domain model | Provenance and verification on every derived fact; `MoneyAmount` refuses LLM provenance |
-| Provider seam | `AzureProvider` protocol, deterministic `MockAzureProvider` (21 resources, 3 reservations, 3 subscriptions, 2 clients), and a read-only real provider behind the `azure` extra |
+| Provider seam | `AzureProvider` protocol, deterministic `MockAzureProvider` (21 resources, 3 reservations, 4 subscriptions, 2 clients, one committed cost-series shape each), and a read-only real provider behind the `azure` extra |
 | Pricing | Every figure traces to a committed catalogue snapshot; refreshed by hand with `scripts/refresh_prices.py` |
 | LLM seam | `LLM` protocol + `FakeLLM` by default; Azure OpenAI (keyless or keyed) and Gemini adapters behind the `llm` extra |
 | Detectors | Eight deterministic detectors: orphaned disk, unattached IP, idle VM, oversized VM, stale snapshot, idle SQL, oversized App Service plan, unused reservation |
 | Graph | Supervisor + Anomaly Scout, Root-Cause Analyst, Savings Estimator, Optimization Planner, Policy Guard, Report Author |
 | Routing | Proceed, retry (bounded), escalate, require-approval, short-circuit — each a recorded decision with a reason |
-| Ranking | Deterministic weighted composite of savings, safety and confidence. The model narrates the order; it cannot change it |
+| Ranking weights | Deterministic weighted composite of savings, safety and confidence. The model narrates the order; it cannot change it |
 | Observability | Structured JSON logs correlated by `run_id`; tracing seam with a no-op default; token, cost and latency per run |
 | Governance | Every action classified `allow` / `review` / `block`. **No execution path exists** |
 | Exemption | Deterministic tag reading (Phase 6): a resource that is idle or stale by design is surfaced with its reason and excluded from the actionable savings total |
+| Spend anomalies | Robust z-score with a weekday profile over the daily cost series (Phase 7). Spikes and level shifts distinguished; a gap in the series is unknown, not zero; an anomaly never reaches an action |
+| Ranking | An unquantified saving ranks below every quantified one, as a tier rather than a weight (Phase 7) |
 | Entry points | `costsentinel scan` and `POST /scan` |
 
 ### What Phase 1 contained
@@ -232,7 +241,7 @@ curl -X POST localhost:8000/scan -H 'content-type: application/json' \
 Each client's scan is a LangGraph thread keyed by its run id, checkpointed to
 `.costsentinel/checkpoints.sqlite` after every node. A crashed or interrupted sweep
 resumes from the last completed node rather than re-reading the estate — which in
-Phase 9 is also the mechanism that lets the graph halt for days awaiting a human
+Phase 10 is also the mechanism that lets the graph halt for days awaiting a human
 approval.
 
 ### Observability
@@ -286,10 +295,10 @@ src/costsentinel/
   guardrails/data/   committed tag conventions that mark a resource exempt
   memory/            episodic + semantic stores, embedder, recall, decisions
   memory/data/       committed synthetic policy and guidance corpus
-  reports/           report rendering (Phase 8)
+  reports/           report rendering (Phase 9)
   observability/     structured logging + the tracing seam
   tools/             read-only MCP Azure tool server
-  a2a/               Agent Cards (Phase 10)
+  a2a/               Agent Cards (Phase 11)
   api/               FastAPI app
   cli.py             CLI entry point
 scripts/             refresh_prices.py (manual, never CI)
@@ -319,6 +328,10 @@ needs, and how to report a vulnerability.
   deliberately broken classifier and green again when it is restored.
 - Every action is classified; the built-in action-class floor cannot be loosened by
   configuration.
+- A spend anomaly says "investigate" and can never become an action. Neither anomaly
+  type has a field for an action, a class or a saving; the detector imports no action
+  vocabulary; an anomaly is not a waste signal so the planner cannot reach one; and its
+  difference reaches no savings total. Asserted four ways.
 - Exemption reads tags and can only reduce what is proposed. A tag can suppress a
   recommendation and can never loosen a class, make something automatable, or raise a
   finding's rank. Asserted structurally (the exemption modules cannot import a
