@@ -34,6 +34,13 @@ azure = [
 ]
 # The MCP tool server.
 mcp = ["fastmcp>=2.0"]
+# PDF rendering. The Markdown report needs no extras and is always available, so a
+# missing toolchain costs a format rather than the deliverable. ReportLab is pure
+# Python with no system libraries behind it -- WeasyPrint looks better and needs Pango
+# and Cairo installed, which makes "render the client's PDF" a platform problem on a
+# laptop. Nothing here touches the network: a document containing a client's spend
+# must not be assembled by a hosted service.
+reports = ["reportlab>=4.2"]
 # Real language-model backends. FakeLLM stays the default and CI installs neither.
 llm = ["openai>=1.50", "google-genai>=1.0"]
 # Durable memory in PostgreSQL. The default memory store is SQLite from the standard
@@ -45,6 +52,7 @@ real = [
     "costsentinel[mcp]",
     "costsentinel[llm]",
     "costsentinel[memory]",
+    "costsentinel[reports]",
 ]
 
 [project.scripts]
