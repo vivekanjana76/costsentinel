@@ -546,11 +546,23 @@ def test_the_api_reports_the_package_version_rather_than_its_own_copy() -> None:
     assert __version__ == API_VERSION
 
 
-def test_the_changelog_has_an_entry_for_the_current_version() -> None:
+def test_the_declared_version_is_the_newest_released_entry() -> None:
+    """Appearing somewhere in the changelog was too weak a claim.
+
+    That is what the earlier version of this test asserted, and it stayed green through
+    two releases while `pyproject.toml` and `__init__.py` sat at 0.5.0 and the tags had
+    moved to v0.7.0 -- because an *old* version appears in the changelog too. The claim
+    worth making is that the declared version is the most recent released heading.
+    """
     from costsentinel import __version__
 
     changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
-    assert f"[{__version__}]" in changelog
+    released = re.findall(r"^## \[(\d+\.\d+\.\d+)\]", changelog, re.MULTILINE)
+    assert released, "no released version headings in the changelog"
+    assert released[0] == __version__, (
+        f"the package declares {__version__} but the newest changelog entry is "
+        f"{released[0]}; bump one of them"
+    )
 
 
 # ---------------------------------------------------------------------------
