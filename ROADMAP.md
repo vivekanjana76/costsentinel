@@ -520,28 +520,28 @@ document* is checked by nothing, while being the only artefact a client ever rea
 
 Milestone: *Phase 8 - Client reporting*.
 
-- [ ] A **Markdown renderer** producing a client-ready document with five distinct
+- [x] A **Markdown renderer** producing a client-ready document with five distinct
       sections: a deterministic executive summary, the ranked actionable
       recommendations with their plain-number basis, **flagged but exempt** (Phase 6),
       **spend anomalies -- investigate** (Phase 7), and **worth investigating, saving
       unknown** (#68)
-- [ ] A **PDF renderer** behind an optional `reports` extra that CI does not install.
+- [x] A **PDF renderer** behind an optional `reports` extra that CI does not install.
       The Markdown path works with zero extras, and the PDF is produced from the same
       source so the two cannot diverge (#69)
-- [ ] **Groundedness and figure accuracy over the rendered output**, not only the
+- [x] **Groundedness and figure accuracy over the rendered output**, not only the
       internal object. A sentence asserting a number in the final document must match
       a source figure, and `cost.figure_accuracy` becomes a hard gate over the
       rendered text as well (#70)
-- [ ] **Provenance and honesty in the document:** an unknown renders as "unknown" and
+- [x] **Provenance and honesty in the document:** an unknown renders as "unknown" and
       never as zero or blank, an exempt item shows a cost and never a saving, the
       report states where its prices came from, and a disclaimer distinguishes
       estimated from verified figures (#71)
-- [ ] **Byte-identical rendering** for the same input, with a committed golden file
+- [x] **Byte-identical rendering** for the same input, with a committed golden file
       and the generated-at timestamp the only injected variable (#72)
-- [ ] `costsentinel report`, and one **committed sample** rendered from the mock
+- [x] `costsentinel report`, and one **committed sample** rendered from the mock
       estate so a repository visitor can read a real output without running anything
       (#73)
-- [ ] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.8.0 (#74)
+- [x] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.8.0 (#74)
 
 **Exit criteria:** `costsentinel report` produces a Markdown document from a scan; a
 test corrupts one number in the rendered text and the figure-accuracy gate fails, then
@@ -572,6 +572,15 @@ guardrail needs real token spend, and recalibrating a threshold needs real histo
 - [ ] Anomaly root-cause correlation: tie a spend change to the resource or service
       that caused it. Needs a real cost series broken down by resource, which the
       synthetic series deliberately does not model
+- [ ] **Give the mock estate an exempt and an unpriced finding.** Phase 8 found this
+      by rendering it: the committed sample at `docs/sample-report.md` shows four of
+      the renderer's six sections, because no mock resource is both flagged by a
+      detector *and* tagged exempt, and every mock finding happens to be priceable. So
+      exemption (Phase 6) and the unquantified-findings section (Phase 8) are demonstrated
+      only by the golden file and the eval datasets, and a repository visitor reading
+      the sample cannot see either. Needs an idle VM tagged as a DR standby and one
+      finding with no cheaper tier; it touches the mock estate, which several tests pin
+      by count and total, so it is its own change rather than a late edit to a phase
 - [ ] Egress and data-transfer anomaly detection
 - [ ] Real-model hardening: retry and fallback from the primary backend to the
       secondary on failure or schema violation, with the fallback recorded in the trace

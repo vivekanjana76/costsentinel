@@ -805,7 +805,125 @@ and memory may not touch the money (D68).
 
 ---
 
-## 11. Evaluation approach
+## 11. The rendered document
+
+Implemented in Phase 8. For seven phases every check in this project stopped at the
+internal `ClientReport`: its figures were asserted against committed ground truth, its
+prose was traced back to state, its destructive actions were proved gated. The Markdown
+a client actually opens was checked by nothing, because it did not exist. That is one
+layer short of the artefact the product delivers, and a figure can be right in the
+object and wrong in the document — reformatted, rounded, pulled from the wrong field,
+or interpolated into a sentence by a template.
+
+So the guarantee was extended rather than re-stated: **a number in the rendered
+document must trace to a figure the pipeline produced.** `rendered.figure_accuracy` is
+a blocking gate beside `cost.figure_accuracy`, and the eval harness renders every
+dataset and checks the text.
+
+### Rendering may copy and may never compose
+
+The precise form of the claim, arrived at by running the gate and reading what it
+found. A decimal in the document passes if it is a figure on the report — money,
+confidence, ranking composite, deviation score — **or** if it already appears in a
+string the report carries: a catalogue price quoted inside a deterministic savings
+basis, a score inside a ranking breakdown, a digit inside a resource name.
+
+The second clause is not a loophole. Both sets are things the pipeline produced or the
+provider supplied; what neither set contains is a decimal the *renderer* made up. A
+rounded total, a reformatted amount, a sum computed in the template — each of those
+appears in neither, which is exactly the failure worth gating. The alternative,
+permitting only the report's monetary fields, rejected the P0v3 catalogue price that a
+savings basis quotes so a client can check the arithmetic, which would have pushed the
+renderer towards hiding its workings.
+
+Two further checks close the gap a set-membership test leaves open: the three headline
+figures must appear **verbatim** as `MoneyAmount.display()` renders them (a swapped or
+reformatted total is the error a client would act on, and every digit in it would still
+be a member of the permitted set), and every model-written span the renderer declares
+must appear verbatim too.
+
+### Groundedness follows the prose into the document
+
+Grading the report object says nothing about the document unless the document quotes
+the object. A renderer that paraphrased a model sentence would be the obvious place to
+launder an ungrounded claim past a check that only ever read the object.
+
+So `reports/markdown.py` declares what model-authored prose it emitted —
+`model_authored()` returns a span per executive summary, root cause, ranking rationale,
+memory note and anomaly note — and the harness confirms each span is present word for
+word before grading the figures inside it. A span the document does not contain
+verbatim is scored as **unsupported**, not skipped: the alternative is to grade prose
+nobody can read.
+
+Rendered groundedness is a metric, not a gate, for the Phase 5 reason — a judge is not
+a proof, and a quality score that fails a build invites tuning the judge. The committed
+baseline is 0.97, and the only unsupported claims in the whole corpus are the injection
+dataset's attacker-supplied `0.00` surfacing in model prose. That is the metric working:
+the hostile name reached the model's sentence, and the injection gate separately proves
+it changed no action, no class and no figure.
+
+### Five sections, because there are five different claims
+
+A single ranked list would conflate things a client must not conflate:
+
+| Section | Carries | Not |
+| --- | --- | --- |
+| Recommended actions | A saving, an action, a class | — |
+| Worth investigating — saving unknown | A named finding and why no figure exists | A saving |
+| Flagged but exempt | What the resource costs now, and the tag | A saving |
+| Spend changes — investigate | A difference in daily spend | A saving, an action |
+| Spend we could not assess | A reason nothing was concluded | A zero |
+
+The **unquantified** section is the one worth explaining. The ranking rule puts
+unquantified findings last (D104), which is right for an order and wrong for a
+document: the bottom of a long ranked list is precisely where an unknown quietly
+becomes a zero. Giving them a named section with named resources, each stating why no
+figure could be derived, keeps "we could not cost this" visible without claiming it is
+the bigger opportunity.
+
+Three honesty properties hold throughout, and each is tested: an unknown prints
+`unknown USD` and never a zero or a blank; an exempt item's figure is labelled **costs
+now** and the section says it is what you are paying rather than a saving available to
+you; and an anomaly's figure is labelled a **difference**, with the section stating
+that CostSentinel proposes nothing there.
+
+The document also states its own basis from the provenance flags rather than from a
+sentence somebody wrote once — the sources, the retrieval date, and how many savings
+are observed costs versus modelled estimates. Only priced findings are counted in that
+split, because an unquantified saving is neither.
+
+### The PDF typesets the Markdown
+
+Two renderers reading the same report is a way to publish two different numbers. So
+`reports/pdf.py` does not read the report at all: it parses our own Markdown into a
+closed vocabulary of six block kinds and typesets them. The Markdown stays the single
+source of truth, and the PDF's correctness reduces to one testable property — the set
+of digit runs on the page equals the set in the Markdown. Tested by assertion (the file
+exists, begins `%PDF-`, and every figure survived) rather than by pixel comparison,
+which breaks on a font metric and says nothing about whether the money is right.
+
+`reportlab` is an optional `reports` extra that CI does not install, so the gate that
+blocks a build never depends on a C-extension toolchain. The Markdown path imports no
+part of it, and the parser — where the arithmetic claim lives — is tested with zero
+extras.
+
+### Determinism
+
+The same report renders byte-identically. There is one clock in the output, an
+injectable `generated_at`, pinned by the harness and by the committed sample. A
+golden file holds one full report with all five sections, regenerated deliberately
+behind `UPDATE_GOLDEN=1` so a change to the document a client reads arrives as a diff
+somebody reviewed.
+
+`docs/sample-report.md` is rendered from the mock estate and committed, so a visitor
+can read a real output without running anything. `costsentinel report --sample`
+constructs its own mock settings and reads nothing from the environment: a developer
+with `MODE=real` in their `.env` must not be able to regenerate "the sample" from a
+client's estate. Every other rendering goes to a gitignored directory.
+
+---
+
+## 12. Evaluation approach
 
 Implemented in Phase 5. Evals are a deliverable, not an afterthought, because "did we
 find the waste" and "did we gate the dangerous thing" are the product's actual claims
@@ -953,7 +1071,7 @@ reproducible.
 
 ---
 
-## 12. MCP and A2A boundaries
+## 13. MCP and A2A boundaries
 
 These are two different seams and are deliberately not conflated.
 
@@ -1020,7 +1138,7 @@ both ways is defined once in the domain layer and adapted at both edges.
 
 ---
 
-## 13. Non-functional posture
+## 14. Non-functional posture
 
 - **Zero-credential by default.** `MODE=mock` is the default. CI never has secrets or
   network access to a cloud or LLM provider.
@@ -1032,7 +1150,7 @@ both ways is defined once in the domain layer and adapted at both edges.
 
 ---
 
-## 14. Decision log
+## 15. Decision log
 
 Each entry records the decision, the alternatives considered, and why.
 
@@ -1938,3 +2056,54 @@ The model may write prose explaining a change. `AnomalyNote` carries an id and p
 and nothing else, so the kind, the direction and every figure are unreachable from a
 response -- and a hostile-model test confirms that a note instructing the system to
 delete the subscription changes nothing but the note.
+
+**D107. Reporting moved ahead of anomaly attribution.** *Alternatives:* keep the
+planned order and attribute anomalies to a service or resource first. *Why:* Phase 7
+left the project able to check everything about a report except the report. Every
+guarantee the product makes about money stopped at the internal object, and the
+document a client reads — the only artefact that leaves the system — was produced by
+nothing and checked by nothing. Attribution makes an existing finding more useful;
+rendering closes the gap between "the figures are right" and "the figures a client
+sees are right". The weaker claim was the one to fix first. Attribution is Phase 9.
+
+**D108. No template engine.** *Alternatives:* Jinja2, which is the obvious choice and
+already a transitive dependency. *Why:* a template is a second place numbers get
+formatted, and formatting is where a figure stops equalling its source. Rounding
+filters, `{{ "%.2f"|format(x) }}`, a `sum` in a loop — each is a plausible way to put a
+number in front of a client that the pipeline never computed, and each is invisible to
+a test that reads the report object. Composing the document in Python means every
+figure arrives through `MoneyAmount.display()` and the renderer can declare exactly
+which strings it emitted, which is what makes the gate and the groundedness check
+possible. The cost is that the layout lives in code; the layout is also the part under
+test, so it is where the risk is.
+
+**D109. Rendering may copy and may never compose.** *Alternatives:* permit only the
+report's monetary fields, which was the first implementation. *Why:* that version
+rejected two figures on its first run and both were legitimate — the P0v3 catalogue
+price quoted inside a deterministic savings basis so a client can check the
+arithmetic, and a digit inside an attacker-supplied resource name. Narrowing the
+permitted set would have pushed the renderer towards hiding its workings, and widening
+it to "any decimal" would have gated nothing. The claim that holds is about the
+*renderer's* arithmetic: a decimal must be a figure on the report or already present
+in a string the report carries, and a figure the renderer computed itself is in
+neither. Reinforced by requiring the three headline figures verbatim, because a swapped
+total would pass set membership.
+
+**D110. Unquantified findings get their own named section.** *Alternatives:* leave them
+at the bottom of the ranked list, where the ranking rule puts them. *Why:* D104's rule
+is about *order* and it is correct — a FinOps tool must not assert that something it
+cannot cost is the bigger opportunity. But the bottom of a long ranked list is exactly
+where an unknown quietly becomes a zero in a reader's mind, which is the concern the
+rule was accused of ignoring. Both can be true: the item ranks last *and* appears by
+name under a heading that says we could not cost it and why. The rule decides priority;
+the document decides visibility.
+
+**D111. The PDF typesets the Markdown rather than reading the report.** *Alternatives:*
+a second renderer over the `ClientReport`, or a Markdown-to-PDF converter dependency.
+*Why:* two renderers reading the same object is a way to publish two different numbers,
+and nothing would catch the divergence unless both were gated identically. Parsing our
+own Markdown into a closed vocabulary of block kinds makes the Markdown the single
+source of truth and reduces the PDF's correctness to one property that can be asserted
+without a pixel comparison: the set of digit runs on the page equals the set in the
+Markdown. `reportlab` is an optional extra CI does not install, so the blocking gate
+never depends on a C-extension toolchain.
