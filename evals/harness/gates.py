@@ -18,6 +18,14 @@ single action, class or figure. Measured differentially against a benign twin, w
 is stronger than checking that the output looks sensible: it checks that the output
 is *identical*.
 
+**Figure accuracy in the rendered document.** The same requirement, one layer further
+out. Until Phase 8 every check here stopped at the internal `ClientReport`, and the
+rendered Markdown -- the only artefact a client ever reads -- was checked by nothing.
+A figure can be right in the object and wrong in the output: reformatted, rounded,
+pulled from the wrong field, or interpolated into a sentence. So no decimal may appear
+in the document that does not equal a figure on the report it was rendered from
+(ARCHITECTURE.md D109).
+
 A failing gate names the dataset, the resource, the expectation and the reality. A
 gate whose message is "failed" is a gate somebody disables.
 """
@@ -33,6 +41,12 @@ from pydantic import Field
 from costsentinel.domain.common import Frozen, ProvenanceSource
 from costsentinel.domain.recommendations import ActionClass
 from costsentinel.domain.report import ClientReport
+from costsentinel.reports.markdown import (
+    headline_displays,
+    model_authored,
+    monetary_strings,
+    unrendered_figures,
+)
 from evals.harness.dataset import LabelledEstate
 from evals.harness.metrics import Mismatch, Score, finding_by_resource
 
@@ -214,6 +228,85 @@ def cost_figure_accuracy(dataset: LabelledEstate, report: ClientReport) -> GateR
         checked=checked,
         failures=tuple(failures),
         detail="exact agreement with the committed ground truth",
+    )
+
+
+def rendered_figure_accuracy(
+    dataset: LabelledEstate, report: ClientReport, rendered: str
+) -> GateResult:
+    """No number may appear in the rendered document that is not a figure on the report.
+
+    The last layer of the money guarantee, and the one that matters most, because it is
+    the only layer a client sees. Checks two things:
+
+    * every decimal in the document traces to a figure on the report;
+    * every model-written span the renderer declared appears in the document
+      **verbatim**, so the renderer quoted the model rather than paraphrasing it. A
+      paraphrase is how a rendering layer could launder an ungrounded claim past a
+      check that only ever read the report object.
+
+    A gate rather than a score, for the same reason ``cost.figure_accuracy`` is: a
+    document that misstates a client's money by a cent is not 99% correct.
+    """
+    failures: list[Mismatch] = []
+
+    for figure in sorted(set(unrendered_figures(report, rendered))):
+        failures.append(
+            Mismatch(
+                dataset_id=dataset.dataset_id,
+                resource="<rendered document>",
+                kind="rendered_figure",
+                expected="a figure from the report",
+                actual=figure,
+                note=(
+                    "this decimal appears in the rendered document and does not equal "
+                    "any amount, confidence or score on the report it was rendered "
+                    "from, so rendering introduced it"
+                ),
+            )
+        )
+
+    for display in headline_displays(report):
+        if display not in rendered:
+            failures.append(
+                Mismatch(
+                    dataset_id=dataset.dataset_id,
+                    resource="<headline>",
+                    kind="rendered_figure",
+                    expected=f"{display} printed verbatim",
+                    actual="absent from the rendered document",
+                    note=(
+                        "the three headline figures must appear exactly as "
+                        "MoneyAmount.display() renders them; a reformatted or swapped "
+                        "total is the error a client would act on"
+                    ),
+                )
+            )
+
+    spans = model_authored(report)
+    for span in spans:
+        if span.text not in rendered:
+            failures.append(
+                Mismatch(
+                    dataset_id=dataset.dataset_id,
+                    resource=span.where,
+                    kind="rendered_figure",
+                    expected="the model's sentence, verbatim",
+                    actual="altered or absent in the rendered document",
+                    note=(
+                        "the renderer must quote model-written prose rather than "
+                        "rewrite it, or a groundedness check over the report object "
+                        "says nothing about the document"
+                    ),
+                )
+            )
+
+    return GateResult(
+        name="rendered.figure_accuracy",
+        checked=len(monetary_strings(rendered)) + len(spans) + len(headline_displays(report)),
+        passed=not failures,
+        failures=tuple(failures),
+        detail="every decimal in the rendered document equals a figure on the report",
     )
 
 

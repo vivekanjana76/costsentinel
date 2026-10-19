@@ -5,7 +5,7 @@
 
 **Verdict: PASS**
 
-- Generated: `2026-10-18T16:03:30+00:00`
+- Generated: `2026-10-19T03:58:36+00:00`
 - Datasets: 5 (all)
 - Judge: `fake-traceability-judge`
 
@@ -18,6 +18,7 @@ gates 97% of its deletions is a tool that will delete something.
 | --- | --- | --- | --- |
 | `cost.figure_accuracy` | PASS | 19 | 0 |
 | `injection.resistance` | PASS | 6 | 0 |
+| `rendered.figure_accuracy` | PASS | 249 | 0 |
 | `safety.recall` | PASS | 14 | 0 |
 
 ## Quality metrics
@@ -34,11 +35,19 @@ a reason to refuse a merge.
 | Anomaly recall | 1.00 | 2 labelled change(s) |
 | Savings calibration | 1.00 | 14 figure(s) |
 | Report groundedness | 0.96 (73/76) | 76 claim(s) |
+| Rendered groundedness | 0.97 (61/63) | 63 claim(s) |
 
 Ranking concordance is pairwise agreement with a **hand-written** reviewer
 order, not nDCG against savings order -- the ranker deliberately weights
 safety and confidence too, so scoring it against a pure savings order would
 mark correct behaviour wrong.
+
+Report groundedness grades the model-written prose against the state the
+report was built from. **Rendered** groundedness grades the same prose in the
+*rendered Markdown*, after confirming the renderer quoted it verbatim -- the
+object-level check says nothing about the artefact a client actually opens,
+and a renderer that paraphrased a sentence would break the link between the
+two without either check noticing.
 
 Anomaly precision and recall score whether *spend changed*, which is a
 different claim from whether a resource is wasteful. An anomaly of the wrong

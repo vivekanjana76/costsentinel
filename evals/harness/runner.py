@@ -8,6 +8,13 @@ The only thing the harness supplies is a provider, which satisfies the protocol 
 other provider satisfies. ``tests/test_evals.py`` asserts the import boundary in both
 directions.
 
+**The document is scored, not only the report.** Every dataset is rendered to Markdown
+and the rendered text is checked too: ``rendered.figure_accuracy`` as a gate and
+rendered groundedness as a metric. Until Phase 8 every check here stopped at the
+internal ``ClientReport``, which is one layer short of the artefact a client reads
+(ARCHITECTURE.md D109). The generated-at timestamp is pinned so the rendering is part
+of the measurement rather than a source of noise in it.
+
 Memory is switched off for a scored run. Not because memory is unwelcome, but because
 a scorecard that depended on whatever happened to be in a local store would not be
 reproducible, and reproducibility is the whole point of a committed baseline. A
@@ -19,7 +26,7 @@ from __future__ import annotations
 
 import tempfile
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from costsentinel.config import LLMBackend, MemoryBackend, RunMode, Settings
@@ -29,6 +36,7 @@ from costsentinel.domain.state import ScanState
 from costsentinel.graph.build import build_graph
 from costsentinel.llm.fake import FakeLLM
 from costsentinel.observability.logging import get_logger
+from costsentinel.reports.markdown import render_markdown
 from evals.harness.dataset import (
     AdversarialKind,
     LabelledEstate,
@@ -41,9 +49,10 @@ from evals.harness.gates import (
     cost_figure_accuracy,
     injection_resistance,
     merge_gates,
+    rendered_figure_accuracy,
     safety_recall,
 )
-from evals.harness.judge import FakeJudge, Groundedness, Judge, merge
+from evals.harness.judge import FakeJudge, Groundedness, Judge, merge, score_rendered
 from evals.harness.metrics import (
     DetectorScore,
     Mismatch,
@@ -68,6 +77,11 @@ _log = get_logger("evals.runner")
 
 #: Where the committed scorecard lives.
 DEFAULT_REPORT = Path("evals/REPORT.md")
+
+#: Generated-at stamp for every scored rendering. Fixed, because a scorecard whose
+#: rendered-document checks depended on the clock would differ between runs for a
+#: reason that has nothing to do with the pipeline.
+RENDER_STAMP = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def eval_settings(state_dir: Path) -> Settings:
@@ -252,6 +266,9 @@ def score_dataset(
 ) -> tuple[DatasetResult, dict[WasteKind, DetectorScore]]:
     """Run one dataset and score everything about it."""
     report, state = run_pipeline(dataset, settings)
+    # Rendered once, with a pinned timestamp, and scored as part of the run. A
+    # separately-rendered document would be a different document.
+    rendered = render_markdown(report, generated_at=RENDER_STAMP)
 
     detectors, detection_mismatches = detection_scores(dataset, report)
     precision, recall = aggregate_detection(tuple(detectors.values()))
@@ -259,8 +276,13 @@ def score_dataset(
     anomaly_precision, anomaly_recall, anomaly_mismatches = anomaly_scores(dataset, report)
     calibration, calibration_mismatches = savings_calibration(dataset, report)
     groundedness = judge.score(report, state)
+    rendered_grounded = score_rendered(report, rendered)
 
-    gates = [safety_recall(dataset, report), cost_figure_accuracy(dataset, report)]
+    gates = [
+        safety_recall(dataset, report),
+        cost_figure_accuracy(dataset, report),
+        rendered_figure_accuracy(dataset, report, rendered),
+    ]
 
     control = control_for(dataset, available)
     if control is not None:
@@ -299,6 +321,7 @@ def score_dataset(
         anomaly_recall=anomaly_recall,
         calibration=calibration,
         groundedness=groundedness,
+        rendered_groundedness=rendered_grounded,
         gates=tuple(gates),
         mismatches=mismatches,
         adversarial=adversarial_outcomes(dataset, report),
@@ -335,6 +358,7 @@ def evaluate(
     results: list[DatasetResult] = []
     detector_parts: list[dict[WasteKind, DetectorScore]] = []
     groundedness: list[Groundedness] = []
+    rendered: list[Groundedness] = []
 
     for dataset in chosen:
         result, detectors = score_dataset(
@@ -343,6 +367,7 @@ def evaluate(
         results.append(result)
         detector_parts.append(detectors)
         groundedness.append(result.groundedness)
+        rendered.append(result.rendered_groundedness)
 
     breakdown = merge_detector_scores(detector_parts)
     precision, recall = aggregate_detection(breakdown)
@@ -361,6 +386,7 @@ def evaluate(
         anomaly_recall=aggregate_score("anomaly.recall", [r.anomaly_recall for r in results]),
         calibration=aggregate_score("savings.calibration", [r.calibration for r in results]),
         groundedness=merge(groundedness),
+        rendered_groundedness=merge(rendered),
         gates=merge_gates([gate for result in results for gate in result.gates]),
         **({"generated_at": generated_at} if generated_at is not None else {}),
     )

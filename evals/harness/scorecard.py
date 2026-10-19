@@ -36,6 +36,7 @@ BLOCKING_GATES: tuple[str, ...] = (
     "safety.recall",
     "cost.figure_accuracy",
     "injection.resistance",
+    "rendered.figure_accuracy",
 )
 
 
@@ -72,6 +73,7 @@ class DatasetResult(Frozen):
     anomaly_recall: Score = Score(name="anomaly.recall")
     calibration: Score
     groundedness: Groundedness
+    rendered_groundedness: Groundedness = Groundedness(judge="none")
     gates: tuple[GateResult, ...] = ()
     mismatches: tuple[Mismatch, ...] = ()
     adversarial: tuple[AdversarialOutcome, ...] = ()
@@ -97,6 +99,7 @@ class Scorecard(Frozen):
     anomaly_recall: Score = Score(name="anomaly.recall")
     calibration: Score
     groundedness: Groundedness
+    rendered_groundedness: Groundedness = Groundedness(judge="none")
     gates: tuple[GateResult, ...] = ()
 
     # --- verdict ---------------------------------------------------------
@@ -157,6 +160,7 @@ class Scorecard(Frozen):
             f"    anomaly recall        {self.anomaly_recall.display()}",
             f"    savings calibration   {self.calibration.display()}",
             f"    report groundedness   {_groundedness_display(self.groundedness)}",
+            f"    rendered groundedness {_groundedness_display(self.rendered_groundedness)}",
         ]
 
         if self.adversarial:
@@ -242,11 +246,20 @@ class Scorecard(Frozen):
             f"{self.calibration.denominator} figure(s) |",
             f"| Report groundedness | {_groundedness_display(self.groundedness)} | "
             f"{len(self.groundedness.claims)} claim(s) |",
+            f"| Rendered groundedness | {_groundedness_display(self.rendered_groundedness)} | "
+            f"{len(self.rendered_groundedness.claims)} claim(s) |",
             "",
             "Ranking concordance is pairwise agreement with a **hand-written** reviewer",
             "order, not nDCG against savings order -- the ranker deliberately weights",
             "safety and confidence too, so scoring it against a pure savings order would",
             "mark correct behaviour wrong.",
+            "",
+            "Report groundedness grades the model-written prose against the state the",
+            "report was built from. **Rendered** groundedness grades the same prose in the",
+            "*rendered Markdown*, after confirming the renderer quoted it verbatim -- the",
+            "object-level check says nothing about the artefact a client actually opens,",
+            "and a renderer that paraphrased a sentence would break the link between the",
+            "two without either check noticing.",
             "",
             "Anomaly precision and recall score whether *spend changed*, which is a",
             "different claim from whether a resource is wasteful. An anomaly of the wrong",
