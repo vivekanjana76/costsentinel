@@ -396,6 +396,35 @@ def test_the_attribution_module_imports_no_language_model() -> None:
     assert "costsentinel.llm.base" not in imported
 
 
+def test_an_attribution_is_dated_by_its_data_and_not_by_the_clock() -> None:
+    """Asserted directly, because the determinism test below only caught it by luck.
+
+    The first version stamped `Provenance.calculated()`, whose `retrieved_at` defaults
+    to now, so two attributions over identical inputs differed -- and the equality test
+    below passed or failed depending on whether the two calls landed in the same
+    microsecond. It failed once in a full-suite run and passed in isolation, which is
+    the worst way to find out.
+
+    Inheriting the timestamp from the breakdown is also the more correct claim: an
+    attribution is as fresh as the data behind it, not as fresh as the moment somebody
+    computed it. The anomaly detector's provenance already worked this way.
+    """
+    flat = [Decimal("20.00")] * WINDOW
+    culprit = _split([Decimal("20.00")] * (WINDOW - OBSERVED), [Decimal("120.00")] * OBSERVED)
+    totals = [a + b for a, b in zip(flat, culprit, strict=True)]
+    breakdown = _breakdown(_component("steady", flat), _component("sql", culprit))
+
+    result = attribute(_anomaly(), _series(totals), breakdown)
+    assert result.provenance.retrieved_at == breakdown.provenance.retrieved_at
+    assert result.components[0].baseline.provenance.retrieved_at == AS_OF
+
+    # And with no breakdown at all, the series is the next-best source.
+    series = _series([Decimal("100.00")] * WINDOW)
+    assert attribute(_anomaly(), series, None).provenance.retrieved_at == (
+        series.provenance.retrieved_at
+    )
+
+
 def test_the_same_inputs_attribute_identically_twice() -> None:
     """Deterministic arithmetic, so a checkpoint resume and a re-run agree."""
     flat = [Decimal("20.00")] * WINDOW

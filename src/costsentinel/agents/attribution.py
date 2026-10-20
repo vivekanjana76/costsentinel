@@ -80,7 +80,12 @@ from collections.abc import Sequence
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
-from costsentinel.domain.common import MoneyAmount, Provenance
+from costsentinel.domain.common import (
+    MoneyAmount,
+    Provenance,
+    ProvenanceSource,
+    Verification,
+)
 from costsentinel.domain.estate import CostBreakdown, CostSeries
 from costsentinel.domain.signals import (
     AnomalyDirection,
@@ -160,6 +165,31 @@ def _mean_daily(component_total: Decimal, days: int) -> Decimal | None:
     return _money(component_total / Decimal(days))
 
 
+def _attribution_provenance(
+    anomaly: CostAnomaly, series: CostSeries, breakdown: CostBreakdown | None
+) -> Provenance:
+    """Where an attribution came from, dated by the data rather than the clock.
+
+    ``retrieved_at`` is inherited from the breakdown it was computed over, falling back
+    to the series, exactly as the anomaly detector's own provenance is. Two reasons, and
+    the second is the one that caught this: an attribution is as fresh as the data
+    behind it and not as fresh as the moment it was computed -- and a wall-clock stamp
+    makes the result differ between two runs over identical inputs, which breaks the
+    determinism a checkpoint resume and a committed scorecard both rely on.
+    """
+    upstream = breakdown.provenance if breakdown is not None else series.provenance
+    dimension = breakdown.dimension.value if breakdown is not None else "no"
+    return Provenance(
+        source=ProvenanceSource.CALCULATION,
+        retrieved_at=upstream.retrieved_at,
+        reference=(
+            f"{DETECTOR} over {dimension} breakdown for {anomaly.subscription_id} "
+            f"({upstream.source.value})"
+        ),
+        verification=Verification.VERIFIED,
+    )
+
+
 def attribute(
     anomaly: CostAnomaly,
     series: CostSeries,
@@ -183,11 +213,7 @@ def attribute(
         gets an explicit unattributed outcome with a reason, never a missing field that
         a reader could take for "nothing changed".
     """
-    where = Provenance.calculated(
-        f"{DETECTOR} over {breakdown.dimension.value if breakdown else 'no'} breakdown "
-        f"for {anomaly.subscription_id}"
-    )
-    source = provenance or where
+    source = provenance or _attribution_provenance(anomaly, series, breakdown)
 
     def unattributed(reason: UnattributedReason, considered: int = 0) -> CostAttribution:
         return CostAttribution(
