@@ -65,6 +65,11 @@ from costsentinel.domain.signals import (
 from costsentinel.domain.state import ScanState
 from costsentinel.llm.base import LLM, EvidenceBlock, EvidenceField, Prompt
 from costsentinel.llm.contracts import ReportNarrative
+from costsentinel.llm.degradation import (
+    NARRATIVE_UNAVAILABLE,
+    degradation_notes,
+    optional_prose,
+)
 from costsentinel.llm.fake import LABEL_ANOMALY, LABEL_RECOMMENDATION, LABEL_TOTALS
 from costsentinel.llm.routing import TASK_REPORT_PROSE
 from costsentinel.observability.logging import get_logger
@@ -307,8 +312,7 @@ def _anomaly_block(anomaly: CostAnomaly) -> EvidenceBlock:
 #: from every :class:`UnattributedReason`, which are all answers to "we looked": this
 #: one says we did not, which a client is entitled to be able to tell apart.
 NO_ATTRIBUTION_ATTEMPTED = (
-    "What accounted for this change was not examined, so nothing is claimed about its "
-    "cause."
+    "What accounted for this change was not examined, so nothing is claimed about its cause."
 )
 
 
@@ -465,18 +469,29 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
             ),
         )
 
-        narrative = llm.structured(
-            task=TASK_REPORT_PROSE,
-            prompt=Prompt(
-                instruction=_INSTRUCTION,
-                output_contract=_OUTPUT_CONTRACT,
-                evidence=(
-                    totals_block,
-                    *(_recommendation_block(state, rec) for rec in state.recommendations),
-                    *(_anomaly_block(anomaly) for anomaly in state.anomalies),
+        prose_errors: list[str] = []
+        # The only call whose absence a client would notice, because the executive
+        # summary is the one model-written passage with its own place in the document.
+        # It degrades to a stated reason rather than to an empty string: a report with
+        # a blank narrative reads as "nothing worth saying", which is both wrong and
+        # the more flattering of the two readings.
+        narrative = optional_prose(
+            lambda: llm.structured(
+                task=TASK_REPORT_PROSE,
+                prompt=Prompt(
+                    instruction=_INSTRUCTION,
+                    output_contract=_OUTPUT_CONTRACT,
+                    evidence=(
+                        totals_block,
+                        *(_recommendation_block(state, rec) for rec in state.recommendations),
+                        *(_anomaly_block(anomaly) for anomaly in state.anomalies),
+                    ),
                 ),
+                schema=ReportNarrative,
             ),
-            schema=ReportNarrative,
+            task=ACTOR,
+            fallback=ReportNarrative(executive_summary=NARRATIVE_UNAVAILABLE),
+            errors=prose_errors,
         )
 
         findings = tuple(
@@ -552,6 +567,13 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
                 f"advice for a person to carry out by hand, and CostSentinel will not "
                 f"perform them however they are approved."
             )
+        # Every reason prose went missing, from this node and from the upstream
+        # ones, surfaced in the document rather than left in a log. A client reading a
+        # report with no narrative is entitled to know why it has none -- and to know
+        # that the figures are unaffected, which is the part they would otherwise have
+        # no way to establish.
+        degraded = degradation_notes([*state.errors, *prose_errors])
+        notes.extend(degraded)
         if state.errors:
             notes.append(
                 f"{len(state.errors)} processing note(s) were recorded during this "

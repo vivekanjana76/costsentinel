@@ -46,6 +46,7 @@ from costsentinel.llm.contracts import (
     RankingRationale,
     RemediationPlan,
 )
+from costsentinel.llm.degradation import optional_prose
 from costsentinel.llm.fake import LABEL_RANKED, LABEL_WASTE_SIGNAL
 from costsentinel.llm.routing import TASK_PLANNING
 from costsentinel.observability.logging import get_logger
@@ -262,28 +263,36 @@ def make_optimization_planner(
             for signal in state.actionable_signals
         }
 
-        plan = llm.structured(
-            task=TASK_PLANNING,
-            prompt=Prompt(
-                instruction=_PLAN_INSTRUCTION,
-                output_contract=_PLAN_CONTRACT,
-                evidence=tuple(
-                    _signal_evidence(
-                        signal,
-                        options_by_signal[signal.signal_id],
-                        (
-                            cause.narrative
-                            if (cause := state.root_cause_for(signal.signal_id))
-                            else None
-                        ),
-                    )
-                    for signal in state.actionable_signals
-                ),
-            ),
-            schema=RemediationPlan,
-        )
-
         errors: list[str] = list(state.errors)
+        # Optional for the same reason as the root cause: the loop below falls back to
+        # the policy store's own rationale for any signal the model omitted, so an
+        # absent model is the omit-everything case. The model never chose the action --
+        # it narrates a choice the policy store has already made.
+        plan = optional_prose(
+            lambda: llm.structured(
+                task=TASK_PLANNING,
+                prompt=Prompt(
+                    instruction=_PLAN_INSTRUCTION,
+                    output_contract=_PLAN_CONTRACT,
+                    evidence=tuple(
+                        _signal_evidence(
+                            signal,
+                            options_by_signal[signal.signal_id],
+                            (
+                                cause.narrative
+                                if (cause := state.root_cause_for(signal.signal_id))
+                                else None
+                            ),
+                        )
+                        for signal in state.actionable_signals
+                    ),
+                ),
+                schema=RemediationPlan,
+            ),
+            task=ACTOR,
+            fallback=RemediationPlan(items=()),
+            errors=errors,
+        )
         proposed: list[Recommendation] = []
 
         for signal in state.actionable_signals:
@@ -341,17 +350,24 @@ def make_optimization_planner(
         score_by_id = {score.recommendation_id: score for score in scores}
 
         # --- model-authored narration of a finished ranking ---------------
-        rationale = llm.structured(
-            task=TASK_PLANNING,
-            prompt=Prompt(
-                instruction=_RANK_INSTRUCTION,
-                output_contract=_RANK_CONTRACT,
-                evidence=tuple(
-                    _ranked_evidence(rec, score_by_id[rec.recommendation_id], len(ranked))
-                    for rec in ranked
+        # The order is already decided and the composite already computed. This call
+        # narrates it, so losing it loses an explanation of an unchanged ranking.
+        rationale = optional_prose(
+            lambda: llm.structured(
+                task=TASK_PLANNING,
+                prompt=Prompt(
+                    instruction=_RANK_INSTRUCTION,
+                    output_contract=_RANK_CONTRACT,
+                    evidence=tuple(
+                        _ranked_evidence(rec, score_by_id[rec.recommendation_id], len(ranked))
+                        for rec in ranked
+                    ),
                 ),
+                schema=RankingRationale,
             ),
-            schema=RankingRationale,
+            task=f"{ACTOR}.ranking",
+            fallback=RankingRationale(),
+            errors=errors,
         )
         ranking = tuple(
             score_by_id[rec.recommendation_id].model_copy(
