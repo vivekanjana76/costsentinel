@@ -1,7 +1,7 @@
 # pyright: reportUnknownMemberType=false, reportMissingTypeStubs=false
 # LangGraph's StateGraph/CompiledStateGraph generics are only partially typed, so
 # pyright's strict mode reports *its* members as unknown. The rule is disabled for
-# this file only -- the two modules that touch LangGraph directly -- rather than
+# this file only -- one of the three modules that touch LangGraph directly -- rather than
 # relaxed across src, so everything CostSentinel owns stays strictly checked.
 """Graph assembly.
 
