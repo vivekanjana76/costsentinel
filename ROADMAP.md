@@ -1,6 +1,6 @@
 # CostSentinel — Roadmap
 
-**Current phase: 9** — anomaly attribution and real-model hardening.
+**Current phase: 10** — the durable approval gate, and the first A2A surface.
 
 Phases are sequential. Do not start work in a later phase before the current phase
 is complete and its exit criteria are met. If an idea arrives mid-phase, record it
@@ -8,7 +8,7 @@ under "Parked ideas" at the bottom and stay on the current slice.
 
 Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
-> **Phase order has changed four times.** After Phase 1 the specialist graph and the
+> **Phase order has changed five times.** After Phase 1 the specialist graph and the
 > MCP Azure tool server were swapped, because the graph is entirely mock-runnable and
 > the MCP server is the first thing needing real credentials (ARCHITECTURE.md D34).
 > After Phase 2, statistical cost-anomaly detection and real-model hardening were
@@ -102,6 +102,15 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 > tenant is connected is a seam nobody can test. The synthetic series gains a seeded
 > breakdown and attribution is scored against it like every other detector; real data
 > calibrates the threshold, it does not define the arithmetic (ARCHITECTURE.md D112).
+>
+> In Phase 10 the **approval adapters became Phase 10b** and **one A2A card moved
+> forward from Phase 11**. Same split as before: the durable interrupt, the decision
+> record and the CLI gate can be finished and tested offline, while Teams, Slack, a
+> signature-verified webhook and approver authorisation need recorded payloads from real
+> workspaces and two new dependencies. The card moved the other way because the approval
+> queue is the first thing another agent would have a reason to ask about, and an A2A
+> surface built after half a dozen specialists are already exposed is one where
+> "is this read-only?" has to be re-established for each of them (ARCHITECTURE.md D117).
 
 ---
 
@@ -680,33 +689,94 @@ in the code are the ones the data supports.
 
 ---
 
-## Phase 10 — The approval gate and its adapters
+## Phase 10 — The durable approval gate, and the first A2A surface
 
-**Goal:** a gated action halts the graph until a human decides, wherever that human
-already works.
+**Goal:** a gated action halts the graph until a human decides, durably enough to
+survive the process exiting -- and approving it still cannot change anything in a
+cloud, by construction.
 
-The durable interrupt and the local CLI gate moved here from the original Phase 3:
-Phase 2 delivers the routing seam that routes to the gate, and the gate
-implementations belong with the adapters that drive them.
+The approval seam has existed since Phase 1 and the supervisor has routed
+`REQUIRE_APPROVAL` since Phase 2, always to the report author, always with the reason
+that nothing has an execution path anyway. That was honest and it was a placeholder.
+This phase makes the halt real: the sweep pauses at a checkpoint, the process may exit,
+and a decision recorded later from a different process resumes the right sweep.
 
-- [ ] Approval gate as a durable LangGraph interrupt at the Policy Guard boundary
-- [ ] `LocalCLIGate`: prompt an operator, record and persist the `ApprovalDecision`
-- [ ] Resume-after-approval path, tested end to end across a process restart
+**One pull-forward, flagged.** A single read-only A2A Agent Card moves here from Phase
+11. The approval queue is the first thing in this system another agent would have a
+reason to ask about, and an A2A surface built *after* a half-dozen specialists are
+exposed is one where "is this read-only?" has to be re-established for each of them.
+Built once, now, against the one capability whose read-only-ness is the phase's own
+invariant. The rest of Phase 11 -- per-specialist cards, per-caller authorisation,
+Foundry interop, consuming other agents -- stays in Phase 11.
+
+Milestone: *Phase 10 - The durable approval gate and the first A2A surface*.
+
+- [ ] **The approval gate as a durable LangGraph interrupt**, after the report rather
+      than before it: a client always gets the document, and the pause is about the
+      decisions rather than the deliverable. A sweep with nothing gated does not pause
+      (#86)
+- [ ] **A typed decision record** carrying the approver, the decision, the reason, the
+      timestamp and *the figures as they stood when the decision was made* -- an
+      approver agrees to a specific saving on a specific resource, and a later reprice
+      must not retroactively change what they agreed to. Written to episodic memory
+      with an `AuditEvent` (#87)
+- [ ] **Approving never mutates, proved four ways:** structurally (no execution module,
+      nothing imports a mutating client), representationally (the approved state carries
+      no executable handle), exhaustively (no decision on any action class reaches a
+      mutation), and end to end (an approved deletion yields a recorded hand-off and
+      zero provider calls) (#88)
+- [ ] **`costsentinel approvals list` and `approvals decide`**, resuming the correct
+      sweep from the checkpoint in a separate process. The paused state key is the
+      `run_id`, documented because a second process has to find it (#89)
+- [ ] **Durability demonstrated:** a test pauses a run, discards the in-memory graph,
+      reloads from the checkpoint, decides, and resumes to a completed report (#90)
+- [ ] **One read-only A2A v1 Agent Card** with a signed card and an in-process task
+      lifecycle (submit, status, artifact), returning the report or the pending queue as
+      the artifact. Opt-in server; CI exercises a fake client with no network (#91)
+- [ ] **No write capability on the advertised surface**, asserted against a vocabulary
+      rather than an exact skill list so a skill added later has to pass it (#92)
+- [ ] ARCHITECTURE, README, SECURITY.md updated; CHANGELOG entry for v0.10.0 (#93)
+
+**Exit criteria:** a destructive recommendation halts the graph and persists; the
+process exits; `approvals list` in a fresh process shows it; `approvals decide
+--approve` resumes that sweep to a completed report with the decision recorded; and the
+four no-mutation proofs pass.
+
+**Deliberately *not* in this phase, and scheduled as Phase 10b:** the Teams, Slack and
+webhook adapters, approver authorisation, decision deduplication on replayed callbacks,
+and the timeout-and-escalation policy. Those are about *where a human already works* and
+they need recorded payloads, a signature-verification library and an HTTP client. The
+interrupt they all drive is the part that has to exist first, and it is the part that can
+be finished offline.
+
+---
+
+## Phase 10b — Approval adapters
+
+**Goal:** the decision reaches the human where they already are, instead of in a
+terminal.
+
+Split from Phase 10 for the same reason 9b was split from 9: these need recorded
+payloads from real workspaces and two new dependencies, and bundling them with the
+interrupt would mean a phase that could not be closed without a Slack workspace. The
+interrupt, the decision record and the CLI gate are the contract they implement.
 
 - [ ] Teams adapter: adaptive card with the proposal, savings and risk class
 - [ ] Slack adapter: Block Kit message with approve and reject actions
 - [ ] Webhook receiver for decision callbacks, signature-verified
-- [ ] Approver identity and authorisation checks
-- [ ] Decision deduplication and idempotency on replayed callbacks
-- [ ] Timeout and escalation policy (no decision never means approved)
+- [ ] Approver identity and authorisation checks: who may approve what, for which client
+- [ ] Decision deduplication and idempotency on replayed callbacks. A replayed approval
+      must not become a second approval
+- [ ] Timeout and escalation policy. **No decision never means approved** -- the
+      `Decision` enum has no such member and the gate has no path to one, so this is
+      about who gets asked next rather than about what happens by default
 - [ ] Adapters tested against recorded payloads, with no live workspace in CI
 
-**Exit criteria:** a destructive recommendation halts the graph and persists; the
-process exits; the run then resumes correctly on a decision recorded from the CLI,
-from Teams or from Slack.
+**Exit criteria:** a destructive recommendation halts; a decision recorded from Teams or
+from Slack resumes the correct sweep; a replayed callback changes nothing.
 
-**New dependencies to flag:** `slack-sdk`, an HTTP client, and a signature
-verification library.
+**New dependencies to flag:** `slack-sdk`, an HTTP client, and a signature-verification
+library. All behind an optional extra CI does not install.
 
 ---
 
@@ -715,8 +785,13 @@ verification library.
 **Goal:** specialists are discoverable and invocable by external agents, without
 routing around governance.
 
-- [ ] A2A v1 Agent Cards for each specialist
-- [ ] A2A server exposing the specialists
+- [ ] A2A v1 Agent Cards for **each specialist**. Phase 10 published one card for
+      the read-only report-and-queue capability; this is the rest of them
+- [ ] A2A server exposing the specialists, beyond the opt-in single-capability
+      server Phase 10 built
+- [ ] **Consuming other agents**: CostSentinel as an A2A *client*, discovering and
+      invoking an external agent. Deliberately not started in Phase 10, which
+      published a card and nothing that reads anybody else's
 - [ ] Cards declare capability, input and output schema, and the action class of
       anything the agent can propose
 - [ ] Authentication and per-caller authorisation
