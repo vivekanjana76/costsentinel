@@ -15,6 +15,7 @@ from fastapi import Depends, FastAPI, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from costsentinel import __version__
+from costsentinel.a2a.server import mount
 from costsentinel.config import Settings, get_settings
 from costsentinel.domain.report import ScanResult
 from costsentinel.graph.runner import ScanFailedError, run_scan
@@ -83,6 +84,9 @@ def create_app() -> FastAPI:
             "nothing this API returns can have changed a resource."
         ),
     )
+
+    # Off unless an operator turned it on. The card is published either way.
+    mount(app, get_settings())
 
     @app.get("/health", response_model=HealthResponse, tags=["meta"])
     def health(settings: SettingsDep) -> HealthResponse:
