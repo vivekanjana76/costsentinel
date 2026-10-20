@@ -88,6 +88,8 @@ reaches it.
 | Spend anomalies | Robust z-score with a weekday profile over the daily cost series (Phase 7). Spikes and level shifts distinguished; a gap in the series is unknown, not zero; an anomaly never reaches an action |
 | Ranking | An unquantified saving ranks below every quantified one, as a tier rather than a weight (Phase 7) |
 | Reporting | Markdown renderer with five sections (Phase 8); every number in the document must trace to a figure the pipeline produced, as a blocking gate. PDF behind an optional `reports` extra |
+| Spend attribution | Deterministic arithmetic over a per-meter cost breakdown (Phase 9): the component whose share of the change exceeds its share of the spend. A proportional rise is reported as having no single cause |
+| Model resilience | Optional fallback to a secondary backend and an optional per-sweep token ceiling (Phase 9). Both opt-in; either one degrades the prose and no figure, finding or classification |
 | Entry points | `costsentinel scan`, `costsentinel report` and `POST /scan` |
 
 ### What Phase 1 contained
@@ -164,6 +166,32 @@ copy a figure and may never compose one, so a rounded total or a sum computed in
 layout fails the build. Model-written sentences are quoted verbatim and graded for
 groundedness in the rendered text, because grading the internal object says nothing
 about the document unless the document quotes it.
+
+### When the model is unavailable
+
+A CostSentinel report does not depend on a language model being reachable. Every
+figure, action class, rank and approval-queue entry is arithmetic over provider
+data; the model narrates those facts and cannot change one of them. So a backend
+outage, a fallback to the secondary, or a token ceiling being reached costs the
+**prose** and nothing else.
+
+```bash
+# Retry on a second backend when the primary fails (must differ from LLM_BACKEND)
+LLM_FALLBACK_BACKEND=gemini
+
+# Cap model tokens per sweep; unset means uncapped
+LLM_TOKEN_BUDGET=200000
+```
+
+A degraded report says so: the executive summary reads "Narrative unavailable
+(token budget reached)" and a processing note states that the figures are
+unaffected. It is never left blank, because a blank narrative reads as "nothing
+worth saying", which is both wrong and the more flattering reading.
+
+SECURITY.md section 5 has the full table of what is and is not produced. The
+property is tested by building the same estate's report three ways -- prose from
+the primary, prose from the secondary after a fallback, and none at all -- and
+comparing every deterministic field.
 
 ### The learning loop
 
