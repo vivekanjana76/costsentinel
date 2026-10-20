@@ -8,9 +8,91 @@ CostSentinel is pre-1.0, so the public API may change between minor versions.
 
 ## [Unreleased]
 
-Nothing yet. Next up is Phase 8: anomaly attribution and real-model hardening -- the
-work that needs a real estate or a real model to mean anything, which is why it was
-split out of the anomaly phase.
+Nothing yet. Next up is Phase 9: anomaly attribution and real-model hardening -- the
+work that needs a real estate or a real model to mean anything.
+
+## [0.8.0] - 2026-10-19
+
+Phase 8: client reporting. For seven phases every guarantee this project makes about
+money stopped at the internal `ClientReport`. The document a client reads -- the only
+artefact that leaves the system -- did not exist, and once it did it would have been
+the one layer nothing checked. This phase builds it and extends the guarantee to it.
+
+Scorecard: a fourth blocking gate, `rendered.figure_accuracy`, **0 failures over 249
+checks**; rendered groundedness **0.97 (61/63)** as a new quality metric; every earlier
+gate and metric unmoved.
+
+### Added
+
+- **A Markdown renderer** (`reports/markdown.py`) producing a client-ready document
+  with five distinct sections, because there are five claims a client must not
+  conflate: ranked actionable recommendations, **worth investigating -- saving
+  unknown**, **flagged but exempt** (cost, never a saving), **spend changes --
+  investigate** (a difference, never an action), and **spend we could not assess** (a
+  reason, never a zero). No template engine: a template is a second place numbers get
+  formatted, and formatting is where a figure stops equalling its source (D108).
+
+- **`rendered.figure_accuracy`, a fourth blocking gate.** A decimal in the rendered
+  document must be a figure the pipeline produced, or a decimal already present in a
+  string the report carries -- **rendering may copy and may never compose** (D109). A
+  rounded total, a reformatted amount or a sum computed in the layer appears in
+  neither. The three headline figures are additionally required verbatim as
+  `MoneyAmount.display()` renders them, because a swapped total would pass set
+  membership. A test corrupts one digit, watches the gate name the figure it rejected,
+  and restores it.
+
+- **Groundedness follows the prose into the document.** `model_authored()` declares
+  every model-written span the renderer emitted; the harness confirms each is present
+  word for word before grading the figures inside it, and a span the document does not
+  contain verbatim scores as *unsupported* rather than being skipped. A renderer that
+  paraphrased a model sentence would be the obvious place to launder an ungrounded
+  claim past a check that only ever read the report object.
+
+- **A PDF renderer** (`reports/pdf.py`) behind an optional `reports` extra that CI does
+  not install. It typesets the Markdown rather than reading the report, so two
+  renderers cannot publish two different numbers, and its correctness reduces to one
+  assertable property: the set of digit runs on the page equals the set in the Markdown
+  (D111). Tested by assertion, not pixel comparison.
+
+- **`costsentinel report`**, writing Markdown (and a PDF with `--pdf`) into a
+  gitignored directory, and `--sample`, which regenerates the committed sample from
+  the synthetic estate using constants only -- it reads nothing from the environment,
+  so a developer with `MODE=real` in their `.env` cannot render "the sample" from a
+  client's estate.
+
+- **`docs/sample-report.md`**, a committed output from the mock estate so a repository
+  visitor can read a real document without running anything. Clearly banner-marked as
+  synthetic, detected from provenance and the nil-prefixed subscription ids -- the same
+  marker the commit guard uses -- so the banner cannot be omitted by forgetting an
+  argument.
+
+- **A golden file** (`tests/golden/full-report.md`) holding one report with all five
+  sections, byte for byte, regenerated deliberately behind `UPDATE_GOLDEN=1` so a
+  change to the document a client reads arrives as a diff somebody reviewed.
+
+### Changed
+
+- An **unquantified finding now appears by name** under its own heading, stating why no
+  figure could be derived, instead of sitting at the bottom of the ranked list where
+  D104's rule puts it. The rule decides priority and is unchanged; the document decides
+  visibility (D110). The bottom of a long list is exactly where an unknown quietly
+  becomes a zero.
+
+- The report **states its own basis from the provenance flags** -- the sources, the
+  retrieval date, and how many savings are observed costs versus modelled estimates --
+  rather than from a sentence written once that would keep claiming retail prices after
+  somebody ran the mock provider. Only priced findings are counted in that split,
+  because an unquantified saving is neither observed nor estimated.
+
+- Reporting was **brought forward ahead of anomaly attribution** (D107). Attribution
+  makes an existing finding more useful; rendering closes the gap between "the figures
+  are right" and "the figures a client sees are right".
+
+### Fixed
+
+- The renderer's first version declared model-written spans for the unquantified
+  section that it never actually rendered, and the new gate caught it on its first run
+  -- two sections that should read alike were gratuitously different.
 
 ## [0.7.0] - 2026-10-18
 
@@ -579,7 +661,10 @@ Phase 1: the scaffold and a thin vertical slice.
 - Landed as an honest commit series dated when it was actually committed; it predates
   the issue-driven workflow and has no backing issues.
 
-[Unreleased]: https://github.com/vivekanjana76/costsentinel/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/vivekanjana76/costsentinel/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.2.0...v0.3.0

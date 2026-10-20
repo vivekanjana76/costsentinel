@@ -32,6 +32,7 @@ from costsentinel.domain.state import ScanState
 from costsentinel.llm.base import LLM, EvidenceBlock, EvidenceField, Prompt
 from costsentinel.llm.contracts import Untrusted
 from costsentinel.llm.routing import TASK_JUDGE
+from costsentinel.reports.markdown import model_authored, rendered_figures
 
 #: Decimal numbers, which is how figures and scores are both rendered. Bare integers
 #: are deliberately not matched: "30 days" and "8 findings" are not claims worth
@@ -321,6 +322,56 @@ class ModelJudge:
                 for where, text in prose
             ),
         )
+
+
+def score_rendered(report: ClientReport, rendered: str) -> Groundedness:
+    """Grade the model-written prose **in the rendered document**.
+
+    Distinct from :meth:`FakeJudge.score`, which reads the report object, and the
+    distinction is the point of Phase 8: the object-level check says nothing about the
+    artefact a client opens. A figure can be grounded in state and still be wrong in
+    the document, and a renderer that paraphrased a sentence would break the link
+    between the two without either check noticing.
+
+    So this grades the prose the renderer declared it emitted, after confirming each
+    span is present in the document. A span the document does not contain verbatim is
+    an unsupported claim here, not a missing one -- the alternative would be to score
+    prose nobody can read.
+    """
+    permitted = rendered_figures(report)
+    claims: list[Claim] = []
+
+    for span in model_authored(report):
+        if span.text not in rendered:
+            claims.append(
+                Claim(
+                    text=f"{span.where}: absent from the rendered document",
+                    supported=False,
+                    reason=(
+                        "the renderer altered or dropped this model-written span, so "
+                        "grading the report object says nothing about the document"
+                    ),
+                )
+            )
+            continue
+        for figure in _DECIMAL.findall(span.text):
+            supported = figure in permitted or figure.replace(",", "") in permitted
+            claims.append(
+                Claim(
+                    text=f"{span.where}: {figure}",
+                    supported=supported,
+                    reason=(
+                        ""
+                        if supported
+                        else (
+                            "this figure appears in a model-written sentence in the "
+                            "final document and does not equal any figure on the "
+                            "report, so nothing in the pipeline computed it"
+                        )
+                    ),
+                )
+            )
+    return Groundedness(judge="fake-rendered-traceability-judge", claims=tuple(claims))
 
 
 def merge(groundedness: Sequence[Groundedness]) -> Groundedness:

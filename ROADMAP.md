@@ -1,6 +1,6 @@
 # CostSentinel — Roadmap
 
-**Current phase: 8** — anomaly attribution and real-model hardening.
+**Current phase: 8** — client reporting.
 
 Phases are sequential. Do not start work in a later phase before the current phase
 is complete and its exit criteria are met. If an idea arrives mid-phase, record it
@@ -66,6 +66,25 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 > finding with **no saving at all**. Shipping anomalies while "how does an unquantified
 > finding rank" was still an open question would have meant every anomaly inheriting an
 > unsettled rule, and the open decision becoming load-bearing before it was decided.
+>
+> After Phase 7, **client reporting swapped ahead of anomaly attribution**: reporting
+> is now Phase 8 and attribution plus real-model hardening Phase 9 (ARCHITECTURE.md
+> D107). Nothing else renumbered.
+>
+> Two reasons, and the second is the stronger one. Phase 9 is the work that needs a
+> real estate to mean anything -- and before anybody points this at a client's
+> subscriptions there has to be something a client can be *shown*. Today the
+> deliverable exists as a Python object and a terminal digest, and "a client would
+> actually accept this" is the one claim the project has never tested.
+>
+> And the guarantee has a hole in exactly the place it matters. Every figure in the
+> internal `ClientReport` is checked -- the cost-figure gate asserts each one against
+> committed ground truth, and the groundedness judge traces each model-written sentence
+> back to state. The *rendered document* is checked by nothing, and it is the only
+> artefact a client ever reads. Phases 6 and 7 each added a section the renderer has
+> never had to represent (flagged-but-exempt, spend anomalies) plus a ranking tier that
+> changes what order a reader sees; the longer that waits the more unguarded surface
+> accumulates behind a guarantee that stops one layer short of the output.
 
 ---
 
@@ -189,7 +208,7 @@ exactly the step this phase was built to make safe rather than to take on somebo
 behalf.
 
 **Deliberately *not* in this phase:** any write, delete or mutate path (Phase 13);
-statistical cost-anomaly detection (Phase 7) and real-model hardening (Phase 8), both
+statistical cost-anomaly detection (Phase 7) and real-model hardening (Phase 9), both
 split out of this one.
 
 **New dependencies, all optional extras so CI stays lean and offline:** `fastmcp`,
@@ -457,7 +476,7 @@ rather than as a zero or an anomaly.
 
 **Deliberately *not* in this phase:** attributing a spike to the resource that caused
 it, egress and data-transfer anomalies, real-model retry and fallback, a token-spend
-guardrail, and threshold recalibration against real estates. All of those are Phase 8,
+guardrail, and threshold recalibration against real estates. All of those are Phase 9,
 because none of them can be scored without a real subscription or a real model, and a
 phase whose exit criteria CI cannot check is a phase nobody can close honestly.
 
@@ -473,12 +492,12 @@ Three things to carry forward rather than claim as finished:
 
 - **The detector does not attribute.** It says a subscription's spend changed, not
   which resource changed it, because a per-resource cost series is not in the provider
-  seam and the mock provider cannot usefully fake one. Phase 8, and the reason
+  seam and the mock provider cannot usefully fake one. Phase 9, and the reason
   `assess_series` takes a bare series and a scope label.
 - **The constants are defensible, not calibrated.** 3.5 and 5.0 are the conventional
   cuts, the 2% scale floor and the 15% materiality floor are product judgements, and
   all four were chosen against four synthetic shapes rather than against real
-  estates. Phase 8's calibration item is where they meet real data; the scorecard is
+  estates. Phase 9's calibration item is where they meet real data; the scorecard is
   what will show the move.
 - **The weekday profile handles a weekly rhythm and nothing else.** A month-end batch,
   a quarterly close or a ramp would all read as a level shift. That is the right
@@ -487,7 +506,63 @@ Three things to carry forward rather than claim as finished:
 
 ---
 
-## Phase 8 — Anomaly attribution and real-model hardening
+## Phase 8 — Client reporting
+
+**Goal:** output a client would actually accept as a deliverable, and a guarantee that
+reaches it.
+
+Swapped ahead of attribution (D107) for two reasons. Phase 9 needs a real estate to be
+meaningful, and before this is pointed at a client's subscriptions there should be
+something a client can be shown. More importantly, every figure in the internal
+`ClientReport` is already checked -- the cost-figure gate against committed ground
+truth, the groundedness judge over each model-written sentence -- and the *rendered
+document* is checked by nothing, while being the only artefact a client ever reads.
+
+Milestone: *Phase 8 - Client reporting*.
+
+- [x] A **Markdown renderer** producing a client-ready document with five distinct
+      sections: a deterministic executive summary, the ranked actionable
+      recommendations with their plain-number basis, **flagged but exempt** (Phase 6),
+      **spend anomalies -- investigate** (Phase 7), and **worth investigating, saving
+      unknown** (#68)
+- [x] A **PDF renderer** behind an optional `reports` extra that CI does not install.
+      The Markdown path works with zero extras, and the PDF is produced from the same
+      source so the two cannot diverge (#69)
+- [x] **Groundedness and figure accuracy over the rendered output**, not only the
+      internal object. A sentence asserting a number in the final document must match
+      a source figure, and `cost.figure_accuracy` becomes a hard gate over the
+      rendered text as well (#70)
+- [x] **Provenance and honesty in the document:** an unknown renders as "unknown" and
+      never as zero or blank, an exempt item shows a cost and never a saving, the
+      report states where its prices came from, and a disclaimer distinguishes
+      estimated from verified figures (#71)
+- [x] **Byte-identical rendering** for the same input, with a committed golden file
+      and the generated-at timestamp the only injected variable (#72)
+- [x] `costsentinel report`, and one **committed sample** rendered from the mock
+      estate so a repository visitor can read a real output without running anything
+      (#73)
+- [x] ARCHITECTURE and ROADMAP updated; CHANGELOG entry for v0.8.0 (#74)
+
+**Exit criteria:** `costsentinel report` produces a Markdown document from a scan; a
+test corrupts one number in the rendered text and the figure-accuracy gate fails, then
+passes when it is restored; the golden file matches byte for byte; and a committed
+sample report is readable in the repository.
+
+**Deliberately *not* in this phase:** per-client branding, the
+realised-versus-projected savings section (which needs episodic outcomes to be worth
+rendering), residual spend per finding and the portfolio roll-up. All four are
+recorded under "Later features, scheduled" with their reasoning. This phase is the
+*renderer and its guarantee*; adding four content features on top of a renderer whose
+output nothing checks would be building on the same gap again.
+
+**New dependencies to flag:** a PDF toolchain, behind an optional extra. The Markdown
+renderer uses the standard library only -- no template engine, because a report with
+five fixed sections is a function and not a template, and a template is one more place
+a figure could be reformatted on the way out.
+
+---
+
+## Phase 9 — Anomaly attribution and real-model hardening
 
 **Goal:** the work that only becomes meaningful once a real estate and a real model
 are in hand. Split out of the anomaly phase (D103) precisely because none of it can be
@@ -497,6 +572,15 @@ guardrail needs real token spend, and recalibrating a threshold needs real histo
 - [ ] Anomaly root-cause correlation: tie a spend change to the resource or service
       that caused it. Needs a real cost series broken down by resource, which the
       synthetic series deliberately does not model
+- [ ] **Give the mock estate an exempt and an unpriced finding.** Phase 8 found this
+      by rendering it: the committed sample at `docs/sample-report.md` shows four of
+      the renderer's six sections, because no mock resource is both flagged by a
+      detector *and* tagged exempt, and every mock finding happens to be priceable. So
+      exemption (Phase 6) and the unquantified-findings section (Phase 8) are demonstrated
+      only by the golden file and the eval datasets, and a repository visitor reading
+      the sample cannot see either. Needs an idle VM tagged as a DR standby and one
+      finding with no cheaper tier; it touches the mock estate, which several tests pin
+      by count and total, so it is its own change rather than a late edit to a phase
 - [ ] Egress and data-transfer anomaly detection
 - [ ] Real-model hardening: retry and fallback from the primary backend to the
       secondary on failure or schema violation, with the fallback recorded in the trace
@@ -504,47 +588,22 @@ guardrail needs real token spend, and recalibrating a threshold needs real histo
       model bill
 - [ ] Prompt-injection red-teaming against the real backends, using hostile resource
       names and tags drawn from the evidence path
+- [ ] **A monthly and quarterly-aware anomaly baseline.** The Phase 7 weekday profile
+      handles a weekly rhythm and nothing else, so a month-end batch, a quarter-end
+      close or an annual renewal all read as a level shift -- a false positive that
+      recurs on a schedule, which is the same failure mode the weekday profile was
+      added to fix, one period up. It needs a baseline that knows about the month and
+      the quarter before this detector is pointed at a real estate, and it needs real
+      history to calibrate against, which is why it is here rather than in Phase 7
 - [ ] Calibrate detector thresholds and the ranking weights against the Phase 5
-      scorecard and observed real estates, replacing the Phase 2 defaults
+      scorecard and observed real estates, replacing the Phase 2 defaults. The anomaly
+      constants in particular are *defensible* rather than calibrated: 3.5 and 5.0 are
+      the conventional modified-z cuts, and the 2% scale floor and 15% materiality
+      floor are product judgements chosen against four synthetic shapes
 
 **Exit criteria:** a spend change in a real subscription is attributed to a resource
 and reported; a primary-backend failure falls back to the secondary without failing
 the sweep; a hostile resource name cannot alter a recommendation on a real backend.
-
----
-
-## Phase 9 — Reporting
-
-**Goal:** output a client would actually accept as a deliverable.
-
-- [ ] Markdown report template: executive summary, findings, ranked recommendations,
-      projected savings, approval queue
-- [ ] PDF rendering
-- [ ] Per-client branding and formatting configuration
-- [ ] Realised-vs-projected savings section, driven by episodic outcomes
-- [ ] Groundedness assertion in tests: every number in the rendered report traces to
-      a state field
-- [ ] CLI `costsentinel report` to render a stored run
-- [ ] **Residual spend per finding:** for a conservative action, report what is
-      *still* being spent after it. Scaling an idle SQL database down from 4 vCore to
-      2 leaves the smaller tier running, and a report that shows only the saving
-      invites a client to think the problem is solved. Each finding should state the
-      remaining monthly cost alongside the saving, and the report should total it, so
-      "we recovered X and are still paying Y for something nobody uses" is visible.
-      Deterministic arithmetic, like every other figure.
-- [ ] **Portfolio roll-up:** a provider-level executive view totalling savings,
-      findings and approval backlog *across all clients*, as a deliberate
-      exception to the per-client reporting rule. It is for the managed-service
-      provider's own leadership, never shared with a client, so it must not reuse
-      `ClientReport`; it needs its own `PortfolioRollup` type, its own access
-      control, and a test asserting it is unreachable from any client-scoped path.
-      Totals are summed deterministically from per-client reports, never modelled.
-
-**Exit criteria:** a Markdown and a PDF report are produced from a stored run, and a
-test asserts no ungrounded number appears in either.
-
-**New dependencies to flag:** a PDF toolchain (`weasyprint` or `reportlab`) and a
-template engine (`jinja2`).
 
 ---
 
@@ -654,8 +713,34 @@ a complete audit chain from signal to execution, and the outcome recorded.
   to them. The ranking must stay deterministic and the weights must stay data, never
   model output.
 
+- **Per-client report branding and formatting** (after the reporting phase, whenever
+  a second client's deliverable is actually required). A logo, a colour and a footer are
+  configuration, not code, and the right time to build it is when a real client asks
+  rather than when it is imagined. Deliberately left out of the reporting phase so
+  that phase could be about the *renderer and its guarantee*: adding presentation
+  options on top of output nothing checks would be building on the same gap the
+  reordering existed to close.
+
+- **A realised-versus-projected savings section** (after a few real sweeps, with
+  episodic outcomes). CostSentinel records what each client accepted or rejected
+  (Phase 4) but has no record of what an accepted recommendation actually saved,
+  because nothing has executed yet and no real sweep has run twice. A section
+  comparing projection against realisation is the single most useful thing a report
+  could gain and is also the easiest to fabricate, so it waits for data rather than
+  being modelled. It needs execution (Phase 13) or at least a second sweep over an
+  estate where a client acted.
+
+- **A portfolio roll-up for the provider's own leadership**, as a deliberate exception
+  to the per-client reporting rule. Savings, findings and approval backlog totalled
+  *across* clients. It must not reuse `ClientReport`: it needs its own
+  `PortfolioRollup` type, its own access control, and a test asserting it is
+  unreachable from any client-scoped path, because the whole point of D12 is that no
+  client-facing artefact can span clients. Totals summed deterministically from
+  per-client reports, never modelled. Scheduled after reporting rather than inside it,
+  so the per-client guarantee is settled before an exception to it exists.
+
 - **Report residual spend alongside the saving, for every conservative action**
-  (Phase 9, with reporting). A finding currently says "resize this VM, saves
+  (Phase 8, with reporting). A finding currently says "resize this VM, saves
   $140/month". For a conservative action it does not say what remains: downsizing
   `Standard_D8s_v5` to `Standard_D4s_v5` saves half and leaves the other half
   running. A client reading a report with a $12,000 annual savings headline cannot

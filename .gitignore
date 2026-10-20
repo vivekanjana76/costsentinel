@@ -19,6 +19,11 @@ dist/
 .venv/
 venv/
 
+# Rendered reports. The one copy that belongs in the repository is the committed
+# sample under docs/, which is synthetic and labelled as such; everything else is an
+# artefact of a run and some of it describes a real estate.
+tmp/
+
 # Tooling caches
 .pytest_cache/
 .ruff_cache/

@@ -40,9 +40,10 @@ from evals.harness.gates import (
     Fingerprint,
     cost_figure_accuracy,
     injection_resistance,
+    rendered_figure_accuracy,
     safety_recall,
 )
-from evals.harness.judge import _DECIMAL, FakeJudge
+from evals.harness.judge import _DECIMAL, FakeJudge, score_rendered
 from evals.harness.metrics import (
     Mismatch,
     Score,
@@ -52,6 +53,7 @@ from evals.harness.metrics import (
 )
 from evals.harness.provider import DatasetProvider
 from evals.harness.runner import (
+    RENDER_STAMP,
     adversarial_outcomes,
     eval_settings,
     evaluate,
@@ -69,6 +71,7 @@ from costsentinel.domain.recommendations import ActionClass, ActionType
 from costsentinel.domain.report import ClientReport
 from costsentinel.domain.signals import AnomalyKind, WasteKind
 from costsentinel.providers.mock import SeriesShape, synthetic_series
+from costsentinel.reports.markdown import render_markdown
 
 SRC = Path("src/costsentinel")
 
@@ -1330,3 +1333,158 @@ def test_the_cost_series_is_flat_so_observed_spend_is_exact() -> None:
     assert series.window_days == 30
     assert len({point.amount for point in series.points}) == 1
     assert series.observed_spend().amount == dataset.estate.daily_spend * 30
+
+
+# ---------------------------------------------------------------------------
+# The rendered document is checked too
+# ---------------------------------------------------------------------------
+
+
+def _rendered(dataset_id: str = "baseline-mixed") -> tuple[LabelledEstate, ClientReport, str]:
+    dataset = next(d for d in load_all() if d.dataset_id == dataset_id)
+    report, _ = run_pipeline(dataset, eval_settings(_STATE))
+    return dataset, report, render_markdown(report, generated_at=RENDER_STAMP)
+
+
+def test_the_rendered_gate_is_blocking() -> None:
+    """A document that misstates a client's money by a cent is not 99% correct.
+
+    So it joins safety recall, figure accuracy and injection resistance rather than
+    being reported as a score somebody might ship past.
+    """
+    assert "rendered.figure_accuracy" in BLOCKING_GATES
+    card = evaluate()
+    gate = next(one for one in card.blocking if one.name == "rendered.figure_accuracy")
+    assert gate.passed, [failure.describe() for failure in gate.failures]
+    assert gate.checked > 0, "the gate checked nothing, so it proved nothing"
+
+
+def test_the_rendered_gate_fails_when_a_figure_is_corrupted() -> None:
+    """Red, then green -- the only way to know a gate is wired to anything.
+
+    One digit changed in the rendered text, which is exactly what a careless reformat,
+    a rounding filter or a hand-edited template would do. The gate must fail, name the
+    offending figure, and pass again once the text is restored.
+    """
+    dataset, report, rendered = _rendered()
+
+    before = rendered_figure_accuracy(dataset, report, rendered)
+    assert before.passed, [failure.describe() for failure in before.failures]
+
+    headline = report.totals.projected_monthly_savings.display().split(" ")[0]
+    assert headline in rendered, "nothing to corrupt, so this test asserts nothing"
+    corrupted = rendered.replace(headline, headline[:-1] + ("8" if headline[-1] != "8" else "7"), 1)
+    assert corrupted != rendered
+
+    after = rendered_figure_accuracy(dataset, report, corrupted)
+    assert not after.passed
+    assert any(
+        failure.kind == "rendered_figure" or "figure" in failure.kind for failure in after.failures
+    )
+    described = " ".join(failure.describe() for failure in after.failures)
+    assert headline[:-1] in described, "the gate must name the figure it rejected"
+
+    # Restored, and green again.
+    assert rendered_figure_accuracy(dataset, report, rendered).passed
+
+
+def test_the_rendered_gate_fails_when_a_headline_is_dropped() -> None:
+    """The other realistic failure: a total that silently stops being printed.
+
+    Every remaining decimal would still trace to a figure on the report, so the
+    copy-not-compose check alone would pass a document that had lost its headline.
+    """
+    dataset, report, rendered = _rendered()
+    display = report.totals.projected_annual_savings.display()
+    assert display in rendered
+    without = rendered.replace(display, "see appendix")
+
+    result = rendered_figure_accuracy(dataset, report, without)
+    assert not result.passed
+    assert any(failure.resource == "<headline>" for failure in result.failures)
+
+
+def test_the_rendered_gate_fails_when_the_renderer_paraphrases_the_model() -> None:
+    """How a rendering layer could launder an ungrounded claim.
+
+    Grading the report object proves nothing about the document unless the document
+    quotes the object. So a span the renderer altered is a gate failure, not a nuance.
+    """
+    dataset, report, rendered = _rendered()
+    paraphrased = rendered.replace(
+        report.executive_summary, "CostSentinel found substantial savings."
+    )
+    assert paraphrased != rendered
+
+    result = rendered_figure_accuracy(dataset, report, paraphrased)
+    assert not result.passed
+    assert any("executive_summary" in failure.resource for failure in result.failures)
+
+
+def test_rendered_groundedness_is_measured_over_the_document() -> None:
+    """A metric, not a gate: a judge is not a proof, and Phase 5 said so.
+
+    What it adds is the layer the object-level judge cannot see -- the prose as a client
+    reads it, after the renderer has had its chance to change it.
+    """
+    card = evaluate()
+    assert card.rendered_groundedness.score is not None
+    assert card.rendered_groundedness.claims
+    assert card.rendered_groundedness.judge == "fake-rendered-traceability-judge"
+    assert "Rendered groundedness" in card.markdown()
+
+
+def test_a_paraphrased_span_is_ungrounded_rather_than_absent() -> None:
+    """Scoring prose nobody can read would be the wrong answer here.
+
+    If the document does not contain the sentence verbatim, the honest verdict is that
+    the claim is unsupported, not that there was nothing to grade.
+    """
+    _, report, rendered = _rendered()
+    assert score_rendered(report, rendered).score is not None
+
+    altered = rendered.replace(report.executive_summary, "Savings of 999,999.00 USD await.")
+    scored = score_rendered(report, altered)
+    assert any(not claim.supported for claim in scored.claims)
+    assert any("absent from the rendered document" in claim.text for claim in scored.claims)
+
+
+def test_an_invented_figure_in_model_prose_is_ungrounded() -> None:
+    """The claim the metric exists to make, demonstrated rather than asserted."""
+    _, report, rendered = _rendered()
+    scored = score_rendered(report, rendered)
+    baseline = scored.score
+
+    # A model sentence carrying a figure the pipeline never produced.
+    invented = report.model_copy(
+        update={"executive_summary": "Savings of 123,456.78 USD per month are available."}
+    )
+    altered = render_markdown(invented, generated_at=RENDER_STAMP)
+    scored = score_rendered(invented, altered)
+    assert scored.score is not None
+    assert baseline is not None
+    assert scored.score < baseline
+    assert any("123,456.78" in claim.text for claim in scored.claims if not claim.supported)
+
+
+def test_every_dataset_renders_and_is_scored() -> None:
+    """Including the hostile one, which is the point.
+
+    A rendering layer is a new place for an attacker-supplied string to reach a client,
+    so the document is checked for every dataset rather than for a representative one.
+    """
+    card = evaluate()
+    assert len(card.datasets) >= 4
+    for result in card.datasets:
+        rendered_gate = next(
+            gate for gate in result.gates if gate.name == "rendered.figure_accuracy"
+        )
+        assert rendered_gate.checked > 0, result.dataset_id
+        assert rendered_gate.passed, result.dataset_id
+
+
+def test_the_rendered_document_is_byte_stable_across_scored_runs() -> None:
+    """A scorecard whose document checks moved with the clock would be noise."""
+    first = _rendered()[2]
+    second = _rendered()[2]
+    assert first == second

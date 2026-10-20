@@ -23,20 +23,33 @@ from __future__ import annotations
 import argparse
 import getpass
 import sys
+import tempfile
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
-from costsentinel.config import MemoryBackend, RunMode, Settings, get_settings
+from costsentinel.config import (
+    LLMBackend,
+    MemoryBackend,
+    RunMode,
+    Settings,
+    get_settings,
+)
 from costsentinel.domain.memory import Outcome
 from costsentinel.domain.report import ClientReport, ScanResult
-from costsentinel.graph.runner import run_scan
+from costsentinel.graph.runner import run_client_scan, run_scan
 from costsentinel.llm.base import LLMError
+from costsentinel.llm.fake import FakeLLM
 from costsentinel.memory import get_memory
 from costsentinel.memory.base import MemoryStore, MemoryStoreError
 from costsentinel.memory.decisions import decided_entries, pending_entries, record_decision
 from costsentinel.providers import get_provider
 from costsentinel.providers.base import ProviderError, ProviderNotConfiguredError
+from costsentinel.providers.mock import CLIENT_NORTHWIND, MockAzureProvider
+from costsentinel.reports.markdown import render_markdown
+from costsentinel.reports.pdf import EXTRA as PDF_EXTRA
+from costsentinel.reports.pdf import INSTALL_HINT as PDF_INSTALL_HINT
+from costsentinel.reports.pdf import PdfUnavailableError, pdf_available, render_pdf
 from costsentinel.tools import describe_surface
 
 PROGRAM = "costsentinel"
@@ -49,6 +62,27 @@ DEFAULT_REAL_OUTPUT_DIR = Path("var/real-runs")
 #: Where `costsentinel eval` writes its scorecard. Committed, so a diff shows what
 #: moved between runs.
 DEFAULT_REPORT = Path("evals/REPORT.md")
+
+#: Where a mock-estate rendering goes by default. Under ``tmp/`` and gitignored: a
+#: rendered report is an artefact, and the one copy that belongs in the repository is
+#: the committed sample.
+DEFAULT_RENDER_DIR = Path("tmp/reports")
+
+#: The committed sample, rendered from the synthetic estate so a repository visitor
+#: can read a real output without running anything.
+SAMPLE_REPORT = Path("docs/sample-report.md")
+
+#: Generated-at stamp for the committed sample. Fixed, so regenerating it produces a
+#: diff only when the renderer changed -- a sample that moved every day would be a
+#: sample nobody reviewed.
+SAMPLE_STAMP = datetime(2026, 10, 19, tzinfo=UTC)
+
+#: The client the committed sample is rendered for. The larger of the two synthetic
+#: clients, so the sample exercises every section the renderer has.
+SAMPLE_CLIENT = CLIENT_NORTHWIND
+
+#: Run id baked into the sample, so its report id does not change between renders.
+SAMPLE_RUN_ID = "run-sample"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -202,6 +236,68 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-write",
         action="store_true",
         help="Print the summary without writing the Markdown report.",
+    )
+
+    report = subcommands.add_parser(
+        "report",
+        help="Render a sweep as a client-ready Markdown document, and a PDF if available.",
+        description=(
+            "Runs a sweep and renders the result as Markdown. This is the artefact a "
+            "client reads, so every figure in it is checked: the evaluation harness "
+            "asserts that no number appears in a rendered document that does not equal "
+            "a figure on the report it came from. The Markdown needs no optional "
+            "extras; the PDF needs `uv sync --extra reports` and is skipped with a "
+            "note when it is absent."
+        ),
+    )
+    report.add_argument(
+        "--client",
+        default=None,
+        metavar="NAME",
+        help="One client. Default: every client the provider can see.",
+    )
+    report.add_argument(
+        "--out",
+        default=None,
+        metavar="PATH",
+        help=(
+            f"Directory to write into. Default: {DEFAULT_RENDER_DIR} for a mock run "
+            f"and {DEFAULT_REAL_OUTPUT_DIR} for a real one. Both are gitignored."
+        ),
+    )
+    report.add_argument(
+        "--real",
+        action="store_true",
+        help="Read a real Azure estate. Read-only. See SECURITY.md first.",
+    )
+    report.add_argument(
+        "--subscription",
+        action="append",
+        default=None,
+        metavar="ID",
+        help="Restrict a real run to one subscription. Repeatable.",
+    )
+    report.add_argument(
+        "--pdf",
+        action="store_true",
+        help=(
+            "Also render a PDF. Needs the `reports` extra, and names the install "
+            "command if it is absent."
+        ),
+    )
+    report.add_argument(
+        "--stdout",
+        action="store_true",
+        help="Print the Markdown instead of writing it. Mock runs only.",
+    )
+    report.add_argument(
+        "--sample",
+        action="store_true",
+        help=(
+            f"Regenerate the committed sample at {SAMPLE_REPORT} from the synthetic "
+            f"estate. Ignores every other flag and reads nothing from the "
+            f"environment, so it can only produce the synthetic document."
+        ),
     )
 
     subcommands.add_parser(
@@ -580,6 +676,138 @@ def run_eval(args: argparse.Namespace) -> int:
     return 0
 
 
+def report_filename(report: ClientReport) -> str:
+    """A stable filename for one client's document.
+
+    The client and the run id, so two sweeps of the same estate do not overwrite each
+    other and a filename never carries a timestamp -- the document carries one
+    generated-at and that is the only clock in the output.
+    """
+    safe = "".join(char if char.isalnum() or char in "-_" else "-" for char in report.client)
+    return f"{safe}-{report.run_id}.md"
+
+
+def render_reports(
+    result: ScanResult,
+    directory: Path,
+    *,
+    want_pdf: bool,
+    generated_at: datetime | None = None,
+) -> list[Path]:
+    """Render every client's report into a directory.
+
+    Returns:
+        The paths written, Markdown first for each client.
+
+    Raises:
+        PdfUnavailableError: If ``want_pdf`` and the extra is missing. Deliberately
+            loud: somebody who asked for a PDF and silently got only Markdown would
+            find out when they went looking for the file.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for one in result.reports:
+        markdown = render_markdown(one, generated_at=generated_at)
+        path = directory / report_filename(one)
+        path.write_text(markdown, encoding="utf-8")
+        written.append(path)
+        if want_pdf:
+            written.append(
+                render_pdf(markdown, path.with_suffix(".pdf"), title=f"Cost review — {one.client}")
+            )
+    return written
+
+
+def render_sample(path: Path | None = None) -> Path:
+    """Render the committed sample from the synthetic estate.
+
+    Every input is fixed here and **nothing is read from the environment**. That is a
+    safety property rather than a convenience: a developer with ``MODE=real`` in their
+    ``.env`` must not be able to regenerate "the sample" from a client's estate and
+    commit it. The provider, the model, the memory backend, the client, the run id and
+    the generated-at stamp are all constants, so this command can only ever produce
+    the synthetic document -- which also makes it byte-identical between runs, so a
+    diff appears when the renderer changed and at no other time.
+    """
+    # Resolved here rather than as a default argument, so the module constant is
+    # the single definition of where the sample lives.
+    path = SAMPLE_REPORT if path is None else path
+    with tempfile.TemporaryDirectory(prefix="costsentinel-sample-") as scratch:
+        settings = Settings(
+            mode=RunMode.MOCK,
+            llm_backend=LLMBackend.FAKE,
+            memory_backend=MemoryBackend.OFF,
+            state_dir=Path(scratch),
+        )
+        report, _ = run_client_scan(
+            client=SAMPLE_CLIENT,
+            provider=MockAzureProvider(seed=settings.mock_seed),
+            llm=FakeLLM(),
+            settings=settings,
+            checkpointer=None,
+            run_id=SAMPLE_RUN_ID,
+            requested_by=PROGRAM,
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_markdown(report, generated_at=SAMPLE_STAMP), encoding="utf-8")
+    return path
+
+
+def run_report(args: argparse.Namespace, settings: Settings) -> int:
+    """Render a sweep as a document."""
+    if args.sample:
+        written = render_sample()
+        print(f"Written {written}")
+        print("Synthetic estate. Commit this one; it is the repository's sample output.")
+        return 0
+
+    real = bool(args.real) or settings.mode is RunMode.REAL
+    scope: tuple[str, ...] = ()
+    if real:
+        settings = settings.model_copy(update={"mode": RunMode.REAL})
+        try:
+            scope = resolve_real_scope(args, settings)
+        except ProviderError as exc:
+            print(f"{PROGRAM}: {exc}", file=sys.stderr)
+            return 1
+        print(real_run_banner(settings, scope), file=sys.stderr)
+
+    if args.pdf and not pdf_available():
+        print(f"{PROGRAM}: {PdfUnavailableError()}", file=sys.stderr)
+        return 1
+
+    try:
+        result = run_scan(
+            client=args.client,
+            settings=settings,
+            requested_by=PROGRAM,
+            subscription_ids=scope or None,
+        )
+    except (ProviderError, LLMError) as exc:
+        print(f"{PROGRAM}: {exc}", file=sys.stderr)
+        return 1
+
+    if args.stdout and not real:
+        for one in result.reports:
+            print(render_markdown(one))
+        return 0
+
+    default = DEFAULT_REAL_OUTPUT_DIR if real else DEFAULT_RENDER_DIR
+    directory = Path(args.out) if args.out else default
+    written = render_reports(result, directory, want_pdf=bool(args.pdf))
+
+    for path in written:
+        print(f"Written {path}")
+    if real:
+        print("That directory is gitignored. Do not commit it, and do not paste it.")
+    elif not args.pdf and not pdf_available():
+        print(
+            f"PDF not rendered: the optional '{PDF_EXTRA}' extra is not installed. "
+            f"Install it with `{PDF_INSTALL_HINT}` and pass --pdf."
+        )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point.
 
@@ -602,6 +830,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "eval":
         return run_eval(args)
+
+    if args.command == "report":
+        return run_report(args, settings)
 
     real = bool(args.real) or settings.mode is RunMode.REAL
     scope: tuple[str, ...] = ()

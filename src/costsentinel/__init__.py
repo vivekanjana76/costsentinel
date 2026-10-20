@@ -5,6 +5,6 @@ the operating rules, ARCHITECTURE.md for the design and decision log, and
 ROADMAP.md for the phased plan.
 """
 
-__version__ = "0.5.0"
+__version__ = "0.8.0"
 
 __all__ = ["__version__"]

@@ -68,7 +68,9 @@ the decision log.
 
 The complete six-specialist graph from CLAUDE.md section 5, with a supervisor owning
 every conditional edge. Phase 2 built the graph; Phases 3 to 6 added read-only real
-access, durable memory, the evaluation harness and context-aware detection.
+access, durable memory, the evaluation harness and context-aware detection; Phase 7
+added spend anomalies, and Phase 8 the client-facing document and the guarantee that
+reaches it.
 
 | Piece | Status |
 |---|---|
@@ -85,7 +87,8 @@ access, durable memory, the evaluation harness and context-aware detection.
 | Exemption | Deterministic tag reading (Phase 6): a resource that is idle or stale by design is surfaced with its reason and excluded from the actionable savings total |
 | Spend anomalies | Robust z-score with a weekday profile over the daily cost series (Phase 7). Spikes and level shifts distinguished; a gap in the series is unknown, not zero; an anomaly never reaches an action |
 | Ranking | An unquantified saving ranks below every quantified one, as a tier rather than a weight (Phase 7) |
-| Entry points | `costsentinel scan` and `POST /scan` |
+| Reporting | Markdown renderer with five sections (Phase 8); every number in the document must trace to a figure the pipeline produced, as a blocking gate. PDF behind an optional `reports` extra |
+| Entry points | `costsentinel scan`, `costsentinel report` and `POST /scan` |
 
 ### What Phase 1 contained
 
@@ -124,6 +127,43 @@ uv run costsentinel scan --client northwind-energy
 
 No `.env` is needed. Copy `.env.example` to `.env` only when you want to change the
 defaults; `MODE=mock` and `LLM_BACKEND=fake` are the defaults and require nothing.
+
+### Reading a report
+
+[`docs/sample-report.md`](docs/sample-report.md) is a real rendered output, committed
+so you can read one without running anything. It describes the synthetic mock estate
+and is banner-marked as such: the rates in it are real published Azure prices, but the
+estate they are applied to is invented.
+
+```bash
+# Render the mock estate (written under tmp/reports, which is gitignored)
+uv run costsentinel report
+
+# ... one client, to the terminal
+uv run costsentinel report --client northwind-energy --stdout
+
+# ... and as a PDF, which needs the optional extra
+uv sync --extra reports
+uv run costsentinel report --pdf
+```
+
+The document has five sections, because there are five claims a client must not
+conflate. A section with nothing in it is omitted rather than left hanging, so the
+committed sample shows four of them -- the mock estate has no resource that a detector
+flags *and* a tag exempts, and every finding in it happens to be priceable, which is
+recorded as a gap under Phase 9. `tests/golden/full-report.md` shows all five. They
+are: ranked **recommended actions**; **worth investigating -- saving unknown**,
+where a finding appears by name with the reason no figure could be derived; **flagged
+but exempt**, which shows what a resource costs now and never a saving; **spend changes
+-- investigate**, which shows a difference and proposes nothing; and **spend we could
+not assess**, because a gap in a cost series is unknown rather than zero.
+
+Every number in the rendered document must trace to a figure the pipeline produced.
+That is a blocking gate (`rendered.figure_accuracy`), not a review habit: rendering may
+copy a figure and may never compose one, so a rounded total or a sum computed in the
+layout fails the build. Model-written sentences are quoted verbatim and graded for
+groundedness in the rendered text, because grading the internal object says nothing
+about the document unless the document quotes it.
 
 ### The learning loop
 
@@ -295,7 +335,7 @@ src/costsentinel/
   guardrails/data/   committed tag conventions that mark a resource exempt
   memory/            episodic + semantic stores, embedder, recall, decisions
   memory/data/       committed synthetic policy and guidance corpus
-  reports/           report rendering (Phase 9)
+  reports/           Markdown and PDF rendering (Phase 8)
   observability/     structured logging + the tracing seam
   tools/             read-only MCP Azure tool server
   a2a/               Agent Cards (Phase 11)
