@@ -595,9 +595,7 @@ def _attribution_block(anomaly: ReportAnomaly) -> list[str]:
 _UNATTRIBUTED_SHORT = "no single cause identified — see below"
 
 
-def _table_with_header(
-    header: tuple[str, ...], rows: Sequence[tuple[str, ...]]
-) -> list[str]:
+def _table_with_header(header: tuple[str, ...], rows: Sequence[tuple[str, ...]]) -> list[str]:
     """A Markdown table with a header row.
 
     Distinct from :func:`_table`, which renders the headerless two-column form used

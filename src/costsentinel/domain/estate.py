@@ -460,15 +460,11 @@ class Estate(Frozen):
 
     def series_for(self, subscription_id: str) -> CostSeries | None:
         """One subscription's cost series, or ``None``."""
-        return next(
-            (s for s in self.cost_series if s.subscription_id == subscription_id), None
-        )
+        return next((s for s in self.cost_series if s.subscription_id == subscription_id), None)
 
     def breakdown_for(self, subscription_id: str) -> CostBreakdown | None:
         """One subscription's cost breakdown, or ``None`` if the provider had none."""
-        return next(
-            (b for b in self.cost_breakdowns if b.subscription_id == subscription_id), None
-        )
+        return next((b for b in self.cost_breakdowns if b.subscription_id == subscription_id), None)
 
     def resource(self, resource_id: str) -> Resource | None:
         """One resource by id, or ``None``."""

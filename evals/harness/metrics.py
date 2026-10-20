@@ -528,9 +528,7 @@ def attribution_accuracy(
     labelled = [one for one in dataset.subscription_labels if one.expects_attribution is not None]
     if not labelled:
         return (
-            Score.unmeasured(
-                "attribution.accuracy", "this dataset labels no spend-change causes"
-            ),
+            Score.unmeasured("attribution.accuracy", "this dataset labels no spend-change causes"),
             (),
         )
 
