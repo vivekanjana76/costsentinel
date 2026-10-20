@@ -27,7 +27,10 @@ from costsentinel.providers.mock import (
 )
 
 EXPECTED_SUBSCRIPTIONS = 4
-EXPECTED_RESOURCES = 21
+# 21 through Phase 8, then two added in Phase 9 (#76) so the estate exercises the
+# flagged-but-exempt and unquantifiable-saving paths: vm-core-dr-standby and
+# vm-core-api-02.
+EXPECTED_RESOURCES = 23
 EXPECTED_ORPHANED_DISKS = 2
 EXPECTED_RESERVATIONS = 3
 EXPECTED_SNAPSHOTS = 3

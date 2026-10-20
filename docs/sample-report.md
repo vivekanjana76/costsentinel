@@ -7,7 +7,7 @@
 | Period | 2026-09-02 to 2026-10-01 (30 days) |
 | Generated | 2026-10-19 |
 | Subscriptions in scope | 2 |
-| Resources examined | 18 |
+| Resources examined | 20 |
 | Headline | high |
 | Report id | `rpt-run-sample` |
 
@@ -20,13 +20,15 @@
 | Observed spend over the period | 5,387.88 USD |
 | **Projected actionable savings** | **1,421.97 USD / month** |
 | Annualised | 17,063.64 USD / year |
-| Actionable findings | 8 |
-| Awaiting your approval | 8 |
+| Actionable findings | 9 |
+| Awaiting your approval | 9 |
 | CostSentinel may apply automatically | 0 |
 | Advice for a person to carry out by hand | 1 |
+| Findings we could not price | 1 (listed below, excluded from the total) |
+| Flagged but exempt | 1 (costing 140.16 USD / month) |
 | Spend changes to investigate | 2 |
 
-Across 2 subscription(s) for northwind-energy, CostSentinel identified 8 actionable finding(s) worth 1,421.97 USD per month (17,063.64 USD annually) against observed spend of 5,387.88 USD. The largest single opportunity is vm-analytics-01, where the recommended action is deallocate virtual machine, worth 560.64 USD per month. 8 of these finding(s) require your explicit approval before anything is changed; nothing has been or will be modified without it.
+Across 2 subscription(s) for northwind-energy, CostSentinel identified 9 actionable finding(s) worth 1,421.97 USD per month (17,063.64 USD annually) against observed spend of 5,387.88 USD. The largest single opportunity is vm-analytics-01, where the recommended action is deallocate virtual machine, worth 560.64 USD per month. 9 of these finding(s) require your explicit approval before anything is changed; nothing has been or will be modified without it.
 
 _The paragraph above was written by a language model from the figures in the table. Every figure in this report is arithmetic over provider data; no number in it came from a language model._
 
@@ -63,7 +65,7 @@ Ordered by a weighted composite of the saving, how safe the action is and the de
 - cpu avg pct was observed as 1.2
 - network in gb was observed as 4.1
 
-**Why it sits here.** Ranked 1 of 8: quantified; savings 1.000, safety 0.600, confidence 0.900 -> 0.885. Worth 560.64 USD per month at review risk, with detector confidence 0.90.
+**Why it sits here.** Ranked 1 of 9: quantified; savings 1.000, safety 0.600, confidence 0.900 -> 0.885. Worth 560.64 USD per month at review risk, with detector confidence 0.90.
 
 **Evidence.**
 
@@ -106,7 +108,7 @@ Ordered by a weighted composite of the saving, how safe the action is and the de
 - sku was observed as Standard_E16s_v5
 - monthly cost was observed as 735.84 USD
 
-**Why it sits here.** Ranked 2 of 8: quantified; savings 0.656, safety 0.600, confidence 0.750 -> 0.656. Worth 367.92 USD per month at review risk, with detector confidence 0.75.
+**Why it sits here.** Ranked 2 of 9: quantified; savings 0.656, safety 0.600, confidence 0.750 -> 0.656. Worth 367.92 USD per month at review risk, with detector confidence 0.75.
 
 **Evidence.**
 
@@ -148,7 +150,7 @@ Ordered by a weighted composite of the saving, how safe the action is and the de
 - monthly cost was observed as 444.47 USD
 - cpu avg pct was observed as 0.4
 
-**Why it sits here.** Ranked 3 of 8: quantified; savings 0.396, safety 0.600, confidence 0.800 -> 0.508. Worth 222.23 USD per month at review risk, with detector confidence 0.80.
+**Why it sits here.** Ranked 3 of 9: quantified; savings 0.396, safety 0.600, confidence 0.800 -> 0.508. Worth 222.23 USD per month at review risk, with detector confidence 0.80.
 
 **Evidence.**
 
@@ -191,7 +193,7 @@ Ordered by a weighted composite of the saving, how safe the action is and the de
 - monthly amortised cost was observed as 221.44 USD
 - expires on was observed as 2028-02-01
 
-**Why it sits here.** Ranked 4 of 8: quantified; savings 0.259, safety 0.600, confidence 0.920 -> 0.443. Worth 145.04 USD per month at review risk, with detector confidence 0.92.
+**Why it sits here.** Ranked 4 of 9: quantified; savings 0.259, safety 0.600, confidence 0.920 -> 0.443. Worth 145.04 USD per month at review risk, with detector confidence 0.92.
 
 **Evidence.**
 
@@ -232,7 +234,7 @@ Ordered by a weighted composite of the saving, how safe the action is and the de
 - monthly cost was observed as 38.01 USD
 - age days was observed as 241
 
-**Why it sits here.** Ranked 5 of 8: quantified; savings 0.068, safety 0.600, confidence 0.950 -> 0.333. Worth 38.01 USD per month at review risk, with detector confidence 0.95.
+**Why it sits here.** Ranked 5 of 9: quantified; savings 0.068, safety 0.600, confidence 0.950 -> 0.333. Worth 38.01 USD per month at review risk, with detector confidence 0.95.
 
 **Evidence.**
 
@@ -271,7 +273,7 @@ Ordered by a weighted composite of the saving, how safe the action is and the de
 - monthly cost was observed as 3.65 USD
 - age days was observed as 398
 
-**Why it sits here.** Ranked 6 of 8: quantified; savings 0.007, safety 0.600, confidence 0.950 -> 0.296. Worth 3.65 USD per month at review risk, with detector confidence 0.95.
+**Why it sits here.** Ranked 6 of 9: quantified; savings 0.007, safety 0.600, confidence 0.950 -> 0.296. Worth 3.65 USD per month at review risk, with detector confidence 0.95.
 
 **Evidence.**
 
@@ -308,7 +310,7 @@ Ordered by a weighted composite of the saving, how safe the action is and the de
 - sku was observed as Premium_LRS_Snapshot
 - monthly cost was observed as 16.90 USD
 
-**Why it sits here.** Ranked 7 of 8: quantified; savings 0.030, safety 0.600, confidence 0.850 -> 0.296. Worth 16.90 USD per month at review risk, with detector confidence 0.85.
+**Why it sits here.** Ranked 7 of 9: quantified; savings 0.030, safety 0.600, confidence 0.850 -> 0.296. Worth 16.90 USD per month at review risk, with detector confidence 0.85.
 
 **Evidence.**
 
@@ -346,7 +348,7 @@ Ordered by a weighted composite of the saving, how safe the action is and the de
 - sku was observed as Premium_LRS_Snapshot
 - monthly cost was observed as 67.58 USD
 
-**Why it sits here.** Ranked 8 of 8: quantified; savings 0.121, safety 0.200, confidence 0.850 -> 0.250. Worth 67.58 USD per month at block risk, with detector confidence 0.85.
+**Why it sits here.** Ranked 8 of 9: quantified; savings 0.121, safety 0.200, confidence 0.850 -> 0.250. Worth 67.58 USD per month at block risk, with detector confidence 0.85.
 
 **Evidence.**
 
@@ -362,6 +364,46 @@ Ordered by a weighted composite of the saving, how safe the action is and the de
 - Snapshot is not referenced by any image, restore point or backup policy.
 - The source disk still exists, or its loss has been accepted in writing.
 - No active maintenance or change freeze applies to the subscription.
+
+---
+
+## Worth investigating — saving unknown
+
+These are real findings. CostSentinel could not derive a figure for them, so they are **excluded from the savings total rather than counted as zero**, and they rank below every priced finding because we will not claim something we cannot cost is your bigger opportunity. That is not the same as saying they do not matter — each one says why no figure could be derived, and several are worth a decision.
+
+### vm-core-api-02 — resize virtual machine
+
+| | |
+| --- | --- |
+| What | oversized virtual machine |
+| Subscription | `00000000-0000-4000-8000-00000000a001` |
+| Costs now | 280.32 USD / month |
+| Saving | unknown USD — see below |
+| Approval | `review` -- requires your explicit approval before anything changes. |
+
+**Why no figure.** vm-core-api-02: no smaller same-family SKU in the provider catalogue fits the observed peak with a 2.0x headroom, so no resizing saving can be quantified.
+
+**Why this exists.** vm-core-api-02 in subscription 00000000-0000-4000-8000-00000000a001 shows oversized virtual machine because cpu avg pct is 14.2; cpu max pct is 37.6; peak threshold pct is 50.0; observation days is 30; sku is Standard_D8s_v5; monthly cost is 280.32 USD. Taken together these indicate the resource outlived the workload it was provisioned for, and no change has been made to it since.
+
+**Why it sits here.** Ranked 9 of 9: unquantified (ranks below every priced finding); savings 0.000, safety 0.600, confidence 0.750 -> 0.262. Worth unknown USD per month at review risk, with detector confidence 0.75.
+
+---
+
+## Flagged but exempt — no action proposed
+
+Real waste signals on resources **your own tags** mark as protected: a disaster-recovery standby, a retention requirement, an explicit cost exemption. They are shown because the spend is real and you may want to revisit it, and they are **excluded from the savings total** because nobody is proposing to recover it. The figure beside each one is what you are currently paying, not a saving available to you.
+
+### vm-core-dr-standby — disaster recovery
+
+| | |
+| --- | --- |
+| What we detected | idle virtual machine |
+| Subscription | `00000000-0000-4000-8000-00000000a001` |
+| **Costs now** | **140.16 USD / month** |
+| Exempt because | `role=disaster-recovery-standby` |
+| Rule | `builtin-exemptions-v1:disaster_recovery` |
+
+This resource is tagged as a disaster-recovery standby. Being idle is what a standby is for, so its utilisation is not evidence of waste and CostSentinel proposes no action on it. Tag: role=disaster-recovery-standby.
 
 ---
 
@@ -413,6 +455,7 @@ Spend in 00000000-0000-4000-8000-00000000a001 shows a level shift (increase): 12
 | pip-legacy-api | delete unattached public ip | `review` | 3.65 USD |
 | snap-analytics-baseline | delete stale snapshot | `review` | 16.90 USD |
 | snap-web-01-pre-upgrade | delete stale snapshot | `block` | 67.58 USD |
+| vm-core-api-02 | resize virtual machine | `review` | unknown USD |
 
 ---
 
@@ -420,7 +463,9 @@ Spend in 00000000-0000-4000-8000-00000000a001 shows a level shift (increase): 12
 
 - CostSentinel has no execution path in this phase, so nothing in this report has been or can be applied automatically.
 - Findings are ranked by a weighted composite of savings, safety and detector confidence, not by savings alone. Each finding shows its own breakdown.
+- 1 finding(s) could not be priced from provider data. They are excluded from the projected savings rather than assumed to be zero, and they rank below every priced finding -- we will not tell you that something we cannot cost is your bigger opportunity. Each one says why no figure could be derived.
 - 2 spend change(s) were detected and are listed separately from the findings. A spend change is something to investigate, not something to act on: its difference is what you are now paying differently, not an amount anyone has identified a way to recover, and none of it appears in the projected savings above.
+- 1 finding(s) are flagged but exempt: real waste signals on resources your own tags mark as protected -- a disaster-recovery standby, a retention requirement, or an explicit cost exemption. Each is listed with the tag that caused it and the reason nothing is proposed, and all of them are excluded from the projected savings above. Their current monthly cost is 140.16 USD, which is what you spend on them rather than a saving available to you.
 - 1 finding(s) are classified as blocked: they are reported as advice for a person to carry out by hand, and CostSentinel will not perform them however they are approved.
 
 ---

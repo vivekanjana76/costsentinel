@@ -189,3 +189,41 @@ def test_the_sample_report_is_recognised_as_synthetic_by_the_renderer() -> None:
         requested_by="test",
     )
     assert is_synthetic(report)
+
+
+def test_the_committed_sample_exercises_every_section() -> None:
+    """What #76 was for.
+
+    Phase 8 shipped a renderer with six sections and a sample that showed four,
+    because no mock resource was both detector-flagged and tag-exempt and every mock
+    finding happened to be priceable. A feature demonstrated only by a golden file is
+    a feature no repository visitor can see.
+    """
+    text = SAMPLE_REPORT.read_text(encoding="utf-8")
+    for heading in (
+        "## Executive summary",
+        "## Recommended actions",
+        "## Worth investigating — saving unknown",
+        "## Flagged but exempt — no action proposed",
+        "## Spend changes — investigate",
+        "## How this report was produced",
+    ):
+        assert heading in text, heading
+
+
+def test_the_samples_exempt_and_unpriced_findings_add_nothing_to_the_total() -> None:
+    """The claim those two sections exist to make, read off the committed document.
+
+    A flagged-but-exempt resource and a finding that cannot be costed are both real
+    and neither is money on the table. Adding them to the estate moved the headline
+    savings by zero, and that is the property worth pinning -- if either ever started
+    contributing, this is where it would show.
+    """
+    text = SAMPLE_REPORT.read_text(encoding="utf-8")
+    assert "**Projected actionable savings** | **1,421.97 USD / month**" in text
+    assert "Findings we could not price | 1 (listed below, excluded from the total)" in text
+    assert "Flagged but exempt | 1 (costing 140.16 USD / month)" in text
+    # The exempt resource's cost is never described as a saving.
+    exempt = text.split("## Flagged but exempt")[1].split("\n## ")[0]
+    assert "Saving if applied" not in exempt
+    assert "**Costs now** | **140.16 USD / month**" in exempt
