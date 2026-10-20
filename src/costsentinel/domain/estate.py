@@ -148,6 +148,95 @@ class CostSeries(Frozen):
         )
 
 
+class CostDimension(StrEnum):
+    """What a cost series can be broken down *by*.
+
+    A closed vocabulary, like every other externally-influenced name in the system:
+    a dimension the provider invented is one this code would have no arithmetic for.
+    Resource is the most actionable and the most expensive to retrieve; meter is what
+    Azure's own cost API groups by most cheaply; service is the coarsest and the one a
+    client recognises. Which is available is a provider question.
+    """
+
+    RESOURCE = "resource"
+    METER = "meter"
+    SERVICE = "service"
+
+
+class CostComponent(Frozen):
+    """One component of a broken-down cost series, over the same days as the whole.
+
+    The daily points are the component's own spend, not a share: a component that was
+    absent on a day has no point for that day rather than a zero, for the same reason
+    a gap in a total is unknown and not zero (ARCHITECTURE.md section 10).
+    """
+
+    key: str = Field(description="Stable identifier: a resource id, meter id or service name.")
+    label: str = Field(description="What to call it in a report.")
+    points: tuple[CostPoint, ...]
+
+    def amount_on(self, day: date) -> Decimal | None:
+        """This component's spend on one day, or ``None`` if it had none recorded."""
+        for point in self.points:
+            if point.day == day:
+                return point.amount
+        return None
+
+    def total_between(self, start: date, end: date) -> Decimal:
+        """Spend over an inclusive day range. Days with no point contribute nothing."""
+        return sum(
+            (point.amount for point in self.points if start <= point.day <= end),
+            start=Decimal(0),
+        )
+
+    def days_between(self, start: date, end: date) -> int:
+        """How many days in the range this component actually reported."""
+        return sum(1 for point in self.points if start <= point.day <= end)
+
+
+class CostBreakdown(Frozen):
+    """A daily cost series split along one dimension.
+
+    What makes attribution possible: a total that moved says *that* spend changed, and
+    only a breakdown can say *what* changed. The components must reconcile with the
+    total they explain -- :meth:`reconciles_with` is the check, and a breakdown that
+    fails it attributes a change to the wrong thing, which is worse than attributing
+    it to nothing.
+    """
+
+    subscription_id: str
+    dimension: CostDimension
+    currency: Currency = Currency.USD
+    components: tuple[CostComponent, ...]
+    provenance: Provenance
+
+    def component(self, key: str) -> CostComponent | None:
+        """One component by key, or ``None``."""
+        return next((part for part in self.components if part.key == key), None)
+
+    def daily_total(self, day: date) -> Decimal:
+        """What the components say was spent on one day."""
+        return sum(
+            (amount for part in self.components if (amount := part.amount_on(day)) is not None),
+            start=Decimal(0),
+        )
+
+    def reconciles_with(self, series: CostSeries, *, tolerance: Decimal = Decimal("0.01")) -> bool:
+        """Whether the components sum to the series they claim to explain, day by day.
+
+        Checked rather than assumed. A breakdown that is short by a few percent would
+        still rank its components plausibly and attribute a change to whichever one
+        happened to be largest, and nothing downstream could tell. The tolerance is a
+        cent, which is rounding, not drift.
+        """
+        if series.subscription_id != self.subscription_id:
+            return False
+        for point in series.points:
+            if abs(self.daily_total(point.day) - point.amount) > tolerance:
+                return False
+        return True
+
+
 class ResourceMetrics(Frozen):
     """Observed utilisation for one resource.
 
@@ -349,6 +438,15 @@ class Estate(Frozen):
     subscriptions: tuple[Subscription, ...]
     resources: tuple[Resource, ...]
     cost_series: tuple[CostSeries, ...] = ()
+    cost_breakdowns: tuple[CostBreakdown, ...] = Field(
+        default=(),
+        description=(
+            "Per-dimension splits of the series above, for the subscriptions where the "
+            "provider could supply one. A subscription absent from this tuple has an "
+            "unknown breakdown rather than an empty one, which is what keeps an "
+            "unattributable spend change saying so."
+        ),
+    )
     metrics: tuple[ResourceMetrics, ...] = ()
     reservations: tuple[Reservation, ...] = ()
 
@@ -359,6 +457,18 @@ class Estate(Frozen):
     def metrics_for(self, resource_id: str) -> ResourceMetrics | None:
         """Metrics for one resource, or ``None`` if none were collected."""
         return next((m for m in self.metrics if m.resource_id == resource_id), None)
+
+    def series_for(self, subscription_id: str) -> CostSeries | None:
+        """One subscription's cost series, or ``None``."""
+        return next(
+            (s for s in self.cost_series if s.subscription_id == subscription_id), None
+        )
+
+    def breakdown_for(self, subscription_id: str) -> CostBreakdown | None:
+        """One subscription's cost breakdown, or ``None`` if the provider had none."""
+        return next(
+            (b for b in self.cost_breakdowns if b.subscription_id == subscription_id), None
+        )
 
     def resource(self, resource_id: str) -> Resource | None:
         """One resource by id, or ``None``."""

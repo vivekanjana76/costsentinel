@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 from costsentinel.domain.estate import (
+    CostBreakdown,
     CostSeries,
     Reservation,
     Resource,
@@ -78,6 +79,21 @@ class AzureProvider(Protocol):
 
     def get_cost_series(self, subscription_id: str, *, window_days: int = 30) -> CostSeries:
         """Daily actual spend for one subscription over the trailing window."""
+        ...
+
+    def get_cost_breakdown(
+        self, subscription_id: str, *, window_days: int = 30
+    ) -> CostBreakdown | None:
+        """The same window split along one dimension, or ``None`` if unavailable.
+
+        What makes attribution possible: a total that moved says *that* spend changed
+        and a breakdown says *what* changed.
+
+        ``None`` means the provider could not retrieve one, which is **unknown** and
+        deliberately not an empty breakdown -- an empty breakdown would attribute a
+        change to nothing and read as "no cause found". A provider that cannot supply
+        this must return ``None`` rather than something that looks like an answer.
+        """
         ...
 
     def get_resource_metrics(self, resource_id: str) -> ResourceMetrics | None:

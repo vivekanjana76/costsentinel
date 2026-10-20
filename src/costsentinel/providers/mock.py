@@ -53,6 +53,9 @@ from costsentinel.domain.common import (
     Verification,
 )
 from costsentinel.domain.estate import (
+    CostBreakdown,
+    CostComponent,
+    CostDimension,
     CostPoint,
     CostSeries,
     Environment,
@@ -111,6 +114,53 @@ class SeriesShape(StrEnum):
     #: A weekly batch window: one weekday several times the others, every week. A
     #: pattern rather than an anomaly, and it must produce no alert.
     SEASONAL = "seasonal"
+
+
+class BreakdownShape(StrEnum):
+    """How a subscription's daily spend is distributed across its meters.
+
+    The shape attribution is scored against, and the reason it is a committed property
+    of the estate rather than something derived: whether a change *can* be attributed
+    is the interesting question, and an estate that only ever produces attributable
+    changes would score the easy half of the problem.
+    """
+
+    #: Baseline spread across the meters; every rise above baseline lands on **one**
+    #: of them. What a real step change looks like -- a machine resized, a meter
+    #: switched on -- and the case attribution should name.
+    CONCENTRATED = "concentrated"
+
+    #: Baseline spread across the meters, and every rise spread the same way. A real
+    #: pattern (a load test, a traffic surge, a price change) and genuinely
+    #: unattributable: no component accounts for the change, so the honest answer is
+    #: that we cannot say which one did.
+    DIFFUSE = "diffuse"
+
+    #: No breakdown retrievable. Distinct from an empty one, which would read as "no
+    #: cause", and from a diffuse one, which is a real finding about the spend.
+    ABSENT = "absent"
+
+
+#: The meter mix every synthetic subscription's baseline is split across, as integer
+#: weights out of 100. Committed, because a breakdown is only useful if it reconciles
+#: with the total it explains, and exact reconciliation needs exact arithmetic -- the
+#: split is done in whole cents with the remainder going to the largest meter.
+#:
+#: Meter names follow Azure's own vocabulary closely enough to be recognisable and are
+#: invented like everything else here.
+_METER_MIX: tuple[tuple[str, str, int], ...] = (
+    ("virtual-machines-compute", "Virtual Machines - compute hours", 40),
+    ("managed-disks-premium-ssd", "Storage - premium SSD managed disks", 25),
+    ("sql-database-vcore", "SQL Database - vCore hours", 20),
+    ("bandwidth-inter-region", "Bandwidth - inter-region data transfer", 10),
+    ("load-balancer-rules", "Load Balancer - rules and data processed", 5),
+)
+
+#: Which meter carries the whole rise in a :attr:`BreakdownShape.CONCENTRATED`
+#: subscription. Compute, because that is what a resize or a new machine moves, and
+#: deliberately *not* the largest meter -- a detector that simply named the biggest
+#: component would pass on a mix where the biggest one is also the culprit.
+_CONCENTRATED_METER = "sql-database-vcore"
 
 
 #: Day-to-day wobble applied to every series, as a multiplier on the daily baseline.
@@ -238,6 +288,99 @@ def synthetic_series(
     )
 
 
+def _split_cents(total: Decimal, weights: Sequence[int]) -> list[Decimal]:
+    """Split an amount across integer weights, in whole cents, summing exactly.
+
+    The remainder goes to the largest weight. Exactness is the point: a breakdown that
+    is a cent short of the total it explains fails the reconciliation check, and one
+    that is allowed to be approximately right is one that can attribute a change to
+    the wrong component without anything noticing.
+    """
+    cents = int((total / _CENTS).to_integral_value(rounding=ROUND_HALF_UP))
+    denominator = sum(weights)
+    parts = [cents * weight // denominator for weight in weights]
+    largest = max(range(len(weights)), key=lambda index: (weights[index], -index))
+    parts[largest] += cents - sum(parts)
+    return [Decimal(part) * _CENTS for part in parts]
+
+
+def wobbled_baseline(daily_baseline: Decimal, window_days: int) -> tuple[Decimal, ...]:
+    """What each day of a window would have cost with no shape applied.
+
+    The same committed wobble :func:`synthetic_series` uses, exposed so a caller can
+    hand :func:`synthetic_breakdown` the baseline its own series was built from. A
+    breakdown that guessed the baseline would put a day's ordinary variation into the
+    excess and so onto the concentrated meter, inventing a small daily signal that
+    nothing in the data supports.
+    """
+    return tuple(
+        _money(daily_baseline * Decimal(_DAILY_WOBBLE[offset % len(_DAILY_WOBBLE)]))
+        for offset in range(window_days)
+    )
+
+
+def synthetic_breakdown(
+    *,
+    series: CostSeries,
+    baseline_levels: Sequence[Decimal],
+    shape: BreakdownShape,
+    provenance: Provenance,
+) -> CostBreakdown | None:
+    """Split a committed series across the committed meter mix.
+
+    Derived *from the series* rather than generated alongside it, so the two cannot
+    disagree: each day's meter amounts are a split of that day's actual total, and
+    :meth:`CostBreakdown.reconciles_with` holds by construction rather than by luck.
+
+    ``baseline_levels`` is what each day would have cost with no shape applied, which
+    the caller knows and this function will not guess -- see :func:`wobbled_baseline`.
+    That part is spread across every meter. What is left is the day's *excess*, and
+    where it goes is the whole difference between an attributable change and an
+    unattributable one: onto one meter for :attr:`BreakdownShape.CONCENTRATED`, across
+    all of them for :attr:`BreakdownShape.DIFFUSE`.
+
+    Returns:
+        The breakdown, or ``None`` for :attr:`BreakdownShape.ABSENT` -- which is
+        *unknown*, not an empty breakdown. An empty breakdown would attribute a change
+        to nothing and read as "no cause found", which is a different claim.
+    """
+    if shape is BreakdownShape.ABSENT:
+        return None
+
+    weights = [weight for _, _, weight in _METER_MIX]
+    per_meter: dict[str, list[CostPoint]] = {key: [] for key, _, _ in _METER_MIX}
+    concentrated_at = next(
+        index for index, (key, _, _) in enumerate(_METER_MIX) if key == _CONCENTRATED_METER
+    )
+
+    for offset, point in enumerate(series.points):
+        level = baseline_levels[offset] if offset < len(baseline_levels) else point.amount
+        baseline_part = min(level, point.amount)
+        excess = point.amount - baseline_part
+
+        parts = _split_cents(baseline_part, weights)
+        if excess > 0:
+            if shape is BreakdownShape.CONCENTRATED:
+                parts[concentrated_at] += excess
+            else:
+                for index, share in enumerate(_split_cents(excess, weights)):
+                    parts[index] += share
+
+        for (key, _, _), amount in zip(_METER_MIX, parts, strict=True):
+            per_meter[key].append(CostPoint(day=point.day, amount=amount))
+
+    return CostBreakdown(
+        subscription_id=series.subscription_id,
+        dimension=CostDimension.METER,
+        currency=series.currency,
+        components=tuple(
+            CostComponent(key=key, label=label, points=tuple(per_meter[key]))
+            for key, label, _ in _METER_MIX
+        ),
+        provenance=provenance,
+    )
+
+
 class _SubSpec(NamedTuple):
     """One synthetic subscription."""
 
@@ -248,6 +391,7 @@ class _SubSpec(NamedTuple):
     region: str
     daily_baseline: str
     shape: SeriesShape
+    breakdown: BreakdownShape = BreakdownShape.CONCENTRATED
 
 
 class _ResSpec(NamedTuple):
@@ -311,6 +455,8 @@ _SUBSCRIPTIONS: tuple[_SubSpec, ...] = (
         "eastus",
         daily_baseline="120.00",
         shape=SeriesShape.STEP_CHANGE,
+        # A step change with one meter behind it: the case attribution names.
+        breakdown=BreakdownShape.CONCENTRATED,
     ),
     _SubSpec(
         "00000000-0000-4000-8000-00000000a002",
@@ -320,6 +466,10 @@ _SUBSCRIPTIONS: tuple[_SubSpec, ...] = (
         "eastus",
         daily_baseline="35.00",
         shape=SeriesShape.REVERTING_SPIKE,
+        # A spike with no single cause: real, and genuinely unattributable. In
+        # the committed estate rather than only a unit test, so the sample report
+        # shows what "we cannot say which" looks like to a client.
+        breakdown=BreakdownShape.DIFFUSE,
     ),
     _SubSpec(
         "00000000-0000-4000-8000-00000000b001",
@@ -329,6 +479,7 @@ _SUBSCRIPTIONS: tuple[_SubSpec, ...] = (
         "qatarcentral",
         daily_baseline="60.00",
         shape=SeriesShape.SEASONAL,
+        breakdown=BreakdownShape.CONCENTRATED,
     ),
     _SubSpec(
         "00000000-0000-4000-8000-00000000b002",
@@ -338,6 +489,9 @@ _SUBSCRIPTIONS: tuple[_SubSpec, ...] = (
         "qatarcentral",
         daily_baseline="18.00",
         shape=SeriesShape.STEADY,
+        # No breakdown retrievable, so attribution here would have nothing to
+        # work from. Unknown, not empty.
+        breakdown=BreakdownShape.ABSENT,
     ),
 )
 
@@ -973,6 +1127,28 @@ class MockAzureProvider:
                 f"mock:costmanagement.query/daily/{subscription_id}/{window_days}d"
                 f"?shape={shape.value}"
             ),
+        )
+
+    def get_cost_breakdown(
+        self, subscription_id: str, *, window_days: int = DEFAULT_WINDOW_DAYS
+    ) -> CostBreakdown | None:
+        """The same window, split across the subscription's committed meter mix.
+
+        Derived from :meth:`get_cost_series` rather than generated beside it, so the
+        breakdown reconciles with the total it explains by construction.
+
+        Returns:
+            The breakdown, or ``None`` where the subscription's committed
+            :class:`BreakdownShape` is ``ABSENT`` -- which is unknown, not empty.
+        """
+        spec = next((s for s in _SUBSCRIPTIONS if s.subscription_id == subscription_id), None)
+        if spec is None:
+            return None
+        return synthetic_breakdown(
+            series=self.get_cost_series(subscription_id, window_days=window_days),
+            baseline_levels=wobbled_baseline(Decimal(spec.daily_baseline), window_days),
+            shape=spec.breakdown,
+            provenance=self._provenance(f"synthetic meter breakdown for {subscription_id}"),
         )
 
     def get_resource_metrics(self, resource_id: str) -> ResourceMetrics | None:
