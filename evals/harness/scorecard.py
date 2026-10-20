@@ -71,6 +71,7 @@ class DatasetResult(Frozen):
     ranking: Score
     anomaly_precision: Score = Score(name="anomaly.precision")
     anomaly_recall: Score = Score(name="anomaly.recall")
+    attribution_accuracy: Score = Score(name="attribution.accuracy")
     calibration: Score
     groundedness: Groundedness
     rendered_groundedness: Groundedness = Groundedness(judge="none")
@@ -97,6 +98,7 @@ class Scorecard(Frozen):
     ranking: Score
     anomaly_precision: Score = Score(name="anomaly.precision")
     anomaly_recall: Score = Score(name="anomaly.recall")
+    attribution_accuracy: Score = Score(name="attribution.accuracy")
     calibration: Score
     groundedness: Groundedness
     rendered_groundedness: Groundedness = Groundedness(judge="none")
@@ -158,6 +160,7 @@ class Scorecard(Frozen):
             f"    ranking concordance   {self.ranking.display()}",
             f"    anomaly precision     {self.anomaly_precision.display()}",
             f"    anomaly recall        {self.anomaly_recall.display()}",
+            f"    attribution accuracy  {self.attribution_accuracy.display()}",
             f"    savings calibration   {self.calibration.display()}",
             f"    report groundedness   {_groundedness_display(self.groundedness)}",
             f"    rendered groundedness {_groundedness_display(self.rendered_groundedness)}",
@@ -242,6 +245,8 @@ class Scorecard(Frozen):
             f"{self.anomaly_precision.denominator} reported |",
             f"| Anomaly recall | {_value(self.anomaly_recall)} | "
             f"{self.anomaly_recall.denominator} labelled change(s) |",
+            f"| Attribution accuracy | {_value(self.attribution_accuracy)} | "
+            f"{self.attribution_accuracy.denominator} labelled cause(s) |",
             f"| Savings calibration | {_value(self.calibration)} | "
             f"{self.calibration.denominator} figure(s) |",
             f"| Report groundedness | {_groundedness_display(self.groundedness)} | "
@@ -260,6 +265,13 @@ class Scorecard(Frozen):
             "object-level check says nothing about the artefact a client actually opens,",
             "and a renderer that paraphrased a sentence would break the link between the",
             "two without either check noticing.",
+            "",
+            "Attribution accuracy scores whether the *cause* was got right, and counts",
+            "**unknown** as one of the right answers. A detector that always named its",
+            "largest component would score perfectly on the attributable cases while",
+            "handing a client a confident wrong cause on every other one, which is worse",
+            "than silence -- somebody goes and investigates the wrong meter. So naming a",
+            "cause for a change that has none counts as a failure here.",
             "",
             "Anomaly precision and recall score whether *spend changed*, which is a",
             "different claim from whether a resource is wasteful. An anomaly of the wrong",

@@ -37,7 +37,7 @@ from costsentinel.domain.estate import Environment, ResourceKind, ResourceState
 from costsentinel.domain.exemption import ExemptionReason
 from costsentinel.domain.recommendations import ActionClass, ActionType
 from costsentinel.domain.signals import AnomalyKind, WasteKind
-from costsentinel.providers.mock import SeriesShape
+from costsentinel.providers.mock import BreakdownShape, SeriesShape
 
 
 class DatasetError(RuntimeError):
@@ -103,6 +103,19 @@ class SubscriptionSpec(Frozen):
         default=None,
         gt=Decimal(0),
         description="Baseline the shape is applied to. Required when a shape is given.",
+    )
+    breakdown_shape: BreakdownShape | None = Field(
+        default=None,
+        description=(
+            "How this subscription's spend is distributed across its meters, which "
+            "decides whether a change in it can be attributed. ``concentrated`` puts "
+            "every rise on one meter, which attribution should name; ``diffuse`` "
+            "spreads it, which is genuinely unattributable; ``absent`` supplies no "
+            "breakdown at all, which is unknown rather than empty. "
+            "``None`` means no breakdown, same as ``absent`` -- a dataset that says "
+            "nothing about meters is not asserting that none exist, it is simply not "
+            "a dataset about attribution."
+        ),
     )
 
     @model_validator(mode="after")
@@ -195,6 +208,28 @@ class SubscriptionLabel(Frozen):
             "is getting the finding wrong."
         ),
     )
+    expects_attribution: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the change's cause should be identifiable. ``None`` means this "
+            "label says nothing about attribution, which is right for every dataset "
+            "that is not about it.\n"
+            "\n"
+            "``False`` is a positive claim and not an absence: it says the honest "
+            "answer is *unknown*, and a detector that names a component here is wrong "
+            "in the way that matters most -- a confident wrong cause sends somebody to "
+            "investigate the wrong thing."
+        ),
+    )
+    expected_component: str | None = Field(
+        default=None,
+        description=(
+            "The component key that should be named, when one should be. Required "
+            "when ``expects_attribution`` is true, for the same reason a positive "
+            "anomaly label must name its kind: 'something was attributed' is not a "
+            "right answer."
+        ),
+    )
     adversarial: AdversarialKind | None = None
     note: str = Field(
         min_length=1,
@@ -213,6 +248,24 @@ class SubscriptionLabel(Frozen):
             msg = (
                 f"subscription {self.subscription} expects no anomaly but names a kind. "
                 f"One of the two is wrong."
+            )
+            raise ValueError(msg)
+        if self.expects_attribution and not self.expected_component:
+            msg = (
+                f"subscription {self.subscription} expects an attribution but does not "
+                f"say to what. 'Something was attributed' is not a right answer."
+            )
+            raise ValueError(msg)
+        if self.expects_attribution is False and self.expected_component:
+            msg = (
+                f"subscription {self.subscription} expects no attribution but names a "
+                f"component. One of the two is wrong."
+            )
+            raise ValueError(msg)
+        if self.expects_attribution is not None and not self.expects_anomaly:
+            msg = (
+                f"subscription {self.subscription} labels an attribution but expects no "
+                f"anomaly. There would be no change to attribute."
             )
             raise ValueError(msg)
         return self

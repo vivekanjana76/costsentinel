@@ -503,6 +503,105 @@ def anomaly_scores(
     )
 
 
+def attribution_accuracy(
+    dataset: LabelledEstate, report: ClientReport
+) -> tuple[Score, tuple[Mismatch, ...]]:
+    """How often the cause of a spend change was got right, including "unknown".
+
+    One score rather than a precision/recall pair, because attribution is not a
+    detection problem. Every anomaly gets exactly one attribution outcome and there is
+    a right answer for each, so the question is simply how many were right -- and
+    "unknown" is one of the right answers rather than an abstention.
+
+    That last point is the whole reason this metric exists in the form it does. A
+    detector that always names its largest component would score perfectly on the
+    attributable cases and would be giving a client a confident wrong cause on every
+    other one, which is worse than silence: somebody goes and investigates the wrong
+    meter. So an attribution where the label says unknown counts as a **failure**, and
+    the dataset carries a case that demands it (``AdversarialKind.SEASONAL_NON_EVENT``'s
+    sibling in spirit).
+
+    A quality metric and never a gate, for the same reason the anomaly scores are not
+    one: getting a cause wrong costs somebody an investigation, not a client's money.
+    The money guarantee is enforced where money is, which is the figure-accuracy gates.
+    """
+    labelled = [one for one in dataset.subscription_labels if one.expects_attribution is not None]
+    if not labelled:
+        return (
+            Score.unmeasured(
+                "attribution.accuracy", "this dataset labels no spend-change causes"
+            ),
+            (),
+        )
+
+    found = anomaly_by_scope(report)
+    correct = 0
+    mismatches: list[Mismatch] = []
+
+    for label in labelled:
+        subscription = dataset.estate.subscriptions[label.subscription]
+        anomaly = found.get(subscription.subscription_id)
+        if anomaly is None:
+            # The anomaly metric already counted this as a miss; counting it here too
+            # would charge one defect twice. But the attribution is still not right, so
+            # it is reported rather than quietly skipped.
+            mismatches.append(
+                Mismatch(
+                    dataset_id=dataset.dataset_id,
+                    resource=subscription.display_name,
+                    kind="attribution",
+                    expected=label.expected_component or "unknown cause",
+                    actual="no spend change was reported at all",
+                    note="nothing to attribute, because the change itself was missed",
+                )
+            )
+            continue
+
+        named = tuple(part.key for part in anomaly.attributed_components)
+
+        if label.expects_attribution:
+            if label.expected_component in named:
+                correct += 1
+            else:
+                mismatches.append(
+                    Mismatch(
+                        dataset_id=dataset.dataset_id,
+                        resource=subscription.display_name,
+                        kind="attribution",
+                        expected=label.expected_component or "?",
+                        actual=", ".join(named) or "unknown cause",
+                        note=label.note,
+                    )
+                )
+        elif named:
+            mismatches.append(
+                Mismatch(
+                    dataset_id=dataset.dataset_id,
+                    resource=subscription.display_name,
+                    kind="attribution",
+                    expected="unknown cause",
+                    actual=", ".join(named),
+                    note=(
+                        "named a cause for a change that has none. A confident wrong "
+                        "cause is worse than no cause: it sends somebody to investigate "
+                        "the wrong thing."
+                    ),
+                )
+            )
+        else:
+            correct += 1
+
+    return (
+        Score.of(
+            "attribution.accuracy",
+            correct,
+            len(labelled),
+            detail="of the labelled spend changes, how many had their cause got right",
+        ),
+        tuple(mismatches),
+    )
+
+
 def expected_total(dataset: LabelledEstate) -> Decimal | None:
     """The sum of every labelled saving, or ``None`` if any is unknown.
 
