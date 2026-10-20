@@ -184,8 +184,10 @@ def test_a_paused_sweep_survives_the_graph_being_discarded(tmp_path: Path) -> No
             ScanState(run_id="run-durable", client=CLIENT, requested_by="test"), config=config
         )
         assert interrupts_in(final)
-        queued = [one.recommendation_id for one in paused_sweep(graph, "run-durable").pending]
-    del graph, saver, final
+        first_pause = paused_sweep(graph, "run-durable")
+        assert first_pause is not None
+        queued = [one.recommendation_id for one in first_pause.pending]
+    del graph, saver, final, first_pause
 
     # --- the second process ----------------------------------------------
     with sqlite_checkpointer(db) as reopened:
@@ -200,6 +202,7 @@ def test_a_paused_sweep_survives_the_graph_being_discarded(tmp_path: Path) -> No
         state = fresh.get_state(config)
         assert ScanState.model_validate(state.values).report is not None
 
+        state_after = ScanState(run_id="run-durable", client=CLIENT)
         for recommendation_id in queued:
             state_after = resume(fresh, "run-durable", _request(recommendation_id))
 
