@@ -711,31 +711,31 @@ Foundry interop, consuming other agents -- stays in Phase 11.
 
 Milestone: *Phase 10 - The durable approval gate and the first A2A surface*.
 
-- [ ] **The approval gate as a durable LangGraph interrupt**, after the report rather
+- [x] **The approval gate as a durable LangGraph interrupt**, after the report rather
       than before it: a client always gets the document, and the pause is about the
       decisions rather than the deliverable. A sweep with nothing gated does not pause
       (#86)
-- [ ] **A typed decision record** carrying the approver, the decision, the reason, the
+- [x] **A typed decision record** carrying the approver, the decision, the reason, the
       timestamp and *the figures as they stood when the decision was made* -- an
       approver agrees to a specific saving on a specific resource, and a later reprice
       must not retroactively change what they agreed to. Written to episodic memory
       with an `AuditEvent` (#87)
-- [ ] **Approving never mutates, proved four ways:** structurally (no execution module,
+- [x] **Approving never mutates, proved four ways:** structurally (no execution module,
       nothing imports a mutating client), representationally (the approved state carries
       no executable handle), exhaustively (no decision on any action class reaches a
       mutation), and end to end (an approved deletion yields a recorded hand-off and
       zero provider calls) (#88)
-- [ ] **`costsentinel approvals list` and `approvals decide`**, resuming the correct
+- [x] **`costsentinel approvals list` and `approvals decide`**, resuming the correct
       sweep from the checkpoint in a separate process. The paused state key is the
       `run_id`, documented because a second process has to find it (#89)
-- [ ] **Durability demonstrated:** a test pauses a run, discards the in-memory graph,
+- [x] **Durability demonstrated:** a test pauses a run, discards the in-memory graph,
       reloads from the checkpoint, decides, and resumes to a completed report (#90)
-- [ ] **One read-only A2A v1 Agent Card** with a signed card and an in-process task
+- [x] **One read-only A2A v1 Agent Card** with a signed card and an in-process task
       lifecycle (submit, status, artifact), returning the report or the pending queue as
       the artifact. Opt-in server; CI exercises a fake client with no network (#91)
-- [ ] **No write capability on the advertised surface**, asserted against a vocabulary
+- [x] **No write capability on the advertised surface**, asserted against a vocabulary
       rather than an exact skill list so a skill added later has to pass it (#92)
-- [ ] ARCHITECTURE, README, SECURITY.md updated; CHANGELOG entry for v0.10.0 (#93)
+- [x] ARCHITECTURE, README, SECURITY.md updated; CHANGELOG entry for v0.10.0 (#93)
 
 **Exit criteria:** a destructive recommendation halts the graph and persists; the
 process exits; `approvals list` in a fresh process shows it; `approvals decide

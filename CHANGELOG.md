@@ -8,10 +8,107 @@ CostSentinel is pre-1.0, so the public API may change between minor versions.
 
 ## [Unreleased]
 
-Nothing yet. Next up is Phase 9b: calibration against real traffic -- egress detection,
-red-teaming a real backend, a seasonally-aware baseline, and replacing the thresholds
-with figures real data supports. None of it can be closed without a real estate, a real
-key and real history, which is why it is its own phase.
+Nothing yet. Next up is Phase 10b: the approval adapters -- Teams, Slack, a
+signature-verified webhook, approver authorisation, callback deduplication and the
+escalation policy. All of it needs recorded payloads from real workspaces and two new
+dependencies, which is why it is its own phase.
+
+## [0.10.0] - 2026-10-21
+
+Phase 10: the durable approval gate, and the first A2A surface. The approval seam has
+existed since Phase 1 and the supervisor has routed `REQUIRE_APPROVAL` since Phase 2 --
+always to the report author, always with the honest reason that nothing had an execution
+path anyway. The route existed and halted nothing. It halts now, durably, and approving
+still cannot change anything in a cloud.
+
+### Added
+
+- **The approval gate as a durable LangGraph interrupt.** A sweep with gated actions
+  stops at a checkpoint, the process may exit, and a decision recorded days later from
+  another process resumes the same run. The gate runs *after* the report author (D119):
+  a client waiting on their cost review must not be waiting on their own approval of the
+  things in it, and the document is correct and complete either way.
+
+- **`costsentinel approvals list` and `approvals decide`.** A pause nobody can find is
+  not durable, it is just slow. The first enumerates the checkpointer's threads and
+  prints what each paused sweep is waiting on, with the figures the report showed; the
+  second locates a recommendation across every paused sweep and resumes the right one.
+  An operator decides about a *recommendation*, not about a sweep.
+
+- **A decision record that freezes what the approver was shown.** `ApprovalRecord`
+  carries the approver, the decision, the reason, the timestamp and `FrozenFigures` --
+  the saving, the annual figure and the current cost as *strings*, copied from the
+  report. An approver agrees to a specific saving on a specific resource at a moment in
+  time, and a re-scan next month that reprices it must not retroactively change what
+  they agreed to.
+
+- **`Decision.DEFERRED`, which resolves nothing.** The item stays in the queue and the
+  sweep stays paused, and the deferral count is carried so an operator can see that
+  something keeps being postponed -- itself a decision nobody wrote down. "Ask me next
+  week" and "no" lead to different conversations with a client. There is still no member
+  meaning "nobody answered, so proceed".
+
+- **Approving never mutates, proved four ways** (D118): structurally (nothing imports a
+  mutating client, calls a mutating SDK method, or is named as if it executed anything),
+  representationally (no approval type carries a callable, handler, command or
+  endpoint), exhaustively (all twelve decision-by-action-class combinations, including
+  approving a `block`, land in a recorded state and the only authorisation authorises a
+  *person*), and end to end (approving the mock estate's disk **deletion** makes exactly
+  zero provider calls, counted by a wrapping spy). `ApprovalState` has no `EXECUTED`
+  member, and the audit trail says `executed_by_costsentinel: false -- no execution path
+  exists` rather than leaving it to a docstring.
+
+- **A read-only A2A Agent Card and task lifecycle** (D117), moved forward from Phase 11
+  because the approval queue is the first thing another agent would have a reason to ask
+  about. Three skills -- request a cost review, fetch the current findings, fetch the
+  pending-approval queue -- and no fourth branch to add a write to. The advertised
+  surface is checked against a *vocabulary* of mutating verbs rather than an allowed
+  list, so a skill added later has to pass the check or fail the build. Signed with a
+  detached HMAC over canonical JSON and labelled as that rather than as a JWS (D121).
+  The server is off by default; the card is published either way.
+
+### Fixed
+
+- **The checkpoint allowlist had never been enforced.**
+  `BaseCheckpointSaver.with_allowlist` merges into the serializer's existing allowlist,
+  and the default is the literal `True` -- permit everything, warn. The merge
+  short-circuits on that, so the list derived from `domain.__all__` was applied to
+  nothing and the claim that a checkpoint could not instantiate an arbitrary class was
+  false. LangGraph's "Deserializing unregistered type ... will be blocked in a future
+  version", printed once per domain type on every resume, was it saying so.
+
+  Fixing it exposed the second half: **nine domain types were missing from the
+  exports**, so an enforcing allowlist would have refused to resume any sweep containing
+  an anomaly -- `ReportAnomaly` since Phase 7, the breakdown and attribution types since
+  Phase 9. The two defects had been hiding each other. A test now walks the domain
+  package and fails on any type the exports have forgotten.
+
+- **The gate's audit events were being discarded**, returned under `"audit_events"`
+  while the state field is `"audit"`. `NodeUpdate` is `dict[str, Any]`, so nothing
+  caught it. The pause worked, the decision was recorded, and the audit trail was
+  silently missing -- the worst way for a governance feature to fail, because the
+  absence is invisible in exactly the artefact somebody would check. A test now walks
+  every returned node update in the agents package and fails on any key that is not a
+  `ScanState` field.
+
+- **An infinite loop in the supervisor**, found by a hanging test. Making the report
+  author return to the supervisor -- which a sweep with gated items needs -- turned every
+  earlier branch that routes *to* the report author into a loop. The supervisor now names
+  its post-report phase explicitly and checks it first. A second, related disagreement:
+  the supervisor counted every gated classification as pending while the gate only
+  queues what it can show an approver, so they share one definition now.
+
+### Changed
+
+- **The adapters became Phase 10b.** Teams, Slack, the signature-verified webhook,
+  approver authorisation, callback deduplication and the escalation policy all need
+  recorded payloads from real workspaces and two new dependencies. Bundling them here
+  would have meant a phase that could not be closed without a Slack workspace. The
+  interrupt, the decision record and the CLI gate are the contract they implement.
+
+- `RunMetrics` gains `paused_for_approval` and `pending_approvals`. A paused sweep is a
+  successful sweep that is not finished, which before this phase was not one of the two
+  available outcomes.
 
 ## [0.9.0] - 2026-10-20
 
@@ -753,7 +850,8 @@ Phase 1: the scaffold and a thin vertical slice.
 - Landed as an honest commit series dated when it was actually committed; it predates
   the issue-driven workflow and has no backing issues.
 
-[Unreleased]: https://github.com/vivekanjana76/costsentinel/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/vivekanjana76/costsentinel/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.6.0...v0.7.0
