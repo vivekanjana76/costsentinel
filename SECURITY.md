@@ -253,6 +253,67 @@ The ceiling is checked before each call against the running total rather than
 predicted, so it can be overshot by at most one call. That is the right way
 round: the alternative is a missing section because an estimate was pessimistic.
 
+### The approval gate, and what approving does not do
+
+A sweep that proposes a gated action halts at a durable checkpoint and exits. The
+decision is made later:
+
+```bash
+costsentinel approvals list
+costsentinel approvals decide <recommendation-id> --approve --reason "..." --approver "..."
+```
+
+**An approval is a hand-off, not an execution.** It moves the item to `handed_off`,
+writes a record naming the approver, the reason, the timestamp and the figures they were
+shown, and emits an audit event that states in its own detail that CostSentinel did not
+and cannot perform it. A person carries the action out by hand.
+
+That is structural, and it is asserted four ways rather than left as a property of what
+has not been built yet:
+
+| Proof | What it checks |
+|---|---|
+| Structural | No module imports an `azure.mgmt` client, calls a mutating SDK method, or is named as if it executed anything |
+| Representational | No approval type carries a handler, callback, command, endpoint or anything typed `Callable` |
+| Exhaustive | All twelve combinations of decision and action class -- including approving a `block` -- land in a recorded state, and the only authorisation authorises a person |
+| End to end | Approving the mock estate's disk **deletion** makes zero provider calls, counted |
+
+`ApprovalState` has no `EXECUTED` member. There is no execution for a state machine to
+describe.
+
+A decision arriving from outside the graph is untrusted input and is validated like
+one. It may carry only a recommendation id, a decision, an approver and a reason --
+never a resource, an action, a class or a figure, which are copied from the queued item.
+A malformed or hostile request can therefore fail to decide anything and cannot decide
+something other than what it appears to.
+
+**Absence of a decision is never authorisation.** The `Decision` enum has no member
+meaning "timed out, therefore approved", and the gate has no path to one: a sweep with
+nothing recorded simply stays halted. `deferred` is a *recorded* answer that resolves
+nothing and leaves the item in the queue.
+
+### Optional: the A2A surface
+
+```bash
+A2A_ENABLED=true
+A2A_URL=https://costsentinel.internal.example
+A2A_SIGNING_KEY=<your own key>
+```
+
+Off by default. When enabled it serves one Agent Card at
+`/.well-known/agent-card.json` and three **read-only** skills: request a cost review,
+fetch the current findings, fetch the pending-approval queue. There is no advertised
+skill that decides an approval, and no route that is a PUT, PATCH or DELETE; a caller
+asking for `approvals.decide` is refused with the advertised list.
+
+The card carries a detached HMAC-SHA256 over its canonical JSON. This is **not** a JWS,
+which is what A2A v1 describes -- a JWS needs an asymmetric key and a canonicalisation
+library, and adding either would put an unverified dependency on the path CI gates. In
+mock mode the card is signed with a committed synthetic key so the signature is actually
+verified in CI; in real mode with no `A2A_SIGNING_KEY` the card is **unsigned** rather
+than signed with a published key, because a forgeable signature invites a consumer to
+trust it.
+
 ---
 
 ## 6. What CostSentinel does with the data it reads

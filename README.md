@@ -84,13 +84,15 @@ reaches it.
 | Ranking weights | Deterministic weighted composite of savings, safety and confidence. The model narrates the order; it cannot change it |
 | Observability | Structured JSON logs correlated by `run_id`; tracing seam with a no-op default; token, cost and latency per run |
 | Governance | Every action classified `allow` / `review` / `block`. **No execution path exists** |
+| Approval gate | A gated action halts the sweep at a durable checkpoint (Phase 10). The process may exit; a decision recorded later from another process resumes it. Approving hands the action to a person and records the hand-off -- proved four ways that it cannot mutate anything |
+| A2A | One read-only Agent Card (Phase 10): request a review, fetch findings, fetch the pending-approval queue. Signed, off by default, no advertised write |
 | Exemption | Deterministic tag reading (Phase 6): a resource that is idle or stale by design is surfaced with its reason and excluded from the actionable savings total |
 | Spend anomalies | Robust z-score with a weekday profile over the daily cost series (Phase 7). Spikes and level shifts distinguished; a gap in the series is unknown, not zero; an anomaly never reaches an action |
 | Ranking | An unquantified saving ranks below every quantified one, as a tier rather than a weight (Phase 7) |
 | Reporting | Markdown renderer with five sections (Phase 8); every number in the document must trace to a figure the pipeline produced, as a blocking gate. PDF behind an optional `reports` extra |
 | Spend attribution | Deterministic arithmetic over a per-meter cost breakdown (Phase 9): the component whose share of the change exceeds its share of the spend. A proportional rise is reported as having no single cause |
 | Model resilience | Optional fallback to a secondary backend and an optional per-sweep token ceiling (Phase 9). Both opt-in; either one degrades the prose and no figure, finding or classification |
-| Entry points | `costsentinel scan`, `costsentinel report` and `POST /scan` |
+| Entry points | `costsentinel scan`, `report`, `approvals list|decide`, `POST /scan`, and the opt-in A2A endpoint |
 
 ### What Phase 1 contained
 
@@ -166,6 +168,48 @@ copy a figure and may never compose one, so a rounded total or a sum computed in
 layout fails the build. Model-written sentences are quoted verbatim and graded for
 groundedness in the rendered text, because grading the internal object says nothing
 about the document unless the document quotes it.
+
+### Approving something
+
+A sweep that proposes a `review` or `block` action does not finish. It writes the
+report, halts at a durable checkpoint and exits, so the decision can be made later --
+from a different terminal, on a different day.
+
+```bash
+# What is waiting, with the figures the report showed
+uv run costsentinel approvals list
+
+# Decide one item; the sweep resumes from where it stopped
+uv run costsentinel approvals decide rec-orphdisk-5a876f8bb6 \
+  --approve --reason "confirmed orphaned; platform team will delete it" \
+  --approver "you@example.com"
+```
+
+Three answers. `--approve` hands the action to a person and records the hand-off.
+`--reject` resolves it. `--defer` records "not now" and **leaves it in the queue**,
+which is the difference between it and a rejection -- and the queue shows how many
+times something has been deferred, because an item that keeps being postponed is itself
+a decision nobody wrote down. A reason is mandatory on all three.
+
+**Approving does not apply anything.** There is no execution path in CostSentinel, and
+that is structural rather than unfinished: no module imports a mutating Azure client,
+no approval record carries anything callable, no combination of decision and action
+class reaches a mutation, and approving the mock estate's disk *deletion* makes
+measurably zero provider calls. Four separate tests, because one proof is a claim.
+
+### Talking to another agent
+
+One read-only A2A v1 Agent Card, served at `/.well-known/agent-card.json` when
+`A2A_ENABLED=true`. Three skills: request a cost review, fetch the current findings,
+fetch the pending-approval queue. There is no advertised skill that decides an approval
+and none that changes a resource -- and the test that holds that line matches the
+advertised ids, names, tags and examples against a vocabulary of mutating verbs, so a
+skill added later has to pass it.
+
+The card is published whether or not the endpoint is enabled, so a consumer can
+discover what is available rather than probe for it, and it carries a detached
+HMAC-SHA256 over its canonical JSON. That is not a JWS, which is what A2A v1 describes
+and what a real deployment should use; it is labelled for what it is.
 
 ### When the model is unavailable
 
@@ -366,7 +410,7 @@ src/costsentinel/
   reports/           Markdown and PDF rendering (Phase 8)
   observability/     structured logging + the tracing seam
   tools/             read-only MCP Azure tool server
-  a2a/               Agent Cards (Phase 11)
+  a2a/               the read-only Agent Card and task lifecycle (Phase 10)
   api/               FastAPI app
   cli.py             CLI entry point
 scripts/             refresh_prices.py (manual, never CI)

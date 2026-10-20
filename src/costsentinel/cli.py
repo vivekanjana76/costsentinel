@@ -238,10 +238,7 @@ def build_parser() -> argparse.ArgumentParser:
     decision_group.add_argument(
         "--approve",
         action="store_true",
-        help=(
-            "A person may carry this out by hand. CostSentinel will not and cannot "
-            "perform it."
-        ),
+        help=("A person may carry this out by hand. CostSentinel will not and cannot perform it."),
     )
     decision_group.add_argument(
         "--reject", action="store_true", help="Do not do this. Resolves the item."
@@ -918,9 +915,7 @@ def describe_queue(sweeps: Sequence[PausedSweep]) -> str:
 
     lines: list[str] = []
     total = sum(len(sweep.pending) for sweep in sweeps)
-    lines.append(
-        f"{total} action(s) awaiting a decision across {len(sweeps)} paused sweep(s)."
-    )
+    lines.append(f"{total} action(s) awaiting a decision across {len(sweeps)} paused sweep(s).")
     lines.append("")
     for sweep in sweeps:
         lines.append(f"{sweep.client}  [sweep {sweep.run_id}]")
@@ -1002,6 +997,7 @@ def run_approvals(args: argparse.Namespace, settings: Settings) -> int:
                 f"{len(remaining.pending)} action(s). Run `approvals list` to see them."
             )
         return 0
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point.

@@ -227,9 +227,7 @@ class TaskStore:
             payload={
                 "reports": [report.model_dump(mode="json") for report in result.reports],
                 "clients": list(result.clients),
-                "awaiting_approval": sum(
-                    len(report.approval_queue) for report in result.reports
-                ),
+                "awaiting_approval": sum(len(report.approval_queue) for report in result.reports),
                 "note": (
                     "Read-only. Nothing in this report has been applied, and nothing "
                     "in it can be: CostSentinel has no execution path."
