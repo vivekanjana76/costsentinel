@@ -414,6 +414,20 @@ def summarise(result: ScanResult) -> str:
     return "\n\n".join([header, *(summarise_report(report) for report in result.reports)])
 
 
+def _fallback_text(settings: Settings) -> str:
+    """How the configuration's fallback reads in a config dump."""
+    if settings.llm_fallback_backend is None:
+        return "none (a model failure costs the prose and nothing else)"
+    return settings.llm_fallback_backend.value
+
+
+def _budget_text(settings: Settings) -> str:
+    """How the configuration's token ceiling reads in a config dump."""
+    if settings.llm_token_budget is None:
+        return "uncapped"
+    return f"{settings.llm_token_budget} token(s) per sweep; prose stops, figures do not"
+
+
 def _config_text(settings: Settings) -> str:
     credentials = (
         "none required (mock provider, fake model)"
@@ -430,6 +444,8 @@ def _config_text(settings: Settings) -> str:
         [
             f"mode                 {settings.mode.value}",
             f"llm_backend          {settings.llm_backend.value}",
+            f"llm_fallback         {_fallback_text(settings)}",
+            f"llm_token_budget     {_budget_text(settings)}",
             f"mock_seed            {settings.mock_seed}",
             f"state_dir            {settings.state_dir}",
             f"checkpoint_path      {settings.checkpoint_path}",
@@ -463,6 +479,8 @@ def real_run_banner(settings: Settings, scope: Sequence[str]) -> str:
         f"  subscriptions        {_scope_text(scope)}",
         f"  client tag           {settings.azure_client_tag}",
         f"  llm backend          {settings.llm_backend.value}",
+        f"  llm fallback         {_fallback_text(settings)}",
+        f"  llm token budget     {_budget_text(settings)}",
         "  permissions needed   Reader, Cost Management Reader",
         "  operations performed  read only; this build has no write path at all",
         "",

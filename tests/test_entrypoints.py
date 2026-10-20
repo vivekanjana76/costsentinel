@@ -321,10 +321,19 @@ def test_scan_summary_names_the_wasteful_resources(
         "sql-dev-sandbox",
         "nw-compute-dsv5-3y",
         "app-portal-plan",
+        # Oversized with no same-family target, so a real finding with an honestly
+        # unknown saving. Named here because the summary must not quietly drop a
+        # finding it cannot price (#76).
+        "vm-core-api-02",
     ):
         assert name in out
     assert "Awaiting approval:" in out
-    assert "10 finding(s)" in out
+    assert "11 finding(s)" in out
+    # Exempt, so surfaced with its cost and its reason rather than suppressed
+    # (Phase 6), and carrying no saving.
+    assert "vm-core-dr-standby" in out
+    assert "exempt: disaster_recovery" in out
+    assert "costs 140.16 USD/month" in out
 
 
 def test_config_command_reports_the_active_backends(
@@ -405,7 +414,11 @@ def test_post_scan_narrowed_to_one_client(client: TestClient) -> None:
     assert len(body["reports"]) == 1
     report = body["reports"][0]
     assert report["client"] == CLIENT_NORTHWIND
-    assert report["totals"]["findings_count"] == 8
+    # Eight priced plus one that cannot be priced; the exempt resource is not a
+    # finding at all (#76).
+    assert report["totals"]["findings_count"] == 9
+    assert report["totals"]["unpriced_findings_count"] == 1
+    assert report["totals"]["exempt_findings_count"] == 1
     assert report["totals"]["projected_monthly_savings"]["amount"] == "1421.97"
     assert {f["resource_name"] for f in report["findings"]} == {
         "vm-analytics-01",
@@ -416,7 +429,14 @@ def test_post_scan_narrowed_to_one_client(client: TestClient) -> None:
         "snap-web-01-pre-upgrade",
         "snap-analytics-baseline",
         "pip-legacy-api",
+        "vm-core-api-02",
     }
+    # The savings total is unchanged by either addition, which is the whole claim
+    # those two sections make: a flagged-but-exempt resource and an unquantifiable
+    # finding are both real and neither is money on the table.
+    unpriced = [f for f in report["findings"] if f["monthly_saving"]["amount"] is None]
+    assert [f["resource_name"] for f in unpriced] == ["vm-core-api-02"]
+    assert [i["resource_name"] for i in report["exempt_findings"]] == ["vm-core-dr-standby"]
 
 
 def test_post_scan_findings_are_all_gated(client: TestClient) -> None:

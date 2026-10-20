@@ -923,7 +923,154 @@ client's estate. Every other rendering goes to a gitignored directory.
 
 ---
 
-## 12. Evaluation approach
+## 12. Attribution, and what happens when the model is not there
+
+Implemented in Phase 9. Two independent pieces of work with one thing in common: both
+are about the system being useful when something is missing -- a cause that cannot be
+identified, a backend that cannot be reached, a budget that has run out.
+
+### Attribution: what accounted for a change
+
+Phase 7 answered *did spend change?* and named a scope. The obvious next question is
+*what changed?*, and the Phase 7 roadmap recorded it as needing a real estate, because
+"a real cost series broken down by resource" is not something the synthetic series
+modelled. That read the dependency backwards (D112). A breakdown is a shape on the
+**provider seam**, and a seam that only exists once a real tenant is connected is a
+seam nobody can test. So the synthetic series gained a seeded per-meter breakdown and
+attribution is scored against it like every other detector.
+
+`CostBreakdown` is a daily series split along a `CostDimension` -- resource, meter or
+service. The mock breakdown is derived *from the total series* rather than generated
+beside it, so the two cannot disagree: each day's meter amounts are a split of that
+day's actual total, in whole cents with the remainder to the largest meter, and
+`reconciles_with` holds by construction. That matters more than it looks: a breakdown
+short of its own total by a few percent would still rank its components plausibly and
+attribute a change to whichever happened to be largest, and nothing downstream could
+tell.
+
+The arithmetic is two windows and a subtraction. The observed window is the anomaly's
+own; the baseline window is the fourteen days before it. Each component's mean daily
+spend over each window gives its *contribution*, and the contributions sum to the whole
+change exactly. **Means rather than the detector's medians**, deliberately: a sum of
+medians does not equal the median of sums, so a median-based split would not add up to
+the change it claims to explain, and the reconciliation check would be impossible.
+
+#### A cause is a component whose share of the change exceeds its share of the spend
+
+The rule that does the work, and it was found by running the detector over the
+committed estate rather than reasoned out in advance (D113). The first version asked
+only "does a small set of components account for most of the change?", and the
+committed *diffuse* subscription passed it: with a 40/25/20/10/5 meter mix the top two
+always sum to 65%, which clears any threshold low enough to be useful. The arithmetic
+was right and the answer was wrong -- every meter had risen by exactly its own share,
+which is the signature of a proportional change and not of a cause.
+
+Disproportion separates the two because of what each case looks like arithmetically. In
+a proportional rise every component's share of the change equals its share of the
+baseline, so every lift is zero and nothing is a candidate. In a concentrated rise the
+culprit's share of the change (100%) dwarfs its share of the baseline (20%). That gap
+is the difference between "the SQL meter caused this" and "your biggest meter is your
+biggest meter".
+
+#### Four ways to honestly fail
+
+`UnattributedReason` is a closed enum and each member is a different thing to tell a
+client:
+
+| Reason | What it means | Will it change? |
+| --- | --- | --- |
+| `no_breakdown` | Nothing was retrievable for this scope | Maybe, tomorrow |
+| `does_not_reconcile` | The components do not sum to their own total | A data fault |
+| `diffuse` | Nothing single accounts for the change | No -- it is the finding |
+| `insufficient_history` | Too few days on one side to compare | Yes, with time |
+
+`diffuse` is a real finding rather than a gap, and the report says so: look for
+something affecting the whole environment rather than for one resource. Collapsing it
+into a generic "cause unknown" would lose that, which is why the statements are written
+out per reason instead of composed.
+
+An unattributed outcome carries **no components at all**. A ranked list that explains
+nothing in particular reads as an answer, so the model refuses that combination along
+with an attributed outcome that names nothing.
+
+The attribution metric counts unknown as one of the **right answers**. A detector that
+always named its largest component would score perfectly on the attributable cases
+while handing a client a confident wrong cause on every other one -- worse than
+silence, because somebody goes and investigates the wrong meter. So the labelled
+dataset carries a case that demands unknown, and naming a cause there counts as a
+failure.
+
+D106 holds one layer on: `CostAttribution` has no action, no action class and no
+saving, and the field set is asserted so one added later fails a test rather than
+passing unnoticed.
+
+#### What the real provider does
+
+`AzureLiveProvider.get_cost_breakdown` returns `None`, and that is a declaration rather
+than a gap. Azure's Cost Management API can group daily actuals by meter, but it is a
+different query from the one behind `get_cost_series`, with its own edge cases around
+meters that appear and vanish mid-window, and it cannot be verified against anything
+but a real tenant -- shipping it unverified would mean a client's first attributed
+spend change was also the first time the query had ever run. So attribution degrades
+the way every other unknown here does: no breakdown means the cause is reported as
+unknown with the reason stated. Phase 9b, with the real-tenant verification it needs.
+
+### Prose degrades and nothing else does
+
+Until this phase a model failure lost the whole sweep. The CLI caught `LLMError` and
+exited, which meant a transient 503 from one backend threw away every deterministic
+finding, every savings figure and the approval queue -- none of which the model
+produced or could have produced.
+
+The premise behind that behaviour was that a report without the model would be "missing
+half its findings". It is missing none of them. Every figure, classification, finding,
+rank and queue entry is arithmetic over provider data; the model narrates those facts
+and cannot change one of them, because `MoneyAmount` refuses LLM provenance and every
+response is a prose-only contract. So the old behaviour discarded a complete, correct
+report because the optional commentary on it was unavailable, which is the worse
+failure by a wide margin (D115).
+
+Two layers sit between the agents and a backend, composed outwards:
+
+- **`FallbackLLM`** retries a failed call on the secondary backend, and records which
+  backend failed, which served, and why. A silent fallback would mean a client's report
+  was narrated by a model nobody chose. A budget cutoff is deliberately *not* retried:
+  a spend ceiling is not a backend problem, and trying the other backend would spend
+  past the ceiling that had just been reached.
+- **`BudgetedLLM`** caps tokens per sweep. The budget wraps the fallback rather than the
+  reverse, so the ceiling applies to the run as a whole.
+
+The ceiling is a pre-call check against the running total rather than a prediction of
+the next call's size, so it can be overshot by one call. That is the right way round for
+this system: predicting would refuse calls that would have fit, and a report with a
+missing section because an estimate was pessimistic is the worse outcome. The overshoot
+is bounded and recorded. A backend that reports no usage is uncapped, which is the
+honest consequence of not knowing -- charging it a guessed figure would make the
+ceiling fictional.
+
+`optional_prose` is the single place the degradation rule lives, so it is one reviewed
+decision rather than four copies of one, and a test asserts that every `llm.structured`
+call in the agents package goes through it. Each call site already had a deterministic
+fallback -- the analyst restates the detector's evidence, the planner falls back to the
+policy store's rationale, the ranking is already computed -- so an absent model is the
+same case as a model that skipped everything, handled since Phase 2.
+
+**The gap is stated, not blank** (D116). A report with an empty executive summary reads
+as "nothing worth saying", which is both wrong and the more flattering of the two
+readings, so it reads "Narrative unavailable (token budget reached)" and the processing
+notes say the figures are unaffected -- the part a client would otherwise have no way
+to establish.
+
+The invariant is tested by building the same estate's report three ways -- prose from
+the primary, prose from the secondary after a fallback, and none at all -- and comparing
+every deterministic field: each finding's rank, class, confidence, saving, basis,
+preconditions and evidence, every exempt item, every anomaly figure and attribution, and
+the whole approval queue. Not a spot-check of the headline, which a cutoff that dropped
+one queue entry would pass.
+
+---
+
+## 13. Evaluation approach
 
 Implemented in Phase 5. Evals are a deliverable, not an afterthought, because "did we
 find the waste" and "did we gate the dangerous thing" are the product's actual claims
@@ -1071,7 +1218,7 @@ reproducible.
 
 ---
 
-## 13. MCP and A2A boundaries
+## 14. MCP and A2A boundaries
 
 These are two different seams and are deliberately not conflated.
 
@@ -1138,7 +1285,7 @@ both ways is defined once in the domain layer and adapted at both edges.
 
 ---
 
-## 14. Non-functional posture
+## 15. Non-functional posture
 
 - **Zero-credential by default.** `MODE=mock` is the default. CI never has secrets or
   network access to a cloud or LLM provider.
@@ -1150,7 +1297,7 @@ both ways is defined once in the domain layer and adapted at both edges.
 
 ---
 
-## 15. Decision log
+## 16. Decision log
 
 Each entry records the decision, the alternatives considered, and why.
 
@@ -2107,3 +2254,56 @@ source of truth and reduces the PDF's correctness to one property that can be as
 without a pixel comparison: the set of digit runs on the page equals the set in the
 Markdown. `reportlab` is an optional extra CI does not install, so the blocking gate
 never depends on a C-extension toolchain.
+
+**D112. Attribution is built against a synthetic breakdown, not deferred to a real
+estate.** *Alternatives:* keep the Phase 7 position that attribution "needs a real cost
+series broken down by resource" and wait. *Why:* that reads the dependency backwards. A
+breakdown is a shape on the provider seam, and a seam that only exists once a real
+tenant is connected is a seam nobody can test -- its first exercise would be against a
+client's data. Real history will calibrate the thresholds; it does not define the
+arithmetic. The same argument split Phase 9b off: fallback logic and a token ceiling can
+be *built* with fakes even though they cannot be *calibrated* without real traffic, and
+D103 had treated both halves as belonging to the second.
+
+**D113. A cause is a component whose share of the change exceeds its share of the
+spend.** *Alternatives:* rank components by contribution and name the leading set that
+accounts for most of the change -- which is what the first implementation did. *Why:* it
+passed on the committed diffuse subscription, where the top two meters of a 40/25/20/10/5
+mix always sum to 65%. Every meter had risen by exactly its own share, so the arithmetic
+was right and the answer was wrong: a proportional change has no single cause, and naming
+its largest component is true about the numbers and false about the world. Disproportion
+distinguishes them cleanly -- a proportional rise gives every component a lift of zero,
+and a concentrated one gives the culprit 100% against a 20% baseline share. The margin
+(0.10) is a product judgement and the one most worth calibrating in Phase 9b.
+
+**D114. Unknown is one of attribution's right answers, and is scored as one.**
+*Alternatives:* score only the cases where a cause exists, treating unknown as an
+abstention. *Why:* a detector that always named its largest component would score
+perfectly under that rule while handing a client a confident wrong cause on every
+proportional change -- which is worse than silence, because somebody goes and
+investigates the wrong meter. So naming a cause for a change that has none counts as a
+failure, the labelled dataset carries a case that demands unknown, and the four reasons
+are distinct because "we could not retrieve a breakdown" and "nothing single caused
+this" are different things to tell a client.
+
+**D115. A model failure costs the prose and nothing else.** *Alternatives:* keep the
+Phase 2 behaviour, where an `LLMError` propagated and failed the sweep on the grounds
+that a model outage must not yield a report missing half its findings. *Why:* the premise
+was false. A report built without the model is missing none of its findings -- every
+figure, classification, rank and queue entry is arithmetic over provider data that the
+model never touched, and the contracts are prose-only by construction. So the old
+behaviour discarded a complete, correct report because the optional commentary on it was
+unavailable. Degradation lives in one helper rather than at four call sites, asserted by
+a test that counts model calls against wrapped calls, and the invariant is proved by
+comparing every deterministic field of three reports built with prose, with fallback
+prose, and with none.
+
+**D116. A missing narrative is stated, never blank.** *Alternatives:* leave the
+executive summary empty, which is less code and arguably more honest about having
+nothing to say. *Why:* it is not more honest, because a client cannot tell an empty
+narrative from a degraded one, and the available reading -- "CostSentinel found nothing
+worth commenting on" -- is both wrong and the more flattering of the two. So the passage
+reads "Narrative unavailable (token budget reached)" and a processing note states that
+the figures are unaffected, which is the claim a client would otherwise have no way to
+establish. The same reasoning as D109's unattributed-anomaly row: an absence that looks
+like an answer is worse than a stated absence.

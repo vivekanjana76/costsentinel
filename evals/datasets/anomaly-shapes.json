@@ -13,7 +13,8 @@
         "environment": "production",
         "region": "eastus",
         "series_shape": "step_change",
-        "daily_baseline": "220.00"
+        "daily_baseline": "220.00",
+        "breakdown_shape": "concentrated"
       },
       {
         "subscription_id": "00000000-0000-4000-8000-0000000e0005",
@@ -21,7 +22,8 @@
         "environment": "development",
         "region": "eastus",
         "series_shape": "reverting_spike",
-        "daily_baseline": "48.00"
+        "daily_baseline": "48.00",
+        "breakdown_shape": "diffuse"
       },
       {
         "subscription_id": "00000000-0000-4000-8000-0000000e0006",
@@ -29,7 +31,8 @@
         "environment": "production",
         "region": "eastus",
         "series_shape": "seasonal",
-        "daily_baseline": "75.00"
+        "daily_baseline": "75.00",
+        "breakdown_shape": "concentrated"
       },
       {
         "subscription_id": "00000000-0000-4000-8000-0000000e0007",
@@ -37,7 +40,8 @@
         "environment": "production",
         "region": "eastus",
         "series_shape": "steady",
-        "daily_baseline": "90.00"
+        "daily_baseline": "90.00",
+        "breakdown_shape": "absent"
       }
     ],
     "resources": [
@@ -94,13 +98,16 @@
       "subscription": 0,
       "expects_anomaly": true,
       "expected_kind": "level_shift",
-      "note": "Daily spend sits at its baseline for twenty-three days and then at 1.75 times that level for the last seven, and stays there. That is a level shift rather than a spike: the run rate moved and did not come back, which is what a workload landing, a resize or something left running looks like. The distinction matters because it decides where a client looks -- 'your run rate is now higher' and 'something ran last Tuesday' are different investigations, and reporting the wrong one wastes the client's time rather than saving it."
+      "note": "Daily spend sits at its baseline for twenty-three days and then at 1.75 times that level for the last seven, and stays there. That is a level shift rather than a spike: the run rate moved and did not come back, which is what a workload landing, a resize or something left running looks like. The distinction matters because it decides where a client looks -- 'your run rate is now higher' and 'something ran last Tuesday' are different investigations, and reporting the wrong one wastes the client's time rather than saving it. The rise lands entirely on one meter, so attribution should name sql-database-vcore: its share of the change (100%) far exceeds its share of the baseline spend (20%), which is what makes it a cause rather than merely the biggest line.",
+      "expects_attribution": true,
+      "expected_component": "sql-database-vcore"
     },
     {
       "subscription": 1,
       "expects_anomaly": true,
       "expected_kind": "spike",
-      "note": "One day at four times the baseline, four days before the end of the window, with spend back to normal on either side. A spike: something ran once. Deliberately not the final day of the window, because a spike on the last day cannot be seen to revert and 'it spiked and came back' is the claim this case exists to make. Expected as a spike and not a level shift -- a single day cannot move a week's median, and a detector that called this a level shift would be telling the client their run rate had changed when it had not."
+      "note": "One day at four times the baseline, four days before the end of the window, with spend back to normal on either side. A spike: something ran once. Deliberately not the final day of the window, because a spike on the last day cannot be seen to revert and 'it spiked and came back' is the claim this case exists to make. Expected as a spike and not a level shift -- a single day cannot move a week's median, and a detector that called this a level shift would be telling the client their run rate had changed when it had not. The spike is spread across every meter in proportion to what each already cost, so no component accounts for it and the honest answer is that we cannot say which one did. This is the adversarial attribution case: the largest meter is still the largest, and a detector that named it would be right about the arithmetic and wrong about the world.",
+      "expects_attribution": false
     },
     {
       "subscription": 2,

@@ -1,6 +1,6 @@
 # CostSentinel — Roadmap
 
-**Current phase: 8** — client reporting.
+**Current phase: 9** — anomaly attribution and real-model hardening.
 
 Phases are sequential. Do not start work in a later phase before the current phase
 is complete and its exit criteria are met. If an idea arrives mid-phase, record it
@@ -8,7 +8,7 @@ under "Parked ideas" at the bottom and stay on the current slice.
 
 Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
-> **Phase order has changed three times.** After Phase 1 the specialist graph and the
+> **Phase order has changed four times.** After Phase 1 the specialist graph and the
 > MCP Azure tool server were swapped, because the graph is entirely mock-runnable and
 > the MCP server is the first thing needing real credentials (ARCHITECTURE.md D34).
 > After Phase 2, statistical cost-anomaly detection and real-model hardening were
@@ -85,6 +85,23 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 > never had to represent (flagged-but-exempt, spend anomalies) plus a ranking tier that
 > changes what order a reader sees; the longer that waits the more unguarded surface
 > accumulates behind a guarantee that stops one layer short of the output.
+>
+> In Phase 9, **the part that genuinely needs real traffic was split off as Phase 9b**
+> rather than left as an open tail. The split that created Phase 9 (D103) separated
+> work that could be *scored* offline from work that could not, and treated both halves
+> of real-model hardening as belonging to the second. That was half right. Fallback
+> logic and a token budget can be built and tested with fakes -- a primary that raises,
+> a secondary that serves, deterministic token counts crossing a ceiling -- so they
+> belong in a phase that can be closed. Calibration against real traffic, red-teaming a
+> real model and a baseline that needs real seasonal history cannot be faked at all, and
+> keeping them attached would mean a phase with no reachable exit criteria.
+>
+> Attribution moved for a related reason. Phase 7 recorded that it "needs a real cost
+> series broken down by resource", which read the dependency the wrong way round: the
+> breakdown is a shape on the provider seam, and a seam that only exists once a real
+> tenant is connected is a seam nobody can test. The synthetic series gains a seeded
+> breakdown and attribution is scored against it like every other detector; real data
+> calibrates the threshold, it does not define the arithmetic (ARCHITECTURE.md D112).
 
 ---
 
@@ -564,46 +581,102 @@ a figure could be reformatted on the way out.
 
 ## Phase 9 — Anomaly attribution and real-model hardening
 
-**Goal:** the work that only becomes meaningful once a real estate and a real model
-are in hand. Split out of the anomaly phase (D103) precisely because none of it can be
-measured offline: a fallback between two backends needs two backends, a token-spend
-guardrail needs real token spend, and recalibrating a threshold needs real history.
+**Goal:** say *what* a spend change was, make the real-model path survive a backend
+failure and a spend ceiling, and close the sample-report gap Phase 8 exposed.
 
-- [ ] Anomaly root-cause correlation: tie a spend change to the resource or service
-      that caused it. Needs a real cost series broken down by resource, which the
-      synthetic series deliberately does not model
-- [ ] **Give the mock estate an exempt and an unpriced finding.** Phase 8 found this
-      by rendering it: the committed sample at `docs/sample-report.md` shows four of
-      the renderer's six sections, because no mock resource is both flagged by a
-      detector *and* tagged exempt, and every mock finding happens to be priceable. So
-      exemption (Phase 6) and the unquantified-findings section (Phase 8) are demonstrated
-      only by the golden file and the eval datasets, and a repository visitor reading
-      the sample cannot see either. Needs an idle VM tagged as a DR standby and one
-      finding with no cheaper tier; it touches the mock estate, which several tests pin
-      by count and total, so it is its own change rather than a late edit to a phase
+Split out of the anomaly phase (D103) because none of it could be *scored* offline: a
+fallback between two backends needs two backends, and a token-spend guardrail needs
+token spend. That reasoning holds for scoring and not for building, and this phase acts
+on the distinction. Both features are built and tested offline with fakes -- a primary
+that raises and a secondary that serves, a FakeLLM reporting deterministic token counts
+that cross a budget -- so the *logic* is covered without a key. What still cannot be
+done offline is calibration against real traffic and red-teaming a real backend, and
+those stay out (see below).
+
+**One reordering, flagged.** The Phase 7 roadmap recorded that attribution "needs a
+real cost series broken down by resource, which the synthetic series deliberately does
+not model", and treated that as a reason to wait for a real estate. On inspection that
+is backwards: the breakdown is a *provider-seam* shape, and a seam that only exists
+once a real tenant is connected is a seam nobody can test. So the synthetic series
+gains a seeded per-dimension breakdown (#77) and attribution is built and scored
+against it, exactly as every other detector was. Real data will calibrate the
+materiality threshold; it is not needed to define the arithmetic.
+
+Milestone: *Phase 9 - Anomaly attribution and real-model hardening*.
+
+- [x] **Close the Phase 8 sample gap first.** Give the mock estate a resource that is
+      both detector-flagged and tag-exempt, and one finding that genuinely cannot be
+      priced, so `docs/sample-report.md` exercises all six renderer sections. The tests
+      that pin the estate by count and total are updated to the new numbers
+      deliberately, in the same change, rather than loosened to ranges -- a test that
+      stops naming a number stops being able to catch one changing (#76)
+- [x] A **seeded per-dimension cost breakdown** behind the provider seam, reconciling
+      with the per-subscription totals it explains. An absent breakdown is *unknown*,
+      never an empty one, because an empty breakdown reads as "no cause" (#77)
+- [x] **Deterministic anomaly attribution:** rank the components by their contribution
+      to the delta and name what accounts for it, with before, after, contribution and
+      share as plain numbers. No model sets the attribution; unknown stays unknown when
+      the data cannot support one (#78)
+- [x] **Attribution in the document**, inside the existing anomaly section, with an
+      unattributed anomaly saying so rather than quietly omitting the line (#79)
+- [x] **Labelled attribution cases**, including one that is genuinely unattributable and
+      must report unknown, plus attribution accuracy as a quality metric (#80)
+- [x] **Backend fallback:** a primary failure or schema violation retries on the
+      secondary, with the trace recording which backend served each call and why the
+      fallback happened. Both real backends stay opt-in; tested offline with two fakes
+      (#81)
+- [x] **A per-run token budget** that stops new model calls and degrades to the
+      no-prose path, leaving every figure, classification and finding intact and
+      marking the gap as "narrative unavailable (token budget reached)" (#82)
+- [x] **The prose-only invariant, asserted:** the same estate produces identical money,
+      actions and findings whether prose came from the primary, from the secondary after
+      a fallback, or not at all (#83)
+- [x] ARCHITECTURE, README and SECURITY.md updated; CHANGELOG entry for v0.9.0 (#84)
+
+**Exit criteria:** a spend change in the synthetic estate is attributed to a named
+component and rendered with its numbers; an unattributable change reports unknown; a
+primary-backend failure falls back to the secondary without failing the sweep; a budget
+cutoff costs the prose and nothing else, proved by comparing reports.
+
+**Deliberately *not* in this phase, and now scheduled as Phase 9b:** egress and
+data-transfer anomaly detection, prompt-injection red-teaming against the real
+backends, the monthly and quarterly-aware anomaly baseline, and calibrating the
+detector thresholds and ranking weights. The first is a new detector rather than
+hardening; the other three genuinely need real traffic, real history or a real key, and
+grouping them with work that can be finished offline would mean a phase that cannot be
+closed.
+
+---
+
+## Phase 9b — Calibration against real traffic
+
+**Goal:** the residue of Phase 9 that no fake can stand in for. Cannot be closed
+without a real estate, a real key and real history, so it is its own phase rather than
+an open tail on one that can be finished.
+
 - [ ] Egress and data-transfer anomaly detection
-- [ ] Real-model hardening: retry and fallback from the primary backend to the
-      secondary on failure or schema violation, with the fallback recorded in the trace
-- [ ] A token-spend guardrail per sweep, so a large estate cannot run up an unbounded
-      model bill
 - [ ] Prompt-injection red-teaming against the real backends, using hostile resource
-      names and tags drawn from the evidence path
+      names and tags drawn from the evidence path. The offline injection gate proves
+      the *contracts* hold; it cannot prove a particular real model is not persuadable
 - [ ] **A monthly and quarterly-aware anomaly baseline.** The Phase 7 weekday profile
       handles a weekly rhythm and nothing else, so a month-end batch, a quarter-end
       close or an annual renewal all read as a level shift -- a false positive that
       recurs on a schedule, which is the same failure mode the weekday profile was
       added to fix, one period up. It needs a baseline that knows about the month and
-      the quarter before this detector is pointed at a real estate, and it needs real
-      history to calibrate against, which is why it is here rather than in Phase 7
+      the quarter before this detector is pointed at a real estate, and real history to
+      calibrate against
 - [ ] Calibrate detector thresholds and the ranking weights against the Phase 5
       scorecard and observed real estates, replacing the Phase 2 defaults. The anomaly
       constants in particular are *defensible* rather than calibrated: 3.5 and 5.0 are
       the conventional modified-z cuts, and the 2% scale floor and 15% materiality
       floor are product judgements chosen against four synthetic shapes
+- [ ] The attribution materiality threshold, for the same reason: the share a component
+      must account for before it is named is a product judgement until real changes
+      have been examined
 
-**Exit criteria:** a spend change in a real subscription is attributed to a resource
-and reported; a primary-backend failure falls back to the secondary without failing
-the sweep; a hostile resource name cannot alter a recommendation on a real backend.
+**Exit criteria:** a spend change in a real subscription is attributed and reported; a
+hostile resource name cannot alter a recommendation on a real backend; the thresholds
+in the code are the ones the data supports.
 
 ---
 

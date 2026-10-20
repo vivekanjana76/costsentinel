@@ -175,6 +175,8 @@ def _all_money(report: ClientReport) -> list[MoneyAmount]:
         amounts.append(item.current_monthly_cost)
     for anomaly in report.anomalies:
         amounts += [anomaly.baseline, anomaly.observed, anomaly.delta]
+        for part in anomaly.attributed_components:
+            amounts += [part.baseline, part.observed, part.contribution]
     for summary in report.waste_breakdown:
         amounts += [summary.monthly_saving, summary.annual_saving]
     return amounts
@@ -527,15 +529,84 @@ def _anomalies(anomalies: Sequence[ReportAnomaly]) -> list[str]:
                     ),
                     ("Window", f"{anomaly.observed_from} to {anomaly.observed_to}"),
                     ("How unusual", f"{anomaly.deviation_score} robust standard deviations"),
+                    ("Attributed to", _attribution_summary(anomaly)),
                     ("Detector confidence", f"{anomaly.confidence}"),
                 ]
             ),
             "",
             anomaly.statement,
             "",
+            *_attribution_block(anomaly),
         ]
         if anomaly.note:
             lines += [anomaly.note, ""]
+    return lines
+
+
+def _attribution_summary(anomaly: ReportAnomaly) -> str:
+    """The one-line "what caused it" for the anomaly's own table.
+
+    Present on every anomaly, including the unattributed ones. A row that simply
+    vanished when nothing could be named would read as "no cause" to anybody who had
+    seen an attributed anomaly in the same report -- which is the opposite of what an
+    unattributed outcome means.
+    """
+    if not anomaly.attributed_components:
+        return _UNATTRIBUTED_SHORT
+    return ", ".join(part.label for part in anomaly.attributed_components)
+
+
+def _attribution_block(anomaly: ReportAnomaly) -> list[str]:
+    """What accounted for the change, in plain numbers a client can check.
+
+    Every figure here is copied from the attribution, which computed it from the
+    provider's own breakdown. The share is printed because the two numbers either side
+    of it are not enough on their own: a meter rising 90 USD a day matters differently
+    depending on whether that is the whole change or a tenth of it.
+    """
+    if not anomaly.attributed_components:
+        return [f"**What changed.** {anomaly.attribution_statement}", ""]
+
+    lines = ["**What changed.**", ""]
+    lines += _table_with_header(
+        ("Meter", "Was", "Now", "Difference", "Share of the change"),
+        [
+            (
+                part.label,
+                f"{part.baseline.display()} / day",
+                f"{part.observed.display()} / day",
+                f"{part.contribution.display()} / day ({part.direction.value})",
+                f"{part.share * Decimal(100):.0f}%",
+            )
+            for part in anomaly.attributed_components
+        ],
+    )
+    # The statement is deliberately *not* repeated here. It says exactly what the
+    # table above says, in a sentence, and printing both made the section read as
+    # though there were two findings. The sentence survives on the report object, where
+    # the harness grades it, and the table is what a client reads.
+    lines.append("")
+    return lines
+
+
+#: The short form for the anomaly table, where the full explanation would not fit. The
+#: long form is always rendered below it, so this is a pointer and never the whole
+#: claim.
+_UNATTRIBUTED_SHORT = "no single cause identified — see below"
+
+
+def _table_with_header(header: tuple[str, ...], rows: Sequence[tuple[str, ...]]) -> list[str]:
+    """A Markdown table with a header row.
+
+    Distinct from :func:`_table`, which renders the headerless two-column form used
+    for every "label: value" block in the document. A table whose columns each mean
+    something different needs them named.
+    """
+    lines = [
+        "| " + " | ".join(header) + " |",
+        "| " + " | ".join("---" for _ in header) + " |",
+    ]
+    lines += ["| " + " | ".join(row) + " |" for row in rows]
     return lines
 
 
@@ -766,10 +837,13 @@ def source_text(report: ClientReport) -> str:
             anomaly.scope,
             anomaly.subscription_id,
             anomaly.statement,
+            anomaly.attribution_statement,
             anomaly.note,
             anomaly.detector,
             *anomaly.evidence,
         ]
+        for part in anomaly.attributed_components:
+            parts += [part.key, part.label]
     for queued in report.approval_queue:
         parts += [queued.resource_name, queued.monthly_saving_display, queued.reason]
     for summary in report.waste_breakdown:

@@ -20,7 +20,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from costsentinel.domain.common import (
     Confidence,
@@ -30,6 +30,7 @@ from costsentinel.domain.common import (
     Provenance,
     utc_now,
 )
+from costsentinel.domain.estate import CostDimension
 
 
 class WasteKind(StrEnum):
@@ -128,6 +129,183 @@ class AnomalyVerdict(StrEnum):
     def is_conclusive(self) -> bool:
         """Whether the series was actually assessed."""
         return self is AnomalyVerdict.ASSESSED
+
+
+class AttributionOutcome(StrEnum):
+    """Whether a spend change could be traced to something.
+
+    Two values and no third. "Partially attributed" was considered and rejected: a
+    client reading one would have to decide for themselves whether the named component
+    was the cause, which is the judgement the attribution exists to make.
+    """
+
+    ATTRIBUTED = "attributed"
+    UNATTRIBUTED = "unattributed"
+
+
+class UnattributedReason(StrEnum):
+    """Why a change could not be traced. Each is a different thing to tell a client.
+
+    The distinction matters operationally. ``NO_BREAKDOWN`` is a gap in what we
+    retrieved and may close tomorrow. ``DIFFUSE`` is a real finding about the spend --
+    nothing single caused it -- and will not change however good the data gets.
+    ``DOES_NOT_RECONCILE`` is a fault in the data itself, and reporting a cause from it
+    would be worse than reporting none.
+    """
+
+    #: No breakdown was retrievable for this scope.
+    NO_BREAKDOWN = "no_breakdown"
+
+    #: The components did not sum to the total they claim to explain.
+    DOES_NOT_RECONCILE = "does_not_reconcile"
+
+    #: The change is spread across components; none accounts for enough of it.
+    DIFFUSE = "diffuse"
+
+    #: Not enough days on one side of the change to compare against.
+    INSUFFICIENT_HISTORY = "insufficient_history"
+
+
+class AttributedComponent(Frozen):
+    """One component's part in a spend change, in plain numbers.
+
+    Everything a client needs in order to check the claim themselves: what the
+    component cost per day before, what it costs per day now, the difference, and how
+    much of the whole change that difference accounts for.
+    """
+
+    key: str
+    label: str
+    baseline: MoneyAmount = Field(description="This component's mean daily spend before.")
+    observed: MoneyAmount = Field(description="This component's mean daily spend during.")
+    contribution: MoneyAmount = Field(
+        description=(
+            "Magnitude of this component's change, per day. A magnitude because "
+            "MoneyAmount refuses a negative; `direction` carries the sign, exactly as "
+            "CostAnomaly.delta does."
+        )
+    )
+    direction: AnomalyDirection
+    share: Decimal = Field(
+        ge=Decimal(0),
+        description=(
+            "Fraction of the whole change this component accounts for. May exceed 1 "
+            "when another component moved the other way, which is a real pattern and "
+            "not an error -- one meter rising 100 while another falls 20 is a net 80."
+        ),
+    )
+
+
+class CostAttribution(Frozen):
+    """What accounted for a spend change, or why we cannot say.
+
+    Deterministic arithmetic over a :class:`~costsentinel.domain.estate.CostBreakdown`.
+    A model may explain an attribution in prose and cannot choose the component, set a
+    figure or change the outcome -- the same separation that keeps an anomaly from
+    acquiring an action (ARCHITECTURE.md D106).
+
+    Carries no action, no action class and no saving, for the same reason its anomaly
+    does not: knowing which meter rose is a better investigation, not a remediation.
+    """
+
+    anomaly_id: str
+    scope: str
+    dimension: CostDimension | None = Field(
+        default=None,
+        description="What the spend was broken down by. ``None`` when there was no breakdown.",
+    )
+    outcome: AttributionOutcome
+    components: tuple[AttributedComponent, ...] = Field(
+        default=(),
+        description=(
+            "The components that account for the change, largest first. Empty when "
+            "unattributed -- deliberately, because a ranked list of components that "
+            "explain nothing in particular reads as an answer."
+        ),
+    )
+    reason: UnattributedReason | None = Field(
+        default=None, description="Why not, when unattributed. ``None`` when attributed."
+    )
+    considered: int = Field(
+        default=0, ge=0, description="How many components were examined, attributed or not."
+    )
+    detector: str
+    provenance: Provenance
+
+    @model_validator(mode="after")
+    def _outcome_and_evidence_agree(self) -> CostAttribution:
+        """An outcome must match what it carries.
+
+        An attributed outcome with no components, or an unattributed one with no
+        reason, would each be a claim the type cannot support. Refused here rather than
+        guarded at every read site.
+        """
+        if self.outcome is AttributionOutcome.ATTRIBUTED:
+            if not self.components:
+                msg = "an attributed outcome must name at least one component"
+                raise ValueError(msg)
+            if self.reason is not None:
+                msg = "an attributed outcome cannot also carry a reason for not attributing"
+                raise ValueError(msg)
+        else:
+            if self.reason is None:
+                msg = "an unattributed outcome must say why"
+                raise ValueError(msg)
+            if self.components:
+                msg = (
+                    "an unattributed outcome must name no components: a ranked list "
+                    "that explains nothing in particular reads as an answer"
+                )
+                raise ValueError(msg)
+        return self
+
+    @property
+    def is_attributed(self) -> bool:
+        """Whether a cause was named."""
+        return self.outcome is AttributionOutcome.ATTRIBUTED
+
+    def statement(self) -> str:
+        """The attribution in plain numbers, composed here rather than by a model."""
+        if not self.is_attributed:
+            return _UNATTRIBUTED_STATEMENTS[self.reason or UnattributedReason.NO_BREAKDOWN]
+        parts: list[str] = []
+        for part in self.components:
+            moved = "up" if part.direction is AnomalyDirection.INCREASE else "down"
+            parts.append(
+                f"{part.label} ({part.baseline.display()} to {part.observed.display()} "
+                f"per day, {moved} {part.contribution.display()}, "
+                f"{part.share * Decimal(100):.0f}% of the change)"
+            )
+        named = "; ".join(parts)
+        lead = "Attributed to" if len(parts) == 1 else "Attributed mostly to"
+        return f"{lead} {named}."
+
+
+#: What to tell a client when nothing could be named. Written out here rather than
+#: composed, because each of these is a different thing to say and a generic "cause
+#: unknown" would collapse a real finding (diffuse) into a data gap (no breakdown).
+_UNATTRIBUTED_STATEMENTS: dict[UnattributedReason, str] = {
+    UnattributedReason.NO_BREAKDOWN: (
+        "No cost breakdown was available for this scope, so what changed cannot be "
+        "identified from the data we have. This is a gap in what we retrieved, not a "
+        "finding that the change had no cause."
+    ),
+    UnattributedReason.DOES_NOT_RECONCILE: (
+        "The cost breakdown for this scope does not sum to the total it should explain, "
+        "so no component can be named from it. Naming one would be a guess dressed as "
+        "an answer."
+    ),
+    UnattributedReason.DIFFUSE: (
+        "The change is spread across the meters rather than concentrated in one, so no "
+        "single component accounts for it. That is itself a finding: look for something "
+        "affecting everything at once -- a traffic change, a price change, or a change "
+        "in how the whole environment is used -- rather than for one resource."
+    ),
+    UnattributedReason.INSUFFICIENT_HISTORY: (
+        "There is not enough history on one side of this change to compare against, so "
+        "no component can be named yet."
+    ),
+}
 
 
 class CostAnomaly(Frozen):

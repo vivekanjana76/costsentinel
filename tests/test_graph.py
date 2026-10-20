@@ -61,6 +61,22 @@ EXPECTED_NORTHWIND: dict[str, Decimal] = {
 }
 EXPECTED_NORTHWIND_MONTHLY = Decimal("1421.97")
 
+#: Flagged, and worth nothing to the total. Added to the estate in Phase 9 because it
+#: had no resource that exercised either of these paths, so two shipped features
+#: appeared in no rendered report (#76).
+#:
+#: Both are named here rather than folded into the map above, because neither carries a
+#: saving and the map's whole job is to pin savings. `vm-core-api-02` is oversized in
+#: the band where no same-family SKU fits its peak with 2.0x headroom, so its saving is
+#: honestly unknown. `vm-core-dr-standby` is idle and tagged as a standby, so it is
+#: surfaced and no action is proposed.
+EXPECTED_NORTHWIND_UNPRICED = ("vm-core-api-02",)
+EXPECTED_NORTHWIND_EXEMPT = ("vm-core-dr-standby",)
+
+#: Every finding, priced or not. The exempt resource is deliberately absent: it is not
+#: a finding, it is a signal that was withheld.
+EXPECTED_NORTHWIND_FINDINGS = tuple(EXPECTED_NORTHWIND) + EXPECTED_NORTHWIND_UNPRICED
+
 # qatarcentral rates: P1v3 139.43, P0v3 69.72, P20 disk 79.87.
 EXPECTED_MINISTRY: dict[str, Decimal] = {
     "disk-portal-legacy-snapshot": Decimal("79.87"),
@@ -133,7 +149,7 @@ def test_graph_compiles_without_a_checkpointer(
 def test_report_flags_every_known_wasteful_resource(northwind_report: ClientReport) -> None:
     """Recall, across all the waste kinds the estate contains."""
     flagged = {f.resource_name for f in northwind_report.findings}
-    assert flagged == set(EXPECTED_NORTHWIND)
+    assert flagged == set(EXPECTED_NORTHWIND_FINDINGS)
 
 
 def test_report_identifies_each_waste_kind_correctly(northwind_report: ClientReport) -> None:
@@ -202,8 +218,11 @@ def test_totals_equal_the_sum_of_the_findings(northwind_report: ClientReport) ->
     assert totals.projected_monthly_savings.amount == summed
     assert totals.projected_monthly_savings.amount == EXPECTED_NORTHWIND_MONTHLY
     assert totals.projected_annual_savings.amount == EXPECTED_NORTHWIND_MONTHLY * 12
-    assert totals.findings_count == len(EXPECTED_NORTHWIND)
-    assert totals.unpriced_findings_count == 0
+    assert totals.findings_count == len(EXPECTED_NORTHWIND_FINDINGS)
+    assert totals.unpriced_findings_count == len(EXPECTED_NORTHWIND_UNPRICED)
+    # The point of both new sections: neither adds a penny to the headline.
+    assert totals.exempt_findings_count == len(EXPECTED_NORTHWIND_EXEMPT)
+    assert totals.projected_monthly_savings.amount == EXPECTED_NORTHWIND_MONTHLY
     assert totals.observed_monthly_spend.is_known
 
 
@@ -281,19 +300,48 @@ def test_report_is_complete_on_a_clean_run(northwind_report: ClientReport) -> No
 def test_findings_are_ranked_by_the_composite_not_by_savings(
     northwind_report: ClientReport,
 ) -> None:
-    """The ranking's whole point: savings alone is the wrong order."""
-    composites = [
-        f.ranking_composite for f in northwind_report.findings if f.ranking_composite is not None
-    ]
+    """The ranking's whole point: savings alone is the wrong order.
+
+    Descending *within a tier*, not globally. The tier comes first (D104), so a
+    quantified finding outranks an unquantified one whatever their composites say --
+    which is why the global claim this test used to make held only while the mock
+    estate happened to contain nothing unquantified.
+    """
+    priced = [f for f in northwind_report.findings if f.monthly_saving.is_known]
+    composites = [f.ranking_composite for f in priced if f.ranking_composite is not None]
     assert composites == sorted(composites, reverse=True)
     assert [f.rank for f in northwind_report.findings] == list(
-        range(1, len(EXPECTED_NORTHWIND) + 1)
+        range(1, len(EXPECTED_NORTHWIND_FINDINGS) + 1)
     )
 
     by_name = {f.resource_name: f.rank for f in northwind_report.findings}
     # A smaller but far more certain saving outranks a larger, less certain one.
     assert EXPECTED_NORTHWIND["pip-legacy-api"] < EXPECTED_NORTHWIND["snap-analytics-baseline"]
     assert by_name["pip-legacy-api"] < by_name["snap-analytics-baseline"]
+
+
+def test_an_unquantified_finding_ranks_below_every_priced_one(
+    northwind_report: ClientReport,
+) -> None:
+    """D104 end to end, which nothing checked until the estate could produce one.
+
+    The unquantified finding's composite is *higher* than the lowest priced finding's,
+    so if the tier were a weight rather than a sort key it would outrank it. A FinOps
+    tool must not assert that something it cannot cost is the bigger opportunity.
+    """
+    unpriced = [f for f in northwind_report.findings if not f.monthly_saving.is_known]
+    priced = [f for f in northwind_report.findings if f.monthly_saving.is_known]
+    assert {f.resource_name for f in unpriced} == set(EXPECTED_NORTHWIND_UNPRICED)
+
+    assert min(f.rank for f in unpriced) > max(f.rank for f in priced)
+
+    # And the ordering is not merely a coincidence of the composites.
+    worst_priced = min(f.ranking_composite or Decimal(0) for f in priced)
+    best_unpriced = max(f.ranking_composite or Decimal(0) for f in unpriced)
+    assert best_unpriced > worst_priced, (
+        "this assertion is vacuous unless an unquantified finding scores higher than a "
+        "priced one; pick a different fixture if the estate changes"
+    )
 
 
 def test_a_blocked_action_cannot_lead_the_report(northwind_report: ClientReport) -> None:
@@ -303,9 +351,13 @@ def test_a_blocked_action_cannot_lead_the_report(northwind_report: ClientReport)
     for finding in blocked:
         assert finding.rank > 1
     # The production snapshot is worth more than four higher-ranked findings, and
-    # still ranks last because it is blocked.
+    # still ranks below every other priced finding because it is blocked. Last among
+    # the priced ones, not last overall: the unquantified finding sits below it on
+    # tier, which is a separate rule (D104) with its own test.
     snapshot = next(f for f in blocked if f.resource_name == "snap-web-01-pre-upgrade")
-    assert snapshot.rank == len(northwind_report.findings)
+    priced = [f for f in northwind_report.findings if f.monthly_saving.is_known]
+    assert snapshot.rank == max(f.rank for f in priced)
+    assert snapshot.rank == len(EXPECTED_NORTHWIND)
 
 
 def test_ranking_is_independent_of_the_model(
@@ -490,7 +542,7 @@ def test_a_sweep_runs_each_client_as_its_own_run(settings: Settings) -> None:
     result = run_scan(settings=settings)
     assert result.clients == (CLIENT_MINISTRY, CLIENT_NORTHWIND)
     assert len(set(result.run_ids)) == len(result.reports)
-    assert result.total_findings == len(EXPECTED_NORTHWIND) + len(EXPECTED_MINISTRY)
+    assert result.total_findings == len(EXPECTED_NORTHWIND_FINDINGS) + len(EXPECTED_MINISTRY)
     assert result.total_awaiting_approval == result.total_findings
     assert result.for_client(CLIENT_NORTHWIND) is not None
     assert result.for_client("nobody") is None
@@ -737,9 +789,9 @@ def test_state_is_persisted_and_readable_from_a_fresh_connection(
     assert state is not None
     assert state.report is not None
     assert state.report.client == CLIENT_NORTHWIND
-    assert len(state.report.findings) == len(EXPECTED_NORTHWIND)
+    assert len(state.report.findings) == len(EXPECTED_NORTHWIND_FINDINGS)
     # The whole diagnosis and costing survives the round trip, not just the report.
-    assert len(state.root_causes) == len(EXPECTED_NORTHWIND)
+    assert len(state.root_causes) == len(EXPECTED_NORTHWIND_FINDINGS)
     assert state.priced_options
     assert state.ranking
 
@@ -889,7 +941,7 @@ def test_a_model_omitting_a_signal_falls_back_to_policy(
         run_id="run-silent",
     )
     # Findings and figures survive; only the rationales are the policy's own.
-    assert len(report.findings) == len(EXPECTED_NORTHWIND)
+    assert len(report.findings) == len(EXPECTED_NORTHWIND_FINDINGS)
     assert report.totals.projected_monthly_savings.amount == EXPECTED_NORTHWIND_MONTHLY
     assert all("policy store" in f.rationale for f in report.findings)
 
@@ -948,12 +1000,26 @@ def test_runner_raises_when_a_run_produces_no_report(
         )
 
 
-def test_a_backend_failure_propagates_rather_than_producing_a_partial_report(
+def test_a_backend_outage_costs_the_prose_and_not_the_report(
     provider: MockAzureProvider,
     settings: Settings,
     checkpointer: BaseCheckpointSaver[str],
 ) -> None:
-    """A model outage must not yield a report missing half its findings."""
+    """Reversed in Phase 9, deliberately, and this is the reasoning.
+
+    Until Phase 9 this asserted the opposite: a model failure raised, on the grounds
+    that "a model outage must not yield a report missing half its findings". The
+    premise turned out to be false. A report built without the model is not missing
+    half its findings -- it is missing none of them. Every figure, classification,
+    rank and queue entry is deterministic arithmetic over provider data, and the model
+    only ever narrated them.
+
+    So the old behaviour threw away a complete, correct report because the optional
+    commentary on it was unavailable, which is the worse of the two failures by a wide
+    margin (ARCHITECTURE.md D115). What survives of the original intent is the part
+    that was right: the degradation must be visible, so the report says the narrative
+    is missing rather than leaving a blank.
+    """
     from costsentinel.llm.base import LLMError, LLMTask, Prompt, StructuredResponseT
 
     class BrokenLLM(FakeLLM):
@@ -968,15 +1034,26 @@ def test_a_backend_failure_propagates_rather_than_producing_a_partial_report(
             msg = "backend exploded"
             raise LLMError(msg)
 
-    with pytest.raises(LLMError, match="backend exploded"):
-        run_client_scan(
-            client=CLIENT_NORTHWIND,
-            provider=provider,
-            llm=BrokenLLM(),
-            settings=settings,
-            checkpointer=checkpointer,
-            run_id="run-broken",
-        )
+    report, _ = run_client_scan(
+        client=CLIENT_NORTHWIND,
+        provider=provider,
+        llm=BrokenLLM(),
+        settings=settings,
+        checkpointer=checkpointer,
+        run_id="run-broken",
+    )
+
+    # Every finding, every figure, the whole queue.
+    assert len(report.findings) == len(EXPECTED_NORTHWIND_FINDINGS)
+    assert report.totals.projected_monthly_savings.amount == EXPECTED_NORTHWIND_MONTHLY
+    assert report.approval_queue
+    for name, expected in EXPECTED_NORTHWIND.items():
+        finding = next(f for f in report.findings if f.resource_name == name)
+        assert finding.monthly_saving.amount == expected, name
+
+    # And it says so, rather than presenting an unexplained report as a normal one.
+    assert any("no model prose" in note for note in report.notes)
+    assert any("unaffected" in note for note in report.notes)
 
 
 def test_a_custom_policy_store_is_honoured(

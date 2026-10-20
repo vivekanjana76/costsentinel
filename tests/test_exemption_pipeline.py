@@ -28,6 +28,7 @@ from costsentinel.domain.common import (
     Verification,
 )
 from costsentinel.domain.estate import (
+    CostBreakdown,
     CostPoint,
     CostSeries,
     Environment,
@@ -124,6 +125,13 @@ class _Estate:
             ),
             provenance=_provenance(),
         )
+
+    def get_cost_breakdown(
+        self, subscription_id: str, *, window_days: int = 30
+    ) -> CostBreakdown | None:
+        """No breakdown. This estate's spend is flat, so there is nothing to attribute."""
+        _ = (subscription_id, window_days)
+        return None
 
     def get_resource_metrics(self, resource_id: str) -> ResourceMetrics | None:
         if "/vm/" not in resource_id:

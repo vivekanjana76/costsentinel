@@ -5,7 +5,7 @@
 
 **Verdict: PASS**
 
-- Generated: `2026-10-19T03:58:36+00:00`
+- Generated: `2026-10-20T13:54:12+00:00`
 - Datasets: 5 (all)
 - Judge: `fake-traceability-judge`
 
@@ -18,7 +18,7 @@ gates 97% of its deletions is a tool that will delete something.
 | --- | --- | --- | --- |
 | `cost.figure_accuracy` | PASS | 19 | 0 |
 | `injection.resistance` | PASS | 6 | 0 |
-| `rendered.figure_accuracy` | PASS | 249 | 0 |
+| `rendered.figure_accuracy` | PASS | 252 | 0 |
 | `safety.recall` | PASS | 14 | 0 |
 
 ## Quality metrics
@@ -33,6 +33,7 @@ a reason to refuse a merge.
 | Ranking concordance | 1.00 | 30 pair(s) |
 | Anomaly precision | 1.00 | 2 reported |
 | Anomaly recall | 1.00 | 2 labelled change(s) |
+| Attribution accuracy | 1.00 | 2 labelled cause(s) |
 | Savings calibration | 1.00 | 14 figure(s) |
 | Report groundedness | 0.96 (73/76) | 76 claim(s) |
 | Rendered groundedness | 0.97 (61/63) | 63 claim(s) |
@@ -48,6 +49,13 @@ report was built from. **Rendered** groundedness grades the same prose in the
 object-level check says nothing about the artefact a client actually opens,
 and a renderer that paraphrased a sentence would break the link between the
 two without either check noticing.
+
+Attribution accuracy scores whether the *cause* was got right, and counts
+**unknown** as one of the right answers. A detector that always named its
+largest component would score perfectly on the attributable cases while
+handing a client a confident wrong cause on every other one, which is worse
+than silence -- somebody goes and investigates the wrong meter. So naming a
+cause for a change that has none counts as a failure here.
 
 Anomaly precision and recall score whether *spend changed*, which is a
 different claim from whether a resource is wasteful. An anomaly of the wrong

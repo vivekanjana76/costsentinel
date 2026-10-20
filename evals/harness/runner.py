@@ -59,6 +59,7 @@ from evals.harness.metrics import (
     aggregate_detection,
     anomaly_by_scope,
     anomaly_scores,
+    attribution_accuracy,
     detection_scores,
     finding_by_resource,
     merge_detector_scores,
@@ -274,6 +275,7 @@ def score_dataset(
     precision, recall = aggregate_detection(tuple(detectors.values()))
     ranking, rank_mismatches = ranking_concordance(dataset, report)
     anomaly_precision, anomaly_recall, anomaly_mismatches = anomaly_scores(dataset, report)
+    attribution, attribution_mismatches = attribution_accuracy(dataset, report)
     calibration, calibration_mismatches = savings_calibration(dataset, report)
     groundedness = judge.score(report, state)
     rendered_grounded = score_rendered(report, rendered)
@@ -293,6 +295,7 @@ def score_dataset(
         *detection_mismatches,
         *rank_mismatches,
         *anomaly_mismatches,
+        *attribution_mismatches,
         *calibration_mismatches,
     )
 
@@ -319,6 +322,7 @@ def score_dataset(
         ranking=ranking,
         anomaly_precision=anomaly_precision,
         anomaly_recall=anomaly_recall,
+        attribution_accuracy=attribution,
         calibration=calibration,
         groundedness=groundedness,
         rendered_groundedness=rendered_grounded,
@@ -384,6 +388,9 @@ def evaluate(
             "anomaly.precision", [r.anomaly_precision for r in results]
         ),
         anomaly_recall=aggregate_score("anomaly.recall", [r.anomaly_recall for r in results]),
+        attribution_accuracy=aggregate_score(
+            "attribution.accuracy", [r.attribution_accuracy for r in results]
+        ),
         calibration=aggregate_score("savings.calibration", [r.calibration for r in results]),
         groundedness=merge(groundedness),
         rendered_groundedness=merge(rendered),

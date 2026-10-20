@@ -39,6 +39,7 @@ from costsentinel.domain.signals import WasteSignal
 from costsentinel.domain.state import ScanState
 from costsentinel.llm.base import LLM, EvidenceBlock, EvidenceField, Prompt
 from costsentinel.llm.contracts import RootCauseAnalysis, RootCauseExplanation
+from costsentinel.llm.degradation import optional_prose
 from costsentinel.llm.fake import LABEL_WASTE_SIGNAL
 from costsentinel.llm.routing import TASK_ROOT_CAUSE
 from costsentinel.memory.base import MemoryStore
@@ -245,9 +246,18 @@ def make_root_cause_analyst(
             output_contract=_OUTPUT_CONTRACT,
             evidence=tuple(evidence),
         )
-        analysis = llm.structured(task=TASK_ROOT_CAUSE, prompt=prompt, schema=RootCauseAnalysis)
-
         errors: list[str] = list(state.errors)
+        # Optional, because every root cause already has a deterministic fallback: the
+        # loop below restates the detector's own evidence for any signal the model did
+        # not explain, which has been the behaviour since Phase 2. A model that is
+        # unreachable or over budget is the same case as a model that skipped a signal,
+        # one signal at a time (ARCHITECTURE.md D115).
+        analysis = optional_prose(
+            lambda: llm.structured(task=TASK_ROOT_CAUSE, prompt=prompt, schema=RootCauseAnalysis),
+            task=ACTOR,
+            fallback=RootCauseAnalysis(explanations=()),
+            errors=errors,
+        )
         root_causes: list[RootCause] = []
 
         for signal in state.actionable_signals:

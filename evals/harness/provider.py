@@ -29,6 +29,7 @@ from costsentinel.domain.common import (
     Verification,
 )
 from costsentinel.domain.estate import (
+    CostBreakdown,
     CostPoint,
     CostSeries,
     Reservation,
@@ -39,7 +40,11 @@ from costsentinel.domain.estate import (
     Subscription,
 )
 from costsentinel.providers.catalogue import PriceCatalogue, catalogue_provenance, default_catalogue
-from costsentinel.providers.mock import synthetic_series
+from costsentinel.providers.mock import (
+    synthetic_breakdown,
+    synthetic_series,
+    wobbled_baseline,
+)
 from evals.harness.dataset import (
     EstateSpec,
     LabelledEstate,
@@ -192,6 +197,35 @@ class DatasetProvider:
             subscription_id=subscription_id,
             points=points,
             provenance=provenance,
+        )
+
+    def get_cost_breakdown(
+        self, subscription_id: str, *, window_days: int = WINDOW_DAYS
+    ) -> CostBreakdown | None:
+        """The subscription's meter breakdown, when the dataset declares one.
+
+        Built by ``synthetic_breakdown`` from the series this provider already
+        returned, so the two reconcile by construction and a dataset cannot hold a
+        breakdown that contradicts its own totals.
+
+        Returns:
+            ``None`` where the subscription declares no breakdown shape or declares
+            ``absent``. Unknown, not empty: a dataset that says nothing about meters
+            is not asserting that a change had no cause.
+        """
+        days = max(1, window_days)
+        spec = next(
+            (s for s in self._spec.subscriptions if s.subscription_id == subscription_id), None
+        )
+        if spec is None or spec.breakdown_shape is None or spec.daily_baseline is None:
+            return None
+        return synthetic_breakdown(
+            series=self.get_cost_series(subscription_id, window_days=days),
+            baseline_levels=wobbled_baseline(spec.daily_baseline, days),
+            shape=spec.breakdown_shape,
+            provenance=self._provenance(
+                f"dataset:{self._dataset.dataset_id}/breakdown/{subscription_id}/{days}d"
+            ),
         )
 
     def get_resource_metrics(self, resource_id: str) -> ResourceMetrics | None:

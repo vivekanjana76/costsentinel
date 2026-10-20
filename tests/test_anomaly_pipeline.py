@@ -35,6 +35,7 @@ from costsentinel.cli import summarise_report
 from costsentinel.config import LLMBackend, MemoryBackend, RunMode, Settings
 from costsentinel.domain.common import MoneyAmount, Provenance, ProvenanceSource, Verification
 from costsentinel.domain.estate import (
+    CostBreakdown,
     CostPoint,
     CostSeries,
     Environment,
@@ -58,6 +59,7 @@ from costsentinel.domain.state import ScanState
 from costsentinel.graph.build import build_graph
 from costsentinel.llm.contracts import ReportNarrative
 from costsentinel.llm.fake import FakeLLM
+from costsentinel.providers.mock import BreakdownShape, synthetic_breakdown
 
 SUBSCRIPTION = "00000000-0000-4000-8000-0000000f0101"
 CLIENT = "meridian-health"
@@ -180,6 +182,24 @@ class _Estate:
         # Drop a quarter of the month, which the detector must refuse to conclude from.
         kept = tuple(p for index, p in enumerate(series.points) if not 8 <= index < 16)
         return CostSeries(subscription_id=subscription_id, points=kept, provenance=_provenance())
+
+    def get_cost_breakdown(
+        self, subscription_id: str, *, window_days: int = 30
+    ) -> CostBreakdown | None:
+        """A concentrated breakdown over the same series, so the rise has one cause.
+
+        Built from whatever :meth:`get_cost_series` returned, gap and all, so a
+        breakdown can never contradict the totals it explains.
+        """
+        return synthetic_breakdown(
+            series=self.get_cost_series(subscription_id, window_days=window_days),
+            baseline_levels=tuple(
+                (BASELINE * Decimal(WOBBLE[offset])).quantize(Decimal("0.01"))
+                for offset in range(WINDOW)
+            ),
+            shape=BreakdownShape.CONCENTRATED,
+            provenance=_provenance(),
+        )
 
     def get_resource_metrics(self, resource_id: str) -> ResourceMetrics | None:
         if "/vm/" not in resource_id:

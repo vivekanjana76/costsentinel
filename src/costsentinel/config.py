@@ -17,7 +17,7 @@ from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -99,6 +99,36 @@ class Settings(BaseSettings):
     # --- mode flags ------------------------------------------------------
     mode: RunMode = Field(default=RunMode.MOCK, validation_alias=_env("MODE"))
     llm_backend: LLMBackend = Field(default=LLMBackend.FAKE, validation_alias=_env("LLM_BACKEND"))
+    llm_fallback_backend: LLMBackend | None = Field(
+        default=None,
+        validation_alias=_env("LLM_FALLBACK_BACKEND"),
+        description=(
+            "Backend to retry on when the primary fails or returns something that "
+            "will not validate. ``None`` (the default) means no fallback: a failure "
+            "costs the prose and nothing else, which is already a safe outcome, so a "
+            "second backend is a reliability choice rather than a requirement.\n"
+            "\n"
+            "Must differ from the primary. Retrying the same backend is a retry, not a "
+            "fallback, and configuring one as the other would make a trace say "
+            "something untrue."
+        ),
+    )
+    llm_token_budget: int | None = Field(
+        default=None,
+        gt=0,
+        validation_alias=_env("LLM_TOKEN_BUDGET"),
+        description=(
+            "Ceiling on model tokens per sweep. ``None`` means uncapped, which is the "
+            "default because the right ceiling depends on the estate -- a figure "
+            "guessed here would either stop a large sweep narrating itself or fail to "
+            "cap anything.\n"
+            "\n"
+            "Reaching it costs the prose and nothing else: every figure, finding, "
+            "classification and approval-queue entry is deterministic arithmetic the "
+            "model never touched, so a capped run produces a complete report with its "
+            "narrative replaced by a stated reason."
+        ),
+    )
 
     # --- mock provider ---------------------------------------------------
     mock_seed: int = Field(default=1337, validation_alias=_env("MOCK_SEED"))
@@ -291,6 +321,33 @@ class Settings(BaseSettings):
     def is_mock_mode(self) -> bool:
         """Whether this run uses the deterministic synthetic estate."""
         return self.mode is RunMode.MOCK
+
+    @model_validator(mode="after")
+    def _fallback_differs_from_primary(self) -> Settings:
+        """A backend cannot fall back to itself.
+
+        Refused rather than silently ignored, because a configuration that looks like
+        a fallback and is not one would make the trace claim a resilience this run
+        does not have.
+        """
+        if self.llm_fallback_backend is not None and self.llm_fallback_backend is self.llm_backend:
+            msg = (
+                f"llm_fallback_backend is {self.llm_backend.value!r}, the same as the "
+                f"primary. Retrying the same backend is a retry, not a fallback; set a "
+                f"different backend or leave the fallback unset."
+            )
+            raise ValueError(msg)
+        return self
+
+    @property
+    def has_llm_fallback(self) -> bool:
+        """Whether a secondary backend is configured."""
+        return self.llm_fallback_backend is not None
+
+    @property
+    def llm_is_capped(self) -> bool:
+        """Whether this run has a token ceiling."""
+        return self.llm_token_budget is not None
 
     @property
     def uses_fake_llm(self) -> bool:

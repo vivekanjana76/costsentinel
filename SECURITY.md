@@ -202,6 +202,57 @@ is validated against a Pydantic schema before anything is read out of it. No
 cost or savings figure can originate with a model: `MoneyAmount` refuses
 LLM provenance at the type level.
 
+### Optional: a fallback backend
+
+```bash
+LLM_BACKEND=azure_openai
+LLM_FALLBACK_BACKEND=gemini
+```
+
+On a failure, a rate limit or a response that will not validate, the call is
+retried once on the secondary. The trace and the logs record which backend served
+each call and why the fallback happened; a silent fallback would mean a client's
+report was narrated by a model nobody chose.
+
+A backend cannot fall back to itself -- that configuration is refused at startup
+rather than ignored, because it would make the trace claim a resilience the run
+does not have. Both backends need their own credentials, and a fallback is a
+reliability choice rather than a requirement: with no fallback configured, a
+model failure costs the prose and nothing else.
+
+### Optional: a token-spend ceiling
+
+```bash
+LLM_TOKEN_BUDGET=200000
+```
+
+Caps model tokens per sweep so a large estate cannot run up an unbounded bill.
+Unset by default, because the right ceiling depends on the estate -- a figure
+guessed here would either stop a large sweep narrating itself or fail to cap
+anything.
+
+**What happens when the ceiling is reached:**
+
+| Still produced | Not produced |
+|---|---|
+| Every waste finding and spend anomaly | The executive summary |
+| Every cost and savings figure | Per-finding commentary |
+| Every action class and approval requirement | The ranking narration |
+| The ranking, the approval queue, the audit trail | The root-cause narratives |
+| The attribution of each spend change | The per-anomaly notes |
+
+The report is complete; its narrative is replaced by a stated reason, and a
+processing note says the figures are unaffected. That is not a courtesy -- every
+figure in a CostSentinel report is arithmetic over provider data that the model
+never touched, so there is nothing for a cutoff to corrupt. The property is
+tested by building the same estate's report three ways (prose from the primary,
+prose from the secondary after a fallback, no prose at all) and comparing every
+deterministic field.
+
+The ceiling is checked before each call against the running total rather than
+predicted, so it can be overshot by at most one call. That is the right way
+round: the alternative is a missing section because an estimate was pessimistic.
+
 ---
 
 ## 6. What CostSentinel does with the data it reads

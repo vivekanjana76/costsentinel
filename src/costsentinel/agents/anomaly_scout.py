@@ -29,11 +29,13 @@ from collections.abc import Sequence
 from datetime import datetime
 
 from costsentinel.agents.anomalies import assess_estate
+from costsentinel.agents.attribution import attribute
 from costsentinel.agents.base import Node, NodeUpdate, audit, with_audit
 from costsentinel.agents.detectors import run_detectors, run_reservation_detectors
 from costsentinel.config import Settings
 from costsentinel.domain.common import utc_now
 from costsentinel.domain.estate import (
+    CostBreakdown,
     CostSeries,
     Estate,
     Reservation,
@@ -121,6 +123,7 @@ def make_anomaly_scout(
 
         resources: list[Resource] = []
         cost_series: list[CostSeries] = []
+        cost_breakdowns: list[CostBreakdown] = []
         metrics: list[ResourceMetrics] = []
 
         for subscription in subscriptions:
@@ -129,6 +132,14 @@ def make_anomaly_scout(
             cost_series.append(
                 provider.get_cost_series(subscription.subscription_id, window_days=WINDOW_DAYS)
             )
+            # A provider that cannot supply one returns None, and that absence is
+            # carried as an absence: an unattributable spend change must be able to
+            # say "no breakdown" rather than "no cause".
+            split = provider.get_cost_breakdown(
+                subscription.subscription_id, window_days=WINDOW_DAYS
+            )
+            if split is not None:
+                cost_breakdowns.append(split)
             for resource in subscription_resources:
                 measured = provider.get_resource_metrics(resource.resource_id)
                 if measured is not None:
@@ -140,6 +151,7 @@ def make_anomaly_scout(
             subscriptions=subscriptions,
             resources=tuple(resources),
             cost_series=tuple(cost_series),
+            cost_breakdowns=tuple(cost_breakdowns),
             metrics=tuple(metrics),
             reservations=reservations,
         )
@@ -173,6 +185,19 @@ def make_anomaly_scout(
         )
         unassessed = tuple(a for a in assessments if not a.verdict.is_conclusive)
 
+        # What accounted for each change, or why we cannot say. Deterministic
+        # arithmetic over the breakdown; one attribution per anomaly, always, so an
+        # unattributable change carries an explicit reason rather than a missing field.
+        attributions = tuple(
+            attribute(
+                anomaly,
+                series,
+                estate.breakdown_for(anomaly.subscription_id),
+            )
+            for anomaly in anomalies
+            if (series := estate.series_for(anomaly.subscription_id)) is not None
+        )
+
         events = [
             audit(
                 state,
@@ -193,6 +218,8 @@ def make_anomaly_scout(
                     "spend_scopes_assessed": str(len(assessments)),
                     "spend_scopes_unassessed": str(len(unassessed)),
                     "anomalies": str(len(anomalies)),
+                    "cost_breakdowns": str(len(cost_breakdowns)),
+                    "attributed": str(sum(1 for a in attributions if a.is_attributed)),
                 },
             )
         ]
@@ -287,6 +314,7 @@ def make_anomaly_scout(
             "exemptions": exempt,
             "anomalies": anomalies,
             "anomaly_assessments": assessments,
+            "attributions": attributions,
             "audit": with_audit(state, events),
         }
 

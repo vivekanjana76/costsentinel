@@ -37,6 +37,7 @@ from costsentinel.domain.common import (
     Verification,
 )
 from costsentinel.domain.estate import (
+    CostBreakdown,
     CostPoint,
     CostSeries,
     Environment,
@@ -341,6 +342,39 @@ class AzureLiveProvider:
             ),
             provenance=provenance,
         )
+
+    def get_cost_breakdown(
+        self, subscription_id: str, *, window_days: int = 30
+    ) -> CostBreakdown | None:
+        """Not yet retrievable from a real estate, so ``None``.
+
+        Deliberately a declaration rather than a guess. Azure's Cost Management query
+        API can group daily actuals by meter, but it is a different query from the one
+        behind :meth:`get_cost_series` -- a different tool, a different schema and a
+        different set of edge cases around meters that appear and vanish mid-window --
+        and it cannot be verified against anything but a real tenant. Shipping an
+        unverified implementation would mean a client's first attributed spend change
+        was also the first time the query had ever run.
+
+        So attribution degrades the way every other unknown in this system does: no
+        breakdown means the anomaly reports its cause as unknown, with the reason
+        stated, rather than naming whichever meter an untested query happened to rank
+        first. Scheduled as Phase 9b work, with the real-tenant verification it needs.
+
+        Returns:
+            ``None``, always. Never an empty breakdown, which would read as "no cause
+            found" rather than "not looked for".
+        """
+        self._require_in_scope(subscription_id)
+        _ = window_days
+        _log.info(
+            "cost breakdown not retrieved; spend changes will report an unknown cause",
+            extra={
+                "subscription_id": subscription_id,
+                "reason": "no real cost-breakdown query is implemented yet",
+            },
+        )
+        return None
 
     def get_resource_metrics(self, resource_id: str) -> ResourceMetrics | None:
         """Read observed utilisation for one resource.
