@@ -261,7 +261,7 @@ def make_approval_gate(*, settings: Settings) -> Node:
         queue = pending_for(state)
         if not queue:
             return {
-                "audit_events": with_audit(
+                "audit": with_audit(
                     state,
                     [
                         audit(
@@ -360,7 +360,7 @@ def make_approval_gate(*, settings: Settings) -> Node:
 
         update: NodeUpdate = {
             "approval_records": (*state.approval_records, record),
-            "audit_events": with_audit(state, events),
+            "audit": with_audit(state, events),
         }
         if decision.resolves:
             update["decisions"] = (
