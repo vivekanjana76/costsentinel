@@ -604,34 +604,34 @@ materiality threshold; it is not needed to define the arithmetic.
 
 Milestone: *Phase 9 - Anomaly attribution and real-model hardening*.
 
-- [ ] **Close the Phase 8 sample gap first.** Give the mock estate a resource that is
+- [x] **Close the Phase 8 sample gap first.** Give the mock estate a resource that is
       both detector-flagged and tag-exempt, and one finding that genuinely cannot be
       priced, so `docs/sample-report.md` exercises all six renderer sections. The tests
       that pin the estate by count and total are updated to the new numbers
       deliberately, in the same change, rather than loosened to ranges -- a test that
       stops naming a number stops being able to catch one changing (#76)
-- [ ] A **seeded per-dimension cost breakdown** behind the provider seam, reconciling
+- [x] A **seeded per-dimension cost breakdown** behind the provider seam, reconciling
       with the per-subscription totals it explains. An absent breakdown is *unknown*,
       never an empty one, because an empty breakdown reads as "no cause" (#77)
-- [ ] **Deterministic anomaly attribution:** rank the components by their contribution
+- [x] **Deterministic anomaly attribution:** rank the components by their contribution
       to the delta and name what accounts for it, with before, after, contribution and
       share as plain numbers. No model sets the attribution; unknown stays unknown when
       the data cannot support one (#78)
-- [ ] **Attribution in the document**, inside the existing anomaly section, with an
+- [x] **Attribution in the document**, inside the existing anomaly section, with an
       unattributed anomaly saying so rather than quietly omitting the line (#79)
-- [ ] **Labelled attribution cases**, including one that is genuinely unattributable and
+- [x] **Labelled attribution cases**, including one that is genuinely unattributable and
       must report unknown, plus attribution accuracy as a quality metric (#80)
-- [ ] **Backend fallback:** a primary failure or schema violation retries on the
+- [x] **Backend fallback:** a primary failure or schema violation retries on the
       secondary, with the trace recording which backend served each call and why the
       fallback happened. Both real backends stay opt-in; tested offline with two fakes
       (#81)
-- [ ] **A per-run token budget** that stops new model calls and degrades to the
+- [x] **A per-run token budget** that stops new model calls and degrades to the
       no-prose path, leaving every figure, classification and finding intact and
       marking the gap as "narrative unavailable (token budget reached)" (#82)
-- [ ] **The prose-only invariant, asserted:** the same estate produces identical money,
+- [x] **The prose-only invariant, asserted:** the same estate produces identical money,
       actions and findings whether prose came from the primary, from the secondary after
       a fallback, or not at all (#83)
-- [ ] ARCHITECTURE, README and SECURITY.md updated; CHANGELOG entry for v0.9.0 (#84)
+- [x] ARCHITECTURE, README and SECURITY.md updated; CHANGELOG entry for v0.9.0 (#84)
 
 **Exit criteria:** a spend change in the synthetic estate is attributed to a named
 component and rendered with its numbers; an unattributable change reports unknown; a

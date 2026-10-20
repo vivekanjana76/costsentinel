@@ -8,8 +8,100 @@ CostSentinel is pre-1.0, so the public API may change between minor versions.
 
 ## [Unreleased]
 
-Nothing yet. Next up is Phase 9: anomaly attribution and real-model hardening -- the
-work that needs a real estate or a real model to mean anything.
+Nothing yet. Next up is Phase 9b: calibration against real traffic -- egress detection,
+red-teaming a real backend, a seasonally-aware baseline, and replacing the thresholds
+with figures real data supports. None of it can be closed without a real estate, a real
+key and real history, which is why it is its own phase.
+
+## [0.9.0] - 2026-10-20
+
+Phase 9: anomaly attribution and real-model hardening. Phase 7 could say *spend
+changed*; this says *what changed*. And the whole sweep no longer depends on a language
+model being reachable.
+
+Scorecard: a new quality metric, attribution accuracy **1.00 (2/2)**, including the case
+that must report unknown. Four blocking gates still green, `rendered.figure_accuracy` now
+covering the attribution figures too. Every earlier metric unmoved.
+
+### Added
+
+- **Deterministic spend attribution.** Two windows and a subtraction over a per-meter
+  cost breakdown, naming the component that accounts for a change with its before,
+  after, difference and share -- or saying it cannot. Means rather than the detector's
+  medians, deliberately: a sum of medians does not equal the median of sums, so a
+  median-based split would not add up to the change it claims to explain.
+
+- **A cause is a component whose share of the change exceeds its share of the spend**
+  (D113). Found by running the detector over the committed estate, not reasoned out in
+  advance. "Which components account for most of the change" passed on a change spread
+  perfectly evenly -- in a 40/25/20/10/5 meter mix the top two always sum to 65% -- and
+  the arithmetic was right while the answer was wrong. Every meter had risen by exactly
+  its own share, which is a proportional change and not a cause.
+
+- **Four distinct ways to honestly fail**, because each is a different thing to tell a
+  client: no breakdown (a gap in what we retrieved), does not reconcile (a data fault
+  where naming a component would be a guess dressed as an answer), diffuse (a real
+  finding -- look for something affecting the whole environment), and insufficient
+  history. An unattributed outcome carries no components at all; a ranked list that
+  explains nothing in particular reads as an answer.
+
+- **A seeded per-meter cost breakdown behind the provider seam.** Derived *from* the
+  total series rather than beside it, so the two cannot disagree and the reconciliation
+  check holds by construction. A breakdown a few percent short of its own total would
+  still rank its components plausibly, and nothing downstream could tell.
+
+- **Attribution accuracy as a quality metric**, counting **unknown as one of the right
+  answers**. A detector that always named its largest component would score perfectly on
+  the attributable cases while handing a client a confident wrong cause on every other
+  one -- worse than silence, since somebody goes and investigates the wrong meter.
+
+- **Backend fallback.** A failure, rate limit or schema violation on the primary is
+  retried once on the secondary, with the trace recording which backend failed, which
+  served, and why. A budget cutoff is not retried: a spend ceiling is not a backend
+  problem. A backend cannot fall back to itself, refused at startup rather than ignored.
+
+- **A per-sweep token ceiling.** Reaching it stops new model calls and nothing else.
+  Checked before each call against the running total rather than predicted, so it can
+  overshoot by one call -- the right way round, since the alternative is a missing
+  section because an estimate was pessimistic.
+
+- **Two mock resources the estate needed to exercise its own renderer** (#76). `docs/
+  sample-report.md` showed four of the renderer's six sections, because no mock resource
+  was both detector-flagged and tag-exempt and every mock finding happened to be
+  priceable. Exemption shipped in Phase 6 and the unquantified section in Phase 8, and
+  neither appeared in any document a reader could open. Both now do, and neither moves
+  the headline savings by a penny -- which is the whole claim those sections make.
+
+### Changed
+
+- **A model failure now costs the prose and nothing else** (D115). It used to fail the
+  sweep, on the grounds that a model outage must not yield a report missing half its
+  findings. The premise was false: a report built without the model is missing none of
+  them, so the old behaviour discarded a complete, correct report because the optional
+  commentary on it was unavailable. Degradation lives in one helper rather than at four
+  call sites, and a test counts model calls against wrapped calls.
+
+- **A missing narrative is stated, never blank** (D116). "Narrative unavailable (token
+  budget reached)", plus a processing note saying the figures are unaffected. A blank
+  summary reads as "nothing worth saying", which is both wrong and the more flattering
+  of the two readings.
+
+- **Phase order: the part that genuinely needs real traffic became Phase 9b.** D103 split
+  this work out on the grounds that none of it could be *scored* offline. That holds for
+  scoring and not for building -- a primary that raises and a secondary that serves is
+  two backends, and a fake reporting deterministic token counts is a budget crossing. The
+  residue (egress detection, red-teaming a real model, a seasonal baseline, threshold
+  calibration) has no reachable exit criteria without a key, so it is its own phase.
+
+### Fixed
+
+- `test_findings_are_ranked_by_the_composite_not_by_savings` asserted that composites
+  descend across the whole report, which has been false since Phase 7 put the tier first
+  (D104). It stayed green only because the estate contained nothing unquantified. It now
+  asserts descending within the priced tier, and a new test pins D104 end to end.
+
+- `test_a_blocked_action_cannot_lead_the_report` read "ranks last" off a length; it now
+  says what it means, which is last among the priced findings.
 
 ## [0.8.0] - 2026-10-19
 
@@ -661,7 +753,8 @@ Phase 1: the scaffold and a thin vertical slice.
 - Landed as an honest commit series dated when it was actually committed; it predates
   the issue-driven workflow and has no backing issues.
 
-[Unreleased]: https://github.com/vivekanjana76/costsentinel/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/vivekanjana76/costsentinel/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.5.0...v0.6.0
