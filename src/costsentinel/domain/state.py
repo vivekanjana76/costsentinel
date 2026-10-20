@@ -32,7 +32,12 @@ from costsentinel.domain.memory import MemoryMetrics, MemoryRecall
 from costsentinel.domain.observability import RunMetrics
 from costsentinel.domain.recommendations import ActionType, PricedOption, Recommendation
 from costsentinel.domain.report import ClientReport
-from costsentinel.domain.signals import AnomalyAssessment, CostAnomaly, WasteSignal
+from costsentinel.domain.signals import (
+    AnomalyAssessment,
+    CostAnomaly,
+    CostAttribution,
+    WasteSignal,
+)
 
 
 class ScanState(BaseModel):
@@ -69,6 +74,15 @@ class ScanState(BaseModel):
             "One per scope examined, including the clean ones and the inconclusive "
             "ones. 'We looked and spend is steady' and 'nine days are missing so we "
             "cannot tell' are both worth saying, and neither is an empty tuple."
+        ),
+    )
+    attributions: tuple[CostAttribution, ...] = Field(
+        default=(),
+        description=(
+            "What accounted for each anomaly, or why it could not be said. One per "
+            "anomaly whose scope had a series, including the unattributable ones -- an "
+            "absent attribution would read as 'nothing changed' rather than 'we cannot "
+            "say what did'."
         ),
     )
 
