@@ -1000,12 +1000,26 @@ def test_runner_raises_when_a_run_produces_no_report(
         )
 
 
-def test_a_backend_failure_propagates_rather_than_producing_a_partial_report(
+def test_a_backend_outage_costs_the_prose_and_not_the_report(
     provider: MockAzureProvider,
     settings: Settings,
     checkpointer: BaseCheckpointSaver[str],
 ) -> None:
-    """A model outage must not yield a report missing half its findings."""
+    """Reversed in Phase 9, deliberately, and this is the reasoning.
+
+    Until Phase 9 this asserted the opposite: a model failure raised, on the grounds
+    that "a model outage must not yield a report missing half its findings". The
+    premise turned out to be false. A report built without the model is not missing
+    half its findings -- it is missing none of them. Every figure, classification,
+    rank and queue entry is deterministic arithmetic over provider data, and the model
+    only ever narrated them.
+
+    So the old behaviour threw away a complete, correct report because the optional
+    commentary on it was unavailable, which is the worse of the two failures by a wide
+    margin (ARCHITECTURE.md D115). What survives of the original intent is the part
+    that was right: the degradation must be visible, so the report says the narrative
+    is missing rather than leaving a blank.
+    """
     from costsentinel.llm.base import LLMError, LLMTask, Prompt, StructuredResponseT
 
     class BrokenLLM(FakeLLM):
@@ -1020,15 +1034,26 @@ def test_a_backend_failure_propagates_rather_than_producing_a_partial_report(
             msg = "backend exploded"
             raise LLMError(msg)
 
-    with pytest.raises(LLMError, match="backend exploded"):
-        run_client_scan(
-            client=CLIENT_NORTHWIND,
-            provider=provider,
-            llm=BrokenLLM(),
-            settings=settings,
-            checkpointer=checkpointer,
-            run_id="run-broken",
-        )
+    report, _ = run_client_scan(
+        client=CLIENT_NORTHWIND,
+        provider=provider,
+        llm=BrokenLLM(),
+        settings=settings,
+        checkpointer=checkpointer,
+        run_id="run-broken",
+    )
+
+    # Every finding, every figure, the whole queue.
+    assert len(report.findings) == len(EXPECTED_NORTHWIND_FINDINGS)
+    assert report.totals.projected_monthly_savings.amount == EXPECTED_NORTHWIND_MONTHLY
+    assert report.approval_queue
+    for name, expected in EXPECTED_NORTHWIND.items():
+        finding = next(f for f in report.findings if f.resource_name == name)
+        assert finding.monthly_saving.amount == expected, name
+
+    # And it says so, rather than presenting an unexplained report as a normal one.
+    assert any("no model prose" in note for note in report.notes)
+    assert any("unaffected" in note for note in report.notes)
 
 
 def test_a_custom_policy_store_is_honoured(
