@@ -183,9 +183,16 @@ Spend in these subscriptions moved. This is **not** a list of waste and not a li
 | **Difference** | **89.55 USD / day** (increase) |
 | Window | 2026-09-25 to 2026-10-01 |
 | How unusual | 25.31 robust standard deviations |
+| Attributed to | SQL Database - vCore hours |
 | Detector confidence | 0.85 |
 
 Daily spend rose from a baseline of 120.24 USD to 209.79 USD over 2026-09-25 to 2026-10-01, a difference of 89.55 USD.
+
+**What changed.**
+
+| Meter | Was | Now | Difference | Share of the change |
+| --- | --- | --- | --- | --- |
+| SQL Database - vCore hours | 24.04 USD / day | 113.95 USD / day | 89.91 USD / day (increase) | 100% |
 
 A model's note about the level shift.
 

@@ -56,7 +56,12 @@ from costsentinel.domain.report import (
     ReportTotals,
     WasteKindSummary,
 )
-from costsentinel.domain.signals import CostAnomaly, WasteKind
+from costsentinel.domain.signals import (
+    AttributionOutcome,
+    CostAnomaly,
+    CostAttribution,
+    WasteKind,
+)
 from costsentinel.domain.state import ScanState
 from costsentinel.llm.base import LLM, EvidenceBlock, EvidenceField, Prompt
 from costsentinel.llm.contracts import ReportNarrative
@@ -298,6 +303,55 @@ def _anomaly_block(anomaly: CostAnomaly) -> EvidenceBlock:
     )
 
 
+#: What a report anomaly says when no attribution was computed for it at all. Distinct
+#: from every :class:`UnattributedReason`, which are all answers to "we looked": this
+#: one says we did not, which a client is entitled to be able to tell apart.
+NO_ATTRIBUTION_ATTEMPTED = (
+    "What accounted for this change was not examined, so nothing is claimed about its "
+    "cause."
+)
+
+
+def _one_report_anomaly(
+    anomaly: CostAnomaly,
+    attribution: CostAttribution | None,
+    narrative: ReportNarrative,
+) -> ReportAnomaly:
+    """One spend change, with whatever could be said about its cause.
+
+    The attribution is optional and its absence is explicit. A missing attribution
+    renders as "not examined" rather than as nothing at all, because a silent gap in
+    the cause line would read as "no cause" to anybody who had seen an attributed
+    anomaly in the same report.
+    """
+    return ReportAnomaly(
+        anomaly_id=anomaly.anomaly_id,
+        scope=anomaly.subscription_id,
+        subscription_id=anomaly.subscription_id,
+        service=anomaly.service,
+        kind=anomaly.kind,
+        direction=anomaly.direction,
+        baseline=anomaly.baseline,
+        observed=anomaly.observed,
+        delta=anomaly.delta,
+        observed_from=anomaly.observed_from,
+        observed_to=anomaly.observed_to,
+        deviation_score=anomaly.deviation_score,
+        confidence=anomaly.confidence,
+        detector=anomaly.detector,
+        attribution_outcome=(
+            attribution.outcome if attribution else AttributionOutcome.UNATTRIBUTED
+        ),
+        attribution_statement=(
+            attribution.statement() if attribution else NO_ATTRIBUTION_ATTEMPTED
+        ),
+        attributed_components=attribution.components if attribution else (),
+        statement=anomaly.statement(),
+        note=narrative.anomaly_note_for(anomaly.anomaly_id),
+        evidence=tuple(f"{obs.name}: {obs.value}" for obs in anomaly.evidence),
+    )
+
+
 def _report_anomalies(state: ScanState, narrative: ReportNarrative) -> tuple[ReportAnomaly, ...]:
     """Spend changes, in a deterministic order with the model's prose attached.
 
@@ -306,28 +360,11 @@ def _report_anomalies(state: ScanState, narrative: ReportNarrative) -> tuple[Rep
     total. Not ordered by the size of the delta -- a large change on a large
     subscription can be ordinary, which is what the score already accounts for.
     """
+    by_anomaly = {one.anomaly_id: one for one in state.attributions}
     return tuple(
         sorted(
             (
-                ReportAnomaly(
-                    anomaly_id=anomaly.anomaly_id,
-                    scope=anomaly.subscription_id,
-                    subscription_id=anomaly.subscription_id,
-                    service=anomaly.service,
-                    kind=anomaly.kind,
-                    direction=anomaly.direction,
-                    baseline=anomaly.baseline,
-                    observed=anomaly.observed,
-                    delta=anomaly.delta,
-                    observed_from=anomaly.observed_from,
-                    observed_to=anomaly.observed_to,
-                    deviation_score=anomaly.deviation_score,
-                    confidence=anomaly.confidence,
-                    detector=anomaly.detector,
-                    statement=anomaly.statement(),
-                    note=narrative.anomaly_note_for(anomaly.anomaly_id),
-                    evidence=tuple(f"{obs.name}: {obs.value}" for obs in anomaly.evidence),
-                )
+                _one_report_anomaly(anomaly, by_anomaly.get(anomaly.anomaly_id), narrative)
                 for anomaly in state.anomalies
             ),
             key=lambda item: (-item.deviation_score, item.anomaly_id),

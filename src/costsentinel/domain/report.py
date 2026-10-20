@@ -24,7 +24,13 @@ from costsentinel.domain.common import (
 from costsentinel.domain.exemption import ExemptionReason
 from costsentinel.domain.observability import RunMetrics
 from costsentinel.domain.recommendations import ActionClass, ActionType
-from costsentinel.domain.signals import AnomalyDirection, AnomalyKind, WasteKind
+from costsentinel.domain.signals import (
+    AnomalyDirection,
+    AnomalyKind,
+    AttributedComponent,
+    AttributionOutcome,
+    WasteKind,
+)
 
 
 class ReportFinding(Frozen):
@@ -160,6 +166,29 @@ class ReportAnomaly(Frozen):
     deviation_score: Decimal = Field(ge=Decimal(0))
     confidence: Confidence
     detector: str
+    attribution_outcome: AttributionOutcome = Field(
+        default=AttributionOutcome.UNATTRIBUTED,
+        description=(
+            "Whether what caused this change could be named. Defaults to "
+            "unattributed, so an anomaly built by a caller that did not attribute it "
+            "claims nothing."
+        ),
+    )
+    attribution_statement: str = Field(
+        default="",
+        description=(
+            "What accounted for the change, or why it could not be said, in plain "
+            "numbers. Composed by the domain rather than a model, like `statement`."
+        ),
+    )
+    attributed_components: tuple[AttributedComponent, ...] = Field(
+        default=(),
+        description=(
+            "The named components, largest first, each with its before, after, "
+            "difference and share. Empty when unattributed -- a ranked list that "
+            "explains nothing in particular reads as an answer."
+        ),
+    )
     statement: str = Field(
         min_length=1,
         description=(

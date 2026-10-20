@@ -420,9 +420,12 @@ Spend in these subscriptions moved. This is **not** a list of waste and not a li
 | **Difference** | **103.21 USD / day** (increase) |
 | Window | 2026-09-27 to 2026-09-27 |
 | How unusual | 99.25 robust standard deviations |
+| Attributed to | no single cause identified — see below |
 | Detector confidence | 0.70 |
 
 Daily spend rose from a baseline of 35.07 USD to 137.90 USD on 2026-09-27, a difference of 103.21 USD (294.3% of baseline). That is 99.2 robust standard deviations from the 23-day baseline, against a threshold of 5.0.
+
+**What changed.** The change is spread across the meters rather than concentrated in one, so no single component accounts for it. That is itself a finding: look for something affecting everything at once -- a traffic change, a price change, or a change in how the whole environment is used -- rather than for one resource.
 
 Spend in 00000000-0000-4000-8000-00000000a002 shows a spike (increase): 35.07 USD per day before, 137.90 USD after. Typically one day stood out and spend then returned to normal, so something ran once. Worth confirming against your change log for that window; nothing here is an action CostSentinel proposes.
 
@@ -435,9 +438,16 @@ Spend in 00000000-0000-4000-8000-00000000a002 shows a spike (increase): 35.07 US
 | **Difference** | **90.24 USD / day** (increase) |
 | Window | 2026-09-25 to 2026-10-01 |
 | How unusual | 25.31 robust standard deviations |
+| Attributed to | SQL Database - vCore hours |
 | Detector confidence | 0.85 |
 
 Daily spend rose from a baseline of 120.24 USD to 209.79 USD over 2026-09-25 to 2026-10-01, a difference of 90.24 USD (75.0% of baseline). That is 25.3 robust standard deviations from the 23-day baseline, against a threshold of 3.5.
+
+**What changed.**
+
+| Meter | Was | Now | Difference | Share of the change |
+| --- | --- | --- | --- | --- |
+| SQL Database - vCore hours | 24.04 USD / day | 113.95 USD / day | 89.91 USD / day (increase) | 100% |
 
 Spend in 00000000-0000-4000-8000-00000000a001 shows a level shift (increase): 120.24 USD per day before, 209.79 USD after. Typically the daily run rate has moved and stayed moved, so something was added, resized or left running. Worth confirming against your change log for that window; nothing here is an action CostSentinel proposes.
 

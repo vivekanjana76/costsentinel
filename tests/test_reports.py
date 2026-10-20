@@ -44,7 +44,13 @@ from costsentinel.domain.report import (
     ReportSeverity,
     ReportTotals,
 )
-from costsentinel.domain.signals import AnomalyDirection, AnomalyKind, WasteKind
+from costsentinel.domain.signals import (
+    AnomalyDirection,
+    AnomalyKind,
+    AttributedComponent,
+    AttributionOutcome,
+    WasteKind,
+)
 from costsentinel.reports.markdown import (
     SYNTHETIC_BANNER,
     headline_displays,
@@ -164,6 +170,22 @@ def _anomaly() -> ReportAnomaly:
         deviation_score=Decimal("25.31"),
         confidence=Decimal("0.85"),
         detector="spend_level_shift/v1",
+        attribution_outcome=AttributionOutcome.ATTRIBUTED,
+        attributed_components=(
+            AttributedComponent(
+                key="sql-database-vcore",
+                label="SQL Database - vCore hours",
+                baseline=_money("24.04"),
+                observed=_money("113.95"),
+                contribution=_money("89.91"),
+                direction=AnomalyDirection.INCREASE,
+                share=Decimal("1.00"),
+            ),
+        ),
+        attribution_statement=(
+            "Attributed to SQL Database - vCore hours (24.04 USD to 113.95 USD per day, "
+            "up 89.91 USD, 100% of the change)."
+        ),
         statement=(
             "Daily spend rose from a baseline of 120.24 USD to 209.79 USD over "
             "2026-09-25 to 2026-10-01, a difference of 89.55 USD."
@@ -620,3 +642,60 @@ def test_the_permitted_figure_set_covers_the_non_monetary_decimals(
     assert "0.90" in permitted, "confidence"
     assert "25.31" in permitted, "deviation score"
     assert "0.88" in permitted, "ranking composite, quantised to two places"
+
+
+def test_an_attributed_change_shows_what_moved_in_plain_numbers(full: ClientReport) -> None:
+    """The point of attribution reaching the document.
+
+    "Spend rose 89.55 USD a day" is where Phase 7 stopped. A client cannot act on it
+    without knowing what rose, and the before/after/share is what makes the claim
+    checkable rather than merely stated.
+    """
+    body = section(text := render_markdown(full), "## Spend changes — investigate")
+    assert "| Attributed to | SQL Database - vCore hours |" in body
+    assert "**What changed.**" in body
+    assert "| Meter | Was | Now | Difference | Share of the change |" in body
+    assert "| 24.04 USD / day | 113.95 USD / day | 89.91 USD / day (increase) | 100% |" in body
+    # And it is still not a saving, and still proposes nothing.
+    assert "Saving" not in body
+    assert "CostSentinel proposes nothing here" in text
+
+
+def test_an_unattributed_change_says_so_rather_than_going_quiet(full: ClientReport) -> None:
+    """A row that vanished would read as "no cause" to anybody who had seen the other.
+
+    Which is the opposite of what an unattributed outcome means -- "we cannot say what
+    caused this" and "this had no cause" are different claims, and the second one is
+    never true.
+    """
+    anomaly = full.anomalies[0]
+    diffuse = anomaly.model_copy(
+        update={
+            "attribution_outcome": AttributionOutcome.UNATTRIBUTED,
+            "attributed_components": (),
+            "attribution_statement": (
+                "The change is spread across the meters rather than concentrated in one."
+            ),
+        }
+    )
+    text = render_markdown(full.model_copy(update={"anomalies": (diffuse,)}))
+    body = section(text, "## Spend changes — investigate")
+
+    assert "| Attributed to | no single cause identified — see below |" in body
+    assert "spread across the meters" in body
+    assert "| Meter | Was |" not in body, "no table, because there is nothing to tabulate"
+
+
+def test_an_attribution_figure_is_covered_by_the_figure_check(full: ClientReport) -> None:
+    """The money guarantee follows attribution into the document.
+
+    Every before, after and difference in the attribution table is a figure the
+    pipeline computed, so the copy-not-compose rule applies to it exactly as it does
+    to a saving (D109).
+    """
+    text = render_markdown(full)
+    assert "89.91" in monetary_strings(text)
+    assert unrendered_figures(full, text) == []
+
+    corrupted = text.replace("89.91", "89.92", 1)
+    assert unrendered_figures(full, corrupted) == ["89.92"]
