@@ -26,7 +26,12 @@ from costsentinel.domain.recommendations import ActionClass, ActionType
 from costsentinel.domain.report import ClientReport, ReportSeverity
 from costsentinel.domain.signals import WasteKind
 from costsentinel.domain.state import ScanState
-from costsentinel.graph.build import ALL_NODES, SWEEP_NODES, build_graph
+from costsentinel.graph.build import (
+    ALL_NODES,
+    NODE_APPROVAL_GATE,
+    SWEEP_NODES,
+    build_graph,
+)
 from costsentinel.graph.checkpointer import sqlite_checkpointer
 from costsentinel.graph.runner import (
     ScanFailedError,
@@ -36,6 +41,7 @@ from costsentinel.graph.runner import (
     new_run_id,
     run_client_scan,
     run_scan,
+    state_from,
 )
 from costsentinel.guardrails.policy import PolicyStore
 from costsentinel.llm.fake import FakeLLM
@@ -115,20 +121,25 @@ def northwind_report(
 def test_graph_has_the_six_specialists_a_supervisor_and_the_consult_step(
     provider: MockAzureProvider, llm: FakeLLM, settings: Settings
 ) -> None:
-    """Memory Consult joins the six, and is not one of them.
+    """Memory Consult and the approval gate join the six, and are not among them.
 
-    CLAUDE.md section 5 names six specialists. The consult step is a support node
-    that reorders and annotates what they produced, so the count asserted here is
-    six plus one rather than seven specialists.
+    CLAUDE.md section 5 names six specialists. The consult step reorders and annotates
+    what they produced; the approval gate (Phase 10) halts the sweep until a person
+    decides. Both are support nodes, so the count asserted here is six plus two rather
+    than eight specialists -- and it is asserted as a number so adding a node is a
+    deliberate change rather than a silent one.
     """
     graph = build_graph(provider=provider, llm=llm, settings=settings)
     nodes = set(graph.get_graph().nodes)
     assert set(ALL_NODES) <= nodes
-    assert len(SWEEP_NODES) == 7
+    assert len(SWEEP_NODES) == 8
+    assert NODE_APPROVAL_GATE in SWEEP_NODES
     assert "memory_consult" in SWEEP_NODES
     # Six specialists plus one support node, which is why the tuple is no longer
     # called SPECIALIST_NODES.
-    assert len(SWEEP_NODES) - 1 == 6
+    # Six specialists plus two support nodes: the memory consult step and the
+    # Phase 10 approval gate.
+    assert len(SWEEP_NODES) - 2 == 6
     assert "supervisor" in nodes
 
 
@@ -138,7 +149,12 @@ def test_graph_compiles_without_a_checkpointer(
     """Useful for a unit test of the node sequence; not how a real sweep runs."""
     graph = build_graph(provider=provider, llm=llm, settings=settings, checkpointer=None)
     final = graph.invoke(ScanState(run_id="run-nocp", client=CLIENT_MINISTRY))
-    assert ScanState.model_validate(final).report is not None
+    # `state_from` rather than `model_validate`, because a sweep with gated items
+    # halts at the approval gate and returns LangGraph's `__interrupt__` key
+    # alongside the state. A graph compiled without a checkpointer cannot persist
+    # that pause, which is exactly why this configuration is documented as useful
+    # for asserting the node sequence and not for running a sweep.
+    assert state_from(final).report is not None
 
 
 # ---------------------------------------------------------------------------
@@ -598,7 +614,11 @@ def test_every_node_contributes_to_the_audit_trail(
     assert state is not None
 
     actors = {event.actor for event in state.audit}
-    assert actors == set(ALL_NODES)
+    # Every node but the approval gate. The gate ran -- it is what the sweep is
+    # halted inside -- but an interrupted node commits no update, so its audit
+    # events do not exist until a decision resumes it. That they appear then is
+    # asserted by the durability test.
+    assert actors == set(ALL_NODES) - {NODE_APPROVAL_GATE}
 
     kinds = {event.event_type for event in state.audit}
     for expected in (
@@ -648,7 +668,10 @@ def test_routing_decisions_are_recorded_in_state(
 
     visited = [d.to_node for d in state.supervisor_decisions]
     assert visited[0] == "anomaly_scout"
-    assert visited[-1] == "report_author"
+    # The approval gate is last now, not the report author: this estate has gated
+    # actions, so the sweep ends halted inside the gate rather than finished.
+    assert visited[-1] == NODE_APPROVAL_GATE
+    assert visited[-2] == "report_author"
 
 
 def test_an_empty_estate_short_circuits_to_the_report(settings: Settings) -> None:
