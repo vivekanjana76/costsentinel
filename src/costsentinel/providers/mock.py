@@ -440,6 +440,46 @@ _RESOURCES: tuple[_ResSpec, ...] = (
         tags=(("env", "prod"), ("note", "taken before the 2025 platform upgrade")),
         age_days=603,
     ),
+    _ResSpec(
+        # Idle on purpose, and tagged to say so. Added in Phase 9 because the estate
+        # had no resource that a detector flags *and* a tag exempts, so the
+        # "flagged but exempt" path shipped in Phase 6 appeared in no rendered
+        # report -- the one place a client would ever see it.
+        name="vm-core-dr-standby",
+        kind=ResourceKind.VIRTUAL_MACHINE,
+        subscription_index=0,
+        resource_group="rg-core-prod",
+        state=ResourceState.RUNNING,
+        sku="Standard_D4s_v5",
+        tags=(
+            ("env", "prod"),
+            ("role", "disaster-recovery-standby"),
+            ("owner", "platform"),
+            ("cost-centre", "NW-1007"),
+        ),
+        age_days=512,
+        cpu_avg_pct="0.8",
+        cpu_max_pct="2.6",
+        network_in_gb="0.9",
+    ),
+    _ResSpec(
+        # Oversized, in the band where no same-family SKU fits the peak with 2.0x
+        # headroom: 8 vCPU x 37.6% x 2.0 = 6.02 required, and the next step down is
+        # 4. So the finding is real and its saving is honestly unknown, which is the
+        # case the Phase 8 renderer has a whole section for and the mock estate could
+        # not produce.
+        name="vm-core-api-02",
+        kind=ResourceKind.VIRTUAL_MACHINE,
+        subscription_index=0,
+        resource_group="rg-core-prod",
+        state=ResourceState.RUNNING,
+        sku="Standard_D8s_v5",
+        tags=(("env", "prod"), ("owner", "platform"), ("cost-centre", "NW-1003")),
+        age_days=366,
+        cpu_avg_pct="14.2",
+        cpu_max_pct="37.6",
+        network_in_gb="88.4",
+    ),
     # --- NW-DEV-Sandbox ---------------------------------------------------
     _ResSpec(
         # Idle *and* oversized. The idle detector takes precedence: deallocating
