@@ -9,6 +9,7 @@ the process exits, and the run continues days later on a recorded decision.
 
 from __future__ import annotations
 
+import copy
 import enum
 import sqlite3
 from collections.abc import Generator
@@ -16,6 +17,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.serde.base import SerializerProtocol
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite import SqliteSaver
 from pydantic import BaseModel
 
@@ -40,9 +43,33 @@ def domain_allowlist() -> tuple[tuple[str, str], ...]:
     return tuple(sorted(allowed))
 
 
+def domain_serde() -> SerializerProtocol:
+    """A serializer that permits CostSentinel's domain types and refuses the rest.
+
+    Constructed with an explicit allowlist rather than merged into the default one,
+    and that distinction is the whole reason this function exists.
+    ``BaseCheckpointSaver.with_allowlist`` *merges* into whatever the serializer
+    already permits -- and the default is the literal ``True``, meaning "permit
+    everything and warn". The merge short-circuits on that and returns the serializer
+    untouched, so the previous implementation applied no allowlist at all. The warning
+    LangGraph printed on every resume, once per domain type, was it saying so.
+
+    Passing the list at construction makes it enforcing: a checkpoint naming a class
+    outside it fails to deserialise rather than instantiating it. That is the property
+    the allowlist was always meant to provide, and it matters most on the path Phase 10
+    depends on -- a sweep's state read back from a file another process wrote.
+    """
+    return JsonPlusSerializer(allowed_msgpack_modules=domain_allowlist())
+
+
 def apply_allowlist(saver: BaseCheckpointSaver[str]) -> BaseCheckpointSaver[str]:
-    """Permit CostSentinel's own domain types to be read back from a checkpoint."""
-    return saver.with_allowlist(domain_allowlist())
+    """Permit CostSentinel's own domain types to be read back from a checkpoint.
+
+    Kept as the seam every caller uses, now backed by :func:`domain_serde`.
+    """
+    clone = copy.copy(saver)
+    clone.serde = domain_serde()
+    return clone
 
 
 @contextmanager
@@ -57,9 +84,9 @@ def sqlite_checkpointer(path: Path) -> Generator[BaseCheckpointSaver[str]]:
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(str(path), check_same_thread=False)
     try:
-        saver = SqliteSaver(connection)
+        saver = SqliteSaver(connection, serde=domain_serde())
         saver.setup()
-        yield apply_allowlist(saver)
+        yield saver
     finally:
         connection.close()
 
