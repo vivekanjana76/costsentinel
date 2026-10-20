@@ -41,6 +41,7 @@ from costsentinel.domain.exemption import ExemptionReason
 from costsentinel.domain.recommendations import ActionClass, ActionType
 from costsentinel.domain.state import ScanState
 from costsentinel.graph.build import build_graph
+from costsentinel.graph.runner import state_from
 from costsentinel.guardrails.exemption import ExemptionPolicy
 from costsentinel.llm.base import LLMTask, Prompt, StructuredResponseT
 from costsentinel.llm.fake import FakeLLM
@@ -92,7 +93,7 @@ def _run_recording(
         ScanState(run_id="run-tag-injection", client=CLIENT),
         config={"configurable": {"thread_id": "run-tag-injection"}},
     )
-    return ScanState.model_validate(final), recorder.prompts
+    return state_from(final), recorder.prompts
 
 
 # ---------------------------------------------------------------------------

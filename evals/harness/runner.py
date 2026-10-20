@@ -34,6 +34,7 @@ from costsentinel.domain.report import ClientReport, ExemptFinding
 from costsentinel.domain.signals import WasteKind
 from costsentinel.domain.state import ScanState
 from costsentinel.graph.build import build_graph
+from costsentinel.graph.runner import state_from
 from costsentinel.llm.fake import FakeLLM
 from costsentinel.observability.logging import get_logger
 from costsentinel.reports.markdown import render_markdown
@@ -124,7 +125,7 @@ def run_pipeline(dataset: LabelledEstate, settings: Settings) -> tuple[ClientRep
         requested_by="evals",
     )
     final = graph.invoke(initial, config={"configurable": {"thread_id": initial.run_id}})
-    state = ScanState.model_validate(final)
+    state = state_from(final)
     if state.report is None:  # pragma: no cover - a failed graph is a test failure
         msg = f"the pipeline produced no report for {dataset.dataset_id}"
         raise RuntimeError(msg)

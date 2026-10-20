@@ -984,7 +984,7 @@ def test_a_graph_that_sets_no_report_leaves_state_report_none(settings: Settings
     graph.add_edge("noop", END)
 
     final = graph.compile().invoke(ScanState(run_id="run-empty", client=CLIENT_NORTHWIND))
-    state = ScanState.model_validate(final)
+    state = state_from(final)
     assert state.report is None
     assert state.errors == ("did nothing",)
 
