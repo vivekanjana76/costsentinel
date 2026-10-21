@@ -646,3 +646,64 @@ def test_the_image_does_not_install_the_azure_or_llm_extras() -> None:
     # Not root, and not running a sweep on start-up.
     assert "USER costsentinel" in dockerfile
     assert "uvicorn" in dockerfile
+
+
+def test_every_domain_type_is_exported_so_the_checkpoint_allowlist_is_complete() -> None:
+    """The allowlist is derived from `domain.__all__`, so an unexported type is a gap.
+
+    This went wrong twice before it was noticed, and the two failures hid each other.
+    `ReportAnomaly` was never exported after Phase 7 and the Phase 9 breakdown and
+    attribution types were never exported either -- so an enforcing allowlist would
+    have refused to deserialise any sweep containing an anomaly. It did not refuse,
+    because `apply_allowlist` was a no-op: it merged into a serializer whose default
+    allowlist was the literal `True`, and the merge short-circuits on that.
+
+    Both are fixed. This test is the one that stops the derivation going stale again,
+    because the failure mode is a resume that breaks on a sweep whose shape happens to
+    include a type nobody remembered to export.
+    """
+    import enum
+    import importlib
+    import pkgutil
+
+    from pydantic import BaseModel
+
+    import costsentinel.domain as domain_package
+
+    exported = set(domain_package.__all__)
+    missing: list[str] = []
+    for info in pkgutil.iter_modules(domain_package.__path__):
+        module = importlib.import_module(f"costsentinel.domain.{info.name}")
+        for name, obj in vars(module).items():
+            if name.startswith("_") or not isinstance(obj, type):
+                continue
+            if not issubclass(obj, BaseModel | enum.Enum):
+                continue
+            if obj.__module__ != module.__name__:
+                continue
+            if name not in exported:
+                missing.append(f"{info.name}.{name}")
+
+    assert not missing, (
+        f"these domain types are not in domain.__all__, so the checkpoint allowlist "
+        f"does not cover them and a resume of a sweep containing one will fail: "
+        f"{sorted(missing)}"
+    )
+
+
+def test_the_checkpoint_allowlist_actually_enforces() -> None:
+    """`with_allowlist` merges, and the default it merges into permits everything.
+
+    So the previous implementation derived a careful 80-entry allowlist and applied it
+    to nothing, while LangGraph printed "Deserializing unregistered type ... will be
+    blocked in a future version" once per domain type on every resume. The claim in the
+    docstring -- that a checkpoint cannot be used to instantiate an arbitrary class --
+    was false.
+    """
+    from costsentinel.graph.checkpointer import domain_allowlist, domain_serde
+
+    serde = domain_serde()
+    permitted = getattr(serde, "_allowed_msgpack_modules", True)
+    assert permitted is not True, "the serializer still permits every type"
+    assert permitted, "the serializer permits nothing, which would block every resume"
+    assert len(domain_allowlist()) > 50, "the allowlist looks suspiciously short"

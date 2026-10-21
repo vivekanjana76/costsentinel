@@ -24,6 +24,7 @@ from costsentinel.domain.exemption import ExemptionVerdict
 from costsentinel.domain.governance import (
     ActionClassification,
     ApprovalDecision,
+    ApprovalRecord,
     ApprovalRequest,
     AuditEvent,
     SupervisorDecision,
@@ -113,6 +114,15 @@ class ScanState(BaseModel):
     classifications: tuple[ActionClassification, ...] = ()
     approval_requests: tuple[ApprovalRequest, ...] = ()
     decisions: tuple[ApprovalDecision, ...] = ()
+    approval_records: tuple[ApprovalRecord, ...] = Field(
+        default=(),
+        description=(
+            "Every decision recorded against this sweep while it was paused, in the "
+            "order they were made -- including deferrals, which resolve nothing. The "
+            "audit record, as distinct from `decisions`, which is the minimal "
+            "authorisation the gate protocol passes around."
+        ),
+    )
 
     # --- memory ----------------------------------------------------------
     recalls: tuple[MemoryRecall, ...] = Field(

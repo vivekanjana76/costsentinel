@@ -35,8 +35,19 @@ from costsentinel.config import (
     Settings,
     get_settings,
 )
+from costsentinel.domain.governance import Decision, DecisionRequest
 from costsentinel.domain.memory import Outcome
 from costsentinel.domain.report import ClientReport, ScanResult
+from costsentinel.graph.approvals import (
+    ApprovalsError,
+    PausedSweep,
+    approvals_graph,
+    find_pending,
+    paused_sweep,
+    paused_sweeps,
+    resume,
+)
+from costsentinel.graph.checkpointer import checkpointer_for
 from costsentinel.graph.runner import run_client_scan, run_scan
 from costsentinel.llm.base import LLMError
 from costsentinel.llm.fake import FakeLLM
@@ -189,6 +200,67 @@ def build_parser() -> argparse.ArgumentParser:
     )
     decide.add_argument(
         "--by",
+        default=None,
+        help="Who decided. Defaults to the operating system user.",
+    )
+
+    approvals = subcommands.add_parser(
+        "approvals",
+        help="See what a paused sweep is waiting on, and decide it.",
+        description=(
+            "A sweep with gated actions halts at a durable checkpoint and the process "
+            "exits. These commands are how a person finds that sweep later, from a "
+            "terminal that shares nothing with the original run but a file on disk, "
+            "and resumes it.\n"
+            "\n"
+            "Approving hands the action to a human operator and records that it was "
+            "handed off. CostSentinel has no execution path: there is nothing here "
+            "that can change a resource, and four tests assert that from four "
+            "different directions."
+        ),
+    )
+    approval_actions = approvals.add_subparsers(dest="approvals_command", required=True)
+
+    approval_actions.add_parser(
+        "list",
+        help="Show every sweep waiting on a decision, and what it is waiting on.",
+    )
+
+    approve = approval_actions.add_parser(
+        "decide",
+        help="Record a decision on one pending recommendation and resume its sweep.",
+    )
+    approve.add_argument(
+        "recommendation_id",
+        help="The recommendation id from the report. `approvals list` shows them.",
+    )
+    decision_group = approve.add_mutually_exclusive_group(required=True)
+    decision_group.add_argument(
+        "--approve",
+        action="store_true",
+        help=("A person may carry this out by hand. CostSentinel will not and cannot perform it."),
+    )
+    decision_group.add_argument(
+        "--reject", action="store_true", help="Do not do this. Resolves the item."
+    )
+    decision_group.add_argument(
+        "--defer",
+        action="store_true",
+        help=(
+            "Not now. Recorded, and the item stays in the queue -- which is the "
+            "difference between this and --reject."
+        ),
+    )
+    approve.add_argument(
+        "--reason",
+        required=True,
+        help=(
+            "Why. Mandatory even for an approval: a decision with no stated reason "
+            "teaches the memory nothing and cannot be explained to a client later."
+        ),
+    )
+    approve.add_argument(
+        "--approver",
         default=None,
         help="Who decided. Defaults to the operating system user.",
     )
@@ -826,6 +898,107 @@ def run_report(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def describe_queue(sweeps: Sequence[PausedSweep]) -> str:
+    """The pending-approval queue as an operator reads it.
+
+    Figures are printed exactly as the report rendered them, because they are copied
+    from it -- an approver should be looking at the same number the client was shown,
+    and a figure re-derived here could differ from it after a reprice.
+    """
+    if not sweeps:
+        return (
+            "Nothing is awaiting a decision.\n"
+            "\n"
+            "A sweep pauses here only when it proposes an action classified `review` "
+            "or `block`. Run `costsentinel scan` to produce one."
+        )
+
+    lines: list[str] = []
+    total = sum(len(sweep.pending) for sweep in sweeps)
+    lines.append(f"{total} action(s) awaiting a decision across {len(sweeps)} paused sweep(s).")
+    lines.append("")
+    for sweep in sweeps:
+        lines.append(f"{sweep.client}  [sweep {sweep.run_id}]")
+        for item in sweep.pending:
+            deferred = f"  (deferred {item.deferrals}x)" if item.deferrals else ""
+            lines.append(f"  {item.recommendation_id}  `{item.action_class.value}`{deferred}")
+            lines.append(f"    {item.summary}")
+            lines.append(
+                f"    costs {item.figures.current_monthly_cost_display} / month; "
+                f"saving {item.figures.monthly_saving_display} / month "
+                f"({item.figures.annual_saving_display} / year)"
+            )
+            lines.append(f"    resource {item.target_resource_id}")
+        lines.append("")
+    lines.append(
+        "Decide with: costsentinel approvals decide <recommendation-id> "
+        '--approve|--reject|--defer --reason "..."'
+    )
+    lines.append(
+        "An approval hands the action to a person and records the hand-off. "
+        "CostSentinel has no path to perform it."
+    )
+    return "\n".join(lines)
+
+
+def _decision_from(args: argparse.Namespace) -> Decision:
+    """Which decision the flags asked for. Mutually exclusive and required."""
+    if args.approve:
+        return Decision.APPROVED
+    if args.reject:
+        return Decision.REJECTED
+    return Decision.DEFERRED
+
+
+def run_approvals(args: argparse.Namespace, settings: Settings) -> int:
+    """Show the pending-approval queue, or decide one item and resume its sweep."""
+    with checkpointer_for(settings) as saver:
+        graph = approvals_graph(settings, saver)
+        sweeps = paused_sweeps(graph, saver)
+
+        if args.approvals_command == "list":
+            print(describe_queue(sweeps))
+            return 0
+
+        try:
+            sweep, pending = find_pending(sweeps, args.recommendation_id)
+        except ApprovalsError as exc:
+            print(f"{PROGRAM}: {exc}", file=sys.stderr)
+            return 1
+
+        decision = _decision_from(args)
+        request = DecisionRequest(
+            recommendation_id=pending.recommendation_id,
+            decision=decision,
+            approver=args.approver or _decided_by(args),
+            reason=args.reason,
+        )
+        state = resume(graph, sweep.run_id, request)
+
+        record = next(
+            (
+                one
+                for one in reversed(state.approval_records)
+                if one.recommendation_id == pending.recommendation_id
+            ),
+            None,
+        )
+        if record is None:  # pragma: no cover -- the gate always records
+            print(f"{PROGRAM}: the decision was not recorded", file=sys.stderr)
+            return 1
+
+        print(record.statement())
+        remaining = paused_sweep(graph, sweep.run_id)
+        if remaining is None:
+            print(f"Sweep {sweep.run_id} is complete; every gated action has a decision.")
+        else:
+            print(
+                f"Sweep {sweep.run_id} is still waiting on "
+                f"{len(remaining.pending)} action(s). Run `approvals list` to see them."
+            )
+        return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point.
 
@@ -851,6 +1024,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "report":
         return run_report(args, settings)
+
+    if args.command == "approvals":
+        return run_approvals(args, settings)
 
     real = bool(args.real) or settings.mode is RunMode.REAL
     scope: tuple[str, ...] = ()

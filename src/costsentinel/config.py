@@ -130,6 +130,34 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- A2A surface -----------------------------------------------------
+    a2a_enabled: bool = Field(
+        default=False,
+        validation_alias=_env("A2A_ENABLED"),
+        description=(
+            "Whether to serve the A2A endpoint. Off by default: a surface another "
+            "agent can reach should be something an operator turned on, not something "
+            "that appeared. The Agent Card is published either way, so a consumer can "
+            "discover what is available rather than probe for it."
+        ),
+    )
+    a2a_url: str = Field(
+        default="http://localhost:8000",
+        validation_alias=_env("A2A_URL"),
+        description="Where the card says the endpoint lives.",
+    )
+    a2a_signing_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=_env("A2A_SIGNING_KEY"),
+        description=(
+            "Key the Agent Card is signed with. Unset in mock mode uses the committed "
+            "synthetic key, so the signature is exercised in CI -- one whose signing "
+            "has never been checked is not a feature. Unset in real mode produces an "
+            "*unsigned* card rather than one signed with a published key, because a "
+            "signature anybody can forge invites a consumer to trust it."
+        ),
+    )
+
     # --- mock provider ---------------------------------------------------
     mock_seed: int = Field(default=1337, validation_alias=_env("MOCK_SEED"))
 

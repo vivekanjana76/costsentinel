@@ -37,6 +37,13 @@ from costsentinel.domain.recommendations import (
     Recommendation,
     SavingsEstimate,
 )
+from costsentinel.domain.report import (
+    ClientReport,
+    ReportFinding,
+    ReportPeriod,
+    ReportSeverity,
+    ReportTotals,
+)
 from costsentinel.domain.signals import Observation, WasteKind, WasteSignal
 from costsentinel.domain.state import ScanState
 
@@ -142,6 +149,55 @@ def _classification(
         reason="test",
         classified_at=AS_OF,
         provenance=PROVENANCE,
+    )
+
+
+def _report_with_gated_finding(rec_id: str = "rec-1") -> ClientReport:
+    """A minimal report whose approval queue has one gated item.
+
+    The approval gate reads its queue from the *report* rather than recomputing it, so
+    a state that is "classified and gated" only halts once there is a document showing
+    the client the same figures the approver will see.
+    """
+    finding = ReportFinding(
+        rank=1,
+        recommendation_id=rec_id,
+        signal_id="ws-1",
+        waste_kind=WasteKind.ORPHANED_MANAGED_DISK,
+        subscription_id="sub-1",
+        resource_id="/r/1",
+        resource_name="disk-1",
+        current_monthly_cost=MoneyAmount.of(Decimal("38.42"), provenance=PROVENANCE),
+        proposed_action=ActionType.DELETE_ORPHANED_MANAGED_DISK,
+        action_class=ActionClass.REVIEW,
+        requires_approval=True,
+        confidence=Decimal("0.95"),
+        rationale="because",
+        monthly_saving=MoneyAmount.of(Decimal("38.42"), provenance=PROVENANCE),
+        annual_saving=MoneyAmount.of(Decimal("461.04"), provenance=PROVENANCE),
+        savings_basis="the whole charge ceases",
+        savings_is_estimated=False,
+    )
+    return ClientReport(
+        report_id="rpt-run-1",
+        run_id="run-1",
+        client="acme",
+        period=ReportPeriod(start=AS_OF.date(), end=AS_OF.date(), days=1),
+        subscriptions_in_scope=("sub-1",),
+        resources_examined=1,
+        severity=ReportSeverity.LOW,
+        executive_summary="one finding awaits a decision",
+        summary_provenance=Provenance(source=ProvenanceSource.LLM_INFERENCE),
+        totals=ReportTotals(
+            observed_monthly_spend=MoneyAmount.undetermined("n/a"),
+            projected_monthly_savings=MoneyAmount.of(Decimal("38.42"), provenance=PROVENANCE),
+            projected_annual_savings=MoneyAmount.of(Decimal("461.04"), provenance=PROVENANCE),
+            findings_count=1,
+            awaiting_approval_count=1,
+            automatable_count=0,
+        ),
+        findings=(finding,),
+        approval_queue=(),
     )
 
 
@@ -310,8 +366,19 @@ def test_a_planner_that_produces_nothing_escalates_to_the_report(
 # ---------------------------------------------------------------------------
 
 
-def test_a_gated_action_routes_through_the_approval_seam(settings: Settings) -> None:
-    state = ScanState(
+def test_a_gated_action_is_reported_first_and_then_gated(settings: Settings) -> None:
+    """Two steps from Phase 10, and the order is the point.
+
+    The report is written *before* the approval gate (D119). A client waiting on their
+    cost review must not be waiting on their own approval of the things in it, and the
+    document is correct and complete either way -- so the gated state routes onward to
+    the report author, and only the state that already has a report halts.
+
+    Before Phase 10 this routed straight to the report author with `REQUIRE_APPROVAL`
+    and the honest reason that nothing had an execution path anyway. The route existed
+    and halted nothing.
+    """
+    gated = ScanState(
         run_id="run-1",
         client="acme",
         estate=_estate(),
@@ -322,10 +389,35 @@ def test_a_gated_action_routes_through_the_approval_seam(settings: Settings) -> 
         classifications=(_classification(),),
         memory_consulted=True,
     )
-    decision = _decide(settings, state).supervisor_decisions[-1]
+    first = _decide(settings, gated).supervisor_decisions[-1]
+    assert first.action is RouteAction.PROCEED
+    assert first.to_node == "report_author"
+    assert "awaiting a decision" in first.reason
+
+
+def test_a_gated_action_halts_once_the_report_exists(settings: Settings) -> None:
+    """The halt itself: a durable pause, not a note in a document."""
+    with_report = ScanState(
+        run_id="run-1",
+        client="acme",
+        estate=_estate(),
+        signals=(_signal(),),
+        root_causes=(_root_cause(),),
+        priced_options=(_option(),),
+        recommendations=(_recommendation(),),
+        classifications=(_classification(),),
+        memory_consulted=True,
+        report=_report_with_gated_finding(),
+    )
+    after = _decide(settings, with_report)
+    decision = after.supervisor_decisions[-1]
     assert decision.action is RouteAction.REQUIRE_APPROVAL
+    assert decision.to_node == "approval_gate"
+    assert route_from_supervisor(after) == "approval_gate"
     assert "recorded human decision" in decision.reason
-    assert "execution path in this phase" in decision.reason
+    assert "durable checkpoint" in decision.reason
+    # What approval means, stated in the routing reason an operator reads in the log.
+    assert "no execution path" in decision.reason
 
 
 def test_a_recorded_decision_clears_the_approval_seam(settings: Settings) -> None:
@@ -352,6 +444,103 @@ def test_a_recorded_decision_clears_the_approval_seam(settings: Settings) -> Non
     decision = _decide(settings, state).supervisor_decisions[-1]
     assert decision.action is RouteAction.PROCEED
     assert decision.to_node == "report_author"
+
+
+def test_a_recorded_decision_lets_a_paused_sweep_finish(settings: Settings) -> None:
+    """The resume condition, read off the state the gate writes.
+
+    A sweep halts while anything gated is undecided and completes once every gated
+    item has a *resolving* record. A deferral is not one -- see
+    `test_a_deferral_leaves_the_sweep_waiting`.
+    """
+    from costsentinel.domain.governance import ApprovalRecord, ApprovalState, FrozenFigures
+
+    state = ScanState(
+        run_id="run-1",
+        client="acme",
+        estate=_estate(),
+        signals=(_signal(),),
+        root_causes=(_root_cause(),),
+        priced_options=(_option(),),
+        recommendations=(_recommendation(),),
+        classifications=(_classification(),),
+        memory_consulted=True,
+        report=_report_with_gated_finding(),
+        approval_records=(
+            ApprovalRecord(
+                record_id="apr-1",
+                run_id="run-1",
+                recommendation_id="rec-1",
+                client="acme",
+                subscription_id="sub-1",
+                target_resource_id="/r/1",
+                target_resource_name="disk-1",
+                action=ActionType.DELETE_ORPHANED_MANAGED_DISK,
+                action_class=ActionClass.REVIEW,
+                decision=Decision.APPROVED,
+                state=ApprovalState.HANDED_OFF,
+                approver="ops@example.com",
+                reason="agreed in the Tuesday review",
+                figures=FrozenFigures(
+                    monthly_saving_display="10.00 USD",
+                    annual_saving_display="120.00 USD",
+                    current_monthly_cost_display="10.00 USD",
+                ),
+                provenance=PROVENANCE,
+            ),
+        ),
+    )
+    after = _decide(settings, state)
+    assert after.supervisor_decisions[-1].action is RouteAction.COMPLETE
+    assert route_from_supervisor(after) == "__end__"
+
+
+def test_a_deferral_leaves_the_sweep_waiting(settings: Settings) -> None:
+    """A deferral is a recorded answer that resolves nothing.
+
+    Which is the whole difference between a deferral and a rejection, and the reason
+    the supervisor reads the approval records rather than the decisions tuple.
+    """
+    from costsentinel.domain.governance import ApprovalRecord, ApprovalState, FrozenFigures
+
+    state = ScanState(
+        run_id="run-1",
+        client="acme",
+        estate=_estate(),
+        signals=(_signal(),),
+        root_causes=(_root_cause(),),
+        priced_options=(_option(),),
+        recommendations=(_recommendation(),),
+        classifications=(_classification(),),
+        memory_consulted=True,
+        report=_report_with_gated_finding(),
+        approval_records=(
+            ApprovalRecord(
+                record_id="apr-1",
+                run_id="run-1",
+                recommendation_id="rec-1",
+                client="acme",
+                subscription_id="sub-1",
+                target_resource_id="/r/1",
+                target_resource_name="disk-1",
+                action=ActionType.DELETE_ORPHANED_MANAGED_DISK,
+                action_class=ActionClass.REVIEW,
+                decision=Decision.DEFERRED,
+                state=ApprovalState.DEFERRED,
+                approver="ops@example.com",
+                reason="revisit after the quarter close",
+                figures=FrozenFigures(
+                    monthly_saving_display="10.00 USD",
+                    annual_saving_display="120.00 USD",
+                    current_monthly_cost_display="10.00 USD",
+                ),
+                provenance=PROVENANCE,
+            ),
+        ),
+    )
+    after = _decide(settings, state)
+    assert after.supervisor_decisions[-1].action is RouteAction.REQUIRE_APPROVAL
+    assert route_from_supervisor(after) == "approval_gate"
 
 
 def test_an_allow_only_run_needs_no_approval(settings: Settings) -> None:

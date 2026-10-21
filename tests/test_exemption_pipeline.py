@@ -45,6 +45,7 @@ from costsentinel.domain.governance import AuditEventType, RouteAction
 from costsentinel.domain.signals import WasteKind
 from costsentinel.domain.state import ScanState
 from costsentinel.graph.build import build_graph
+from costsentinel.graph.runner import state_from
 from costsentinel.llm.fake import FakeLLM
 
 SUBSCRIPTION = "00000000-0000-4000-8000-0000000f0001"
@@ -186,7 +187,7 @@ def _run(resources: Sequence[Resource], settings: Settings) -> ScanState:
         ScanState(run_id="run-exempt-test", client=CLIENT),
         config={"configurable": {"thread_id": "run-exempt-test"}},
     )
-    return ScanState.model_validate(final)
+    return state_from(final)
 
 
 # ---------------------------------------------------------------------------

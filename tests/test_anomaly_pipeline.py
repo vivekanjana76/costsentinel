@@ -57,6 +57,7 @@ from costsentinel.domain.signals import (
 )
 from costsentinel.domain.state import ScanState
 from costsentinel.graph.build import build_graph
+from costsentinel.graph.runner import state_from
 from costsentinel.llm.contracts import ReportNarrative
 from costsentinel.llm.fake import FakeLLM
 from costsentinel.providers.mock import BreakdownShape, synthetic_breakdown
@@ -246,7 +247,7 @@ def _run(resources: Sequence[Resource], settings: Settings, *, gap: bool = False
         ScanState(run_id="run-anomaly-test", client=CLIENT),
         config={"configurable": {"thread_id": "run-anomaly-test"}},
     )
-    return ScanState.model_validate(final)
+    return state_from(final)
 
 
 @pytest.fixture
@@ -469,7 +470,7 @@ def test_a_hostile_note_changes_no_number_and_no_verdict(
         ScanState(run_id="run-anomaly-hostile", client=CLIENT),
         config={"configurable": {"thread_id": "run-anomaly-hostile"}},
     )
-    hostile = ScanState.model_validate(final)
+    hostile = state_from(final)
 
     assert honest.report is not None
     assert hostile.report is not None

@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from costsentinel.domain.common import Frozen, Provenance, utc_now
 from costsentinel.domain.recommendations import ActionClass, ActionType
@@ -73,10 +73,29 @@ class Decision(StrEnum):
 
     There is no "timed out means approved" member, and absence of a decision is not
     a member at all -- a run with no recorded decision simply stays halted.
+
+    ``DEFERRED`` was added in Phase 10, when the gate became a durable interrupt and
+    an approver gained the ability to say "not now" to a sweep that is actually
+    waiting on them. It is a *recorded* answer that resolves nothing: the item stays
+    in the queue and the sweep stays paused. That is deliberately different from a
+    rejection, which resolves it, and from silence, which records nothing -- "ask me
+    next week" and "no" lead to different conversations with a client, and a gate
+    that collapsed them would either nag about something they intend to do or forget
+    something they only postponed.
     """
 
     APPROVED = "approved"
     REJECTED = "rejected"
+    DEFERRED = "deferred"
+
+    @property
+    def resolves(self) -> bool:
+        """Whether this answer takes the item out of the pending queue.
+
+        A deferral does not. It is the one answer that leaves the sweep exactly where
+        it was, with a record of having been asked.
+        """
+        return self is not Decision.DEFERRED
 
 
 class ApprovalRequest(Frozen):
@@ -112,8 +131,209 @@ class ApprovalDecision(Frozen):
 
     @property
     def is_approved(self) -> bool:
-        """Whether this decision authorises the action."""
+        """Whether this decision authorises the action.
+
+        "Authorises" means a person may now carry it out by hand. It has never meant
+        that CostSentinel will, and from Phase 10 that is asserted four ways rather
+        than being true only because no execution code happens to exist yet
+        (ARCHITECTURE.md D118).
+        """
         return self.decision is Decision.APPROVED
+
+
+class ApprovalState(StrEnum):
+    """Where a gated recommendation has got to.
+
+    Four states and no fifth. The one that matters is what is *missing*: there is no
+    ``EXECUTED``, no ``APPLYING`` and no ``FAILED``, because there is no execution
+    path for a state machine to describe. An approval ends at
+    :attr:`HANDED_OFF` -- a person has agreed and a person must now do it -- and
+    adding a member here would be the first half of building the thing this system
+    deliberately cannot do.
+    """
+
+    #: Classified as needing a decision; nobody has given one.
+    AWAITING_DECISION = "awaiting_decision"
+
+    #: Approved. A human operator carries it out; CostSentinel does not and cannot.
+    HANDED_OFF = "handed_off"
+
+    #: Rejected. Resolved, and remembered so it is not re-pitched as new.
+    DECLINED = "declined"
+
+    #: Deferred. Recorded, still awaiting a decision.
+    DEFERRED = "deferred"
+
+    @classmethod
+    def for_decision(cls, decision: Decision) -> ApprovalState:
+        """The state one decision leads to.
+
+        Exhaustive over :class:`Decision` by construction: a member added there with
+        no mapping here is a static error rather than a silent fall-through to
+        something permissive.
+        """
+        match decision:
+            case Decision.APPROVED:
+                return cls.HANDED_OFF
+            case Decision.REJECTED:
+                return cls.DECLINED
+            case Decision.DEFERRED:
+                return cls.DEFERRED
+
+    @property
+    def is_pending(self) -> bool:
+        """Whether this item is still waiting on a human."""
+        return self in {ApprovalState.AWAITING_DECISION, ApprovalState.DEFERRED}
+
+
+class FrozenFigures(Frozen):
+    """The figures as they stood when a decision was made.
+
+    Copied rather than referenced, and the reason is the whole point of the type. An
+    approver agrees to a *specific* saving on a *specific* resource at a moment in
+    time. A re-scan next month that reprices the resource, or a catalogue refresh that
+    moves the rate, must not retroactively change what they agreed to -- and if the
+    record pointed at live figures it silently would.
+
+    Strings rather than ``MoneyAmount``, because what is being frozen is what the
+    approver was *shown*: the display the report rendered, down to the grouping and
+    the currency. Re-deriving it later from an amount would be re-deriving it from
+    data that may have moved.
+    """
+
+    monthly_saving_display: str = Field(description="As the report rendered it.")
+    annual_saving_display: str = Field(description="As the report rendered it.")
+    current_monthly_cost_display: str = Field(description="As the report rendered it.")
+    savings_basis: str = Field(
+        default="", description="How the saving was derived, as the approver saw it."
+    )
+
+
+class PendingApproval(Frozen):
+    """One gated recommendation waiting on a human, as a paused sweep presents it.
+
+    What an operator sees in ``costsentinel approvals list`` and what the interrupt
+    payload carries. Everything needed to decide, and nothing that could carry out the
+    decision: there is no handle, no command and no endpoint on this type.
+    """
+
+    run_id: str = Field(description="The sweep that is paused. Also its checkpoint thread id.")
+    recommendation_id: str
+    client: str
+    subscription_id: str
+    target_resource_id: str
+    target_resource_name: str
+    action: ActionType
+    action_class: ActionClass
+    waste_kind: str = Field(default="", description="What was detected, for context.")
+    summary: str = Field(min_length=1, description="What is being proposed, in a line.")
+    figures: FrozenFigures
+    requires_approval: bool = True
+    state: ApprovalState = ApprovalState.AWAITING_DECISION
+    deferrals: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "How many times this item has been deferred. Carried so an operator can "
+            "see that an item keeps being postponed, which is itself a decision about "
+            "it that nobody has written down."
+        ),
+    )
+
+
+class DecisionRequest(Frozen):
+    """One decision arriving from outside the graph, before it is trusted.
+
+    A resume value comes from a CLI invocation today and from an adapter's webhook in
+    Phase 10b, so it is untrusted input in exactly the sense an LLM response is -- and
+    it is handled the same way: validated against a schema rather than read field by
+    field, with unknown keys refused rather than ignored.
+
+    What it deliberately cannot carry is any of the *facts*. No resource id, no action,
+    no figure, no action class. Those are copied from the pending item the
+    recommendation id names, so a malformed or hostile request can fail to decide
+    anything and cannot decide something other than what it appears to
+    (ARCHITECTURE.md D120).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    recommendation_id: str = Field(min_length=1)
+    decision: Decision
+    approver: str = Field(min_length=1, description="Who decided. Never defaulted.")
+    reason: str = Field(
+        min_length=1,
+        description=(
+            "Why. Mandatory even for an approval: a decision with no stated reason "
+            "teaches the episodic memory nothing and cannot be explained to a client."
+        ),
+    )
+
+
+class ApprovalRecord(Frozen):
+    """A recorded decision on one gated recommendation, against a paused sweep.
+
+    Distinct from :class:`ApprovalDecision`, which is the minimal authorisation the
+    gate protocol passes around. This is the *audit* record: who, what, when, why, and
+    the figures they were looking at.
+
+    Carries **no executable handle of any kind** -- no callable, no command, no
+    endpoint, no resource client. The absence is asserted against the field set, so a
+    field added later fails a test rather than quietly becoming the first half of an
+    execution path (ARCHITECTURE.md D118).
+    """
+
+    record_id: str
+    run_id: str
+    recommendation_id: str
+    client: str
+    subscription_id: str
+    target_resource_id: str
+    target_resource_name: str
+    action: ActionType
+    action_class: ActionClass
+    decision: Decision
+    state: ApprovalState
+    approver: str = Field(min_length=1, description="Who decided. Never a default or a system id.")
+    reason: str = Field(
+        min_length=1,
+        description=(
+            "Why. Mandatory on every decision including an approval, because a "
+            "decision with no stated reason teaches the episodic memory nothing and "
+            "cannot be explained back to a client later."
+        ),
+    )
+    figures: FrozenFigures
+    decided_at: datetime = Field(default_factory=utc_now)
+    provenance: Provenance
+
+    @property
+    def authorises_a_person(self) -> bool:
+        """Whether a human operator may now carry this out by hand.
+
+        Named for what it actually permits. ``is_authorised`` would invite a reader to
+        assume something in this process acts on it, and nothing does.
+        """
+        return self.state is ApprovalState.HANDED_OFF
+
+    def statement(self) -> str:
+        """The decision in plain words, composed here rather than by a model."""
+        verb = {
+            ApprovalState.HANDED_OFF: "approved",
+            ApprovalState.DECLINED: "rejected",
+            ApprovalState.DEFERRED: "deferred",
+            ApprovalState.AWAITING_DECISION: "left awaiting a decision",
+        }[self.state]
+        tail = (
+            " It is handed off for a person to carry out; CostSentinel has no path to perform it."
+            if self.state is ApprovalState.HANDED_OFF
+            else ""
+        )
+        return (
+            f"{self.approver} {verb} {self.action.value.replace('_', ' ')} on "
+            f"{self.target_resource_name} ({self.figures.monthly_saving_display} / month) "
+            f"on {self.decided_at.date().isoformat()}: {self.reason}{tail}"
+        )
 
 
 class AuditEventType(StrEnum):
@@ -129,6 +349,13 @@ class AuditEventType(StrEnum):
     ACTION_CLASSIFIED = "action_classified"
     APPROVAL_REQUESTED = "approval_requested"
     APPROVAL_RECORDED = "approval_recorded"
+    #: The sweep halted at a durable checkpoint, waiting on a human (Phase 10).
+    SWEEP_PAUSED = "sweep_paused"
+    #: A decision was recorded and the sweep continued from where it stopped.
+    SWEEP_RESUMED = "sweep_resumed"
+    #: An approved action was handed to a human operator. This is as far as an
+    #: approval goes: there is no execution event, because there is no execution.
+    ACTION_HANDED_OFF = "action_handed_off"
     REPORT_GENERATED = "report_generated"
     SCAN_COMPLETED = "scan_completed"
     ERROR = "error"

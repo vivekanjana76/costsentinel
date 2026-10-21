@@ -1070,7 +1070,150 @@ one queue entry would pass.
 
 ---
 
-## 13. Evaluation approach
+## 13. The approval gate, and the surface another agent sees
+
+Implemented in Phase 10. The approval seam has existed since Phase 1 and the supervisor
+has routed `REQUIRE_APPROVAL` since Phase 2 -- always to the report author, always with
+the honest reason that nothing had an execution path anyway. The route existed and
+halted nothing. This phase makes the halt real, and publishes the first thing another
+agent can ask about.
+
+### Where the pause sits, and why after the report
+
+The gate runs **after** the Report Author (D119). Pausing between the Policy Guard and
+the report would mean no document exists until somebody decides, so a client waiting on
+their cost review would be waiting on their own approval of the things in it. That is
+circular, and it withholds the one artefact that is correct and complete either way.
+The report is produced, the queue in it is real, and *then* the sweep waits.
+
+The supervisor gained an explicit **post-report phase**, checked before anything else:
+once the report exists the only business left is a decision on anything gated. That is
+not decoration. Phase 2's report author ended the run, so the earlier branches that
+route *to* the report author could not fire twice; making it return to the supervisor
+turned each of them into an infinite loop. A hanging test is how that was found, and
+naming the phase is the fix that states what had been implicit.
+
+One interrupt per node execution, then back to the supervisor, which routes to the gate
+again if anything is still pending. Several interrupts inside one execution looks
+tidier and is wrong: a resumed node re-runs from the top, so earlier interrupts return
+their already-consumed values and the recording code runs again on items already
+recorded. Returning between decisions means every pause/resume cycle commits its own
+state.
+
+### The resume key, and what durability cost
+
+A sweep's checkpoint thread id **is its run id**, which has been true since Phase 1 and
+is load-bearing from Phase 10: it is the only handle a second process has.
+`costsentinel approvals list` enumerates the checkpointer's threads and reads each
+pending interrupt; `approvals decide` locates a recommendation across every paused
+sweep and resumes the right one. An operator decides about a *recommendation*, not
+about a sweep.
+
+Building this exposed that the checkpoint allowlist had never been enforced.
+`BaseCheckpointSaver.with_allowlist` *merges* into the serializer's existing allowlist,
+and the default is the literal `True` -- permit everything, warn. The merge
+short-circuits on that, so the list derived from `domain.__all__` was applied to
+nothing, and the claim that a checkpoint could not instantiate an arbitrary class was
+false. Constructing the serializer with an explicit allowlist fixes it, and immediately
+exposed the second half: nine domain types were missing from the exports, so an
+enforcing allowlist would have refused to resume any sweep containing an anomaly. The
+two defects had been hiding each other. A test now walks the domain package and fails on
+any type the exports have forgotten.
+
+### The decision record, and why its figures are frozen
+
+`ApprovalRecord` carries the approver, the decision, the reason, the timestamp, the
+recommendation, and `FrozenFigures` -- the figures as they stood when the decision was
+made, as *strings*, copied from the report. An approver agrees to a specific saving on a
+specific resource at a moment in time. A re-scan next month that reprices the resource
+must not retroactively change what they agreed to, and a record pointing at live figures
+silently would. Strings rather than `MoneyAmount` because what is frozen is what they
+were *shown*, down to the grouping and the currency.
+
+A reason is mandatory on every decision including an approval: one with no stated reason
+teaches the episodic memory nothing and cannot be explained back to a client later.
+
+`Decision` gained `DEFERRED`, which **resolves nothing**. The item stays in the queue
+and the sweep stays paused, and the deferral count is carried so an operator can see
+that an item keeps being postponed -- which is itself a decision nobody has written
+down. "Ask me next week" and "no" lead to different conversations with a client. There
+is still no member meaning "nobody answered, so proceed".
+
+A resume value arrives from outside the graph, so it is untrusted in exactly the sense
+an LLM response is and is handled the same way: validated against `DecisionRequest`
+with unknown keys refused. It carries **none of the facts** -- no resource, no action,
+no figure, no class. Those are copied from the pending item its recommendation id names,
+so a malformed or hostile request can fail to decide anything and cannot decide
+something other than what it appears to (D120).
+
+### Approving never mutates, proved four ways
+
+An approval moves an item to `ApprovalState.HANDED_OFF` and writes a record. That is the
+end of the line: a person has agreed and a person must now carry it out. One proof of
+that is a claim, so there are four (D118):
+
+| Proof | What it asserts |
+| --- | --- |
+| Structural | Nothing in `src` imports an `azure.mgmt` client, calls a mutating SDK method, or is named as if it executed anything. The gate's own imports hold no provider, no client, no model |
+| Representational | No approval type carries a handler, callback, command, endpoint or anything typed `Callable`, asserted against the field set |
+| Exhaustive | All twelve combinations of every `Decision` against every `ActionClass`, including approving a `block`, land in a recorded state; the only authorisation that exists authorises a *person* |
+| End to end | Approving the mock estate's disk **deletion** makes exactly zero provider calls, counted by a wrapping spy |
+
+`ApprovalState` has four members and the significant thing is what is absent: no
+`EXECUTED`, no `APPLYING`, no `FAILED`. There is no execution for a state machine to
+describe, and adding a member would be the first half of building the thing this system
+deliberately cannot do.
+
+The audit trail states it too, rather than only the docstrings: an `ACTION_HANDED_OFF`
+event carries `performed_by: a human operator, by hand` and
+`executed_by_costsentinel: false -- no execution path exists`. That detail exists
+because somebody reading a governance trail in a year should not need to know the
+architecture.
+
+One defect worth recording, because the type invites it: `NodeUpdate` is
+`dict[str, Any]`, so the gate returning its events under `"audit_events"` when the field
+is `"audit"` was silent. The pause worked, the decision was recorded, and the audit
+trail was quietly missing -- the worst way for a governance feature to fail, because the
+absence is invisible in exactly the artefact somebody would check. A test now walks
+every returned node update in the agents package and fails on any key that is not a
+`ScanState` field.
+
+### The A2A surface
+
+One card, three skills, all read-only: request a cost review, fetch the current
+findings, fetch the pending-approval queue. The card moved forward from Phase 11 (D117)
+because the approval queue is the first thing another agent would have a reason to ask
+about, and an A2A surface built after half a dozen specialists are already exposed is
+one where "is this read-only?" has to be re-established for each of them.
+
+What is advertised is checked against a **vocabulary** of mutating verbs rather than an
+allowed list, across every string a consumer reads. An allowed list only catches a skill
+somebody forgot to add to it; a vocabulary makes a skill added later pass the check or
+fail the build. The descriptions get a different check, because the most useful sentence
+on the card -- "has no path to change a resource" -- contains a mutating word, so a
+description may use one only to deny the capability.
+
+The card carries a detached HMAC-SHA256 over canonical JSON, labelled as that rather
+than as a JWS (D121). A2A v1 describes JWS and a real deployment should use one; that
+needs an asymmetric key and a canonicalisation library, neither of which belongs in a
+phase whose rule is that CI installs no optional extra. The signing key is the committed
+synthetic one in mock mode, so CI verifies an actual signature -- one that has never
+been checked is not a feature -- and real mode with no configured key produces an
+*unsigned* card rather than one signed with a published key, because a forgeable
+signature invites trust.
+
+The task lifecycle is real and the concurrency is not: work runs inside `submit`, so a
+task is `COMPLETED` or `FAILED` by the time its id returns. That is the honest order --
+the shape a consumer codes against is settled, and nothing pretends to an asynchrony
+that has not been tested. `TaskState` declares only the states a consumer can observe.
+
+The server is off by default and mounted on the existing FastAPI app, so there is no new
+dependency and no second process. The card is published either way: a consumer should
+discover what is available rather than probe for it.
+
+---
+
+## 14. Evaluation approach
 
 Implemented in Phase 5. Evals are a deliverable, not an afterthought, because "did we
 find the waste" and "did we gate the dangerous thing" are the product's actual claims
@@ -1218,7 +1361,7 @@ reproducible.
 
 ---
 
-## 14. MCP and A2A boundaries
+## 15. MCP and A2A boundaries
 
 These are two different seams and are deliberately not conflated.
 
@@ -1285,7 +1428,7 @@ both ways is defined once in the domain layer and adapted at both edges.
 
 ---
 
-## 15. Non-functional posture
+## 16. Non-functional posture
 
 - **Zero-credential by default.** `MODE=mock` is the default. CI never has secrets or
   network access to a cloud or LLM provider.
@@ -1297,7 +1440,7 @@ both ways is defined once in the domain layer and adapted at both edges.
 
 ---
 
-## 16. Decision log
+## 17. Decision log
 
 Each entry records the decision, the alternatives considered, and why.
 
@@ -2307,3 +2450,60 @@ reads "Narrative unavailable (token budget reached)" and a processing note state
 the figures are unaffected, which is the claim a client would otherwise have no way to
 establish. The same reasoning as D109's unattributed-anomaly row: an absence that looks
 like an answer is worse than a stated absence.
+
+**D117. One read-only A2A card moved forward from Phase 11.** *Alternatives:* keep the
+plan and publish six per-specialist cards in Phase 11. *Why:* the approval queue is the
+first thing in this system another agent would have a reason to ask about, and an A2A
+surface built after half a dozen specialists are already exposed is one where "is this
+read-only?" has to be re-established for each of them. Built once, here, against the one
+capability whose read-only-ness *is* the phase's own invariant -- so the card's guarantee
+and the gate's guarantee are the same guarantee, asserted by the same kind of test. The
+rest of Phase 11 stands: per-specialist cards, per-caller authorisation, Foundry
+interop, and consuming other agents, which this phase explicitly did not start.
+
+**D118. Approving hands an action to a person, and that is proved four ways.**
+*Alternatives:* rely on the fact that no execution code has been written yet, which was
+the Phase 1 position and was true. *Why:* "true because nobody has built it" is not a
+guarantee, it is a coincidence waiting to be reversed by a well-meaning commit. The
+property is now structural (no module imports a mutating client, calls a mutating SDK
+method, or is named as if it executed anything), representational (no approval type
+carries a callable, handler, command or endpoint, asserted against the field set),
+exhaustive (all twelve decision-by-action-class combinations land in a recorded state,
+and the only authorisation that exists authorises a human being), and end to end
+(approving the mock estate's *disk deletion* makes zero provider calls, counted). Four
+proofs because one is a claim; an invariant with a single proof has a single place to
+break. `ApprovalState` has no `EXECUTED` member for the same reason.
+
+**D119. The report is written before the approval gate, not after it.**
+*Alternatives:* halt at the Policy Guard boundary, which is where the routing seam has
+pointed since Phase 2 and where a reader would expect a gate to sit. *Why:* it would
+mean no document exists until somebody decides, so a client waiting on their cost review
+would be waiting on their own approval of the things in it. The report is correct and
+complete whether or not anybody has decided -- it *reports* what is awaiting a decision
+-- so withholding it buys nothing and costs the deliverable. The cost of this choice was
+real: making the report author return to the supervisor turned every earlier branch that
+routes to it into an infinite loop, which is why the supervisor now names its post-report
+phase explicitly and checks it first.
+
+**D120. A decision request carries no facts, only an identifier and an answer.**
+*Alternatives:* let a decision name the resource and action it applies to, which is what
+a webhook payload will want to do in Phase 10b. *Why:* a resume value arrives from
+outside the graph and is untrusted in exactly the sense an LLM response is. If it could
+supply the resource, the action or the figure, a malformed or hostile request could
+attach an approval to a different resource than the one it named, or to the right
+resource at the wrong price. Carrying only `recommendation_id`, `decision`, `approver`
+and `reason` means such a request can fail to decide anything and cannot decide
+something other than what it appears to. The facts are copied from the pending item,
+which was copied from the report -- the same reasoning as `FrozenFigures`, one layer
+out.
+
+**D121. The Agent Card is signed with a detached HMAC, labelled as one.**
+*Alternatives:* a JWS, which is what A2A v1 describes; or no signature. *Why:* a JWS
+needs an asymmetric key and a JSON-canonicalisation library, and this phase's rule is
+that CI installs no optional extra -- so a JWS here would be either an unverified
+dependency or an untested code path. An HMAC over canonical JSON provides integrity
+against modification by anybody without the key, is verifiable offline with the standard
+library, and is *named* for what it is rather than for what it resembles. The synthetic
+key is committed and labelled worthless so CI verifies an actual signature; real mode
+with no key produces an unsigned card rather than one signed with a published key,
+because a forgeable signature invites a consumer to trust it. JWS is a Phase 11 item.

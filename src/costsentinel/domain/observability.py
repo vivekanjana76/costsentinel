@@ -145,6 +145,25 @@ class RunMetrics(Frozen):
     )
     started_at: datetime = Field(default_factory=utc_now)
     total_latency_ms: int = Field(default=0, ge=0)
+    paused_for_approval: bool = Field(
+        default=False,
+        description=(
+            "Whether the sweep stopped at the approval gate and is waiting on a "
+            "person. An operational fact about the run, so it belongs here rather "
+            "than on the report -- a client reads what is awaiting their decision, "
+            "not whether a process is still open."
+        ),
+    )
+    pending_approvals: int = Field(
+        default=0,
+        ge=0,
+        description="How many gated actions the paused sweep is waiting on.",
+    )
+
+    @property
+    def awaits_a_person(self) -> bool:
+        """Whether this run is halted and will go no further unaided."""
+        return self.paused_for_approval
 
     @property
     def call_count(self) -> int:

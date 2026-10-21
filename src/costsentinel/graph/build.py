@@ -1,7 +1,7 @@
 # pyright: reportUnknownMemberType=false, reportMissingTypeStubs=false
 # LangGraph's StateGraph/CompiledStateGraph generics are only partially typed, so
 # pyright's strict mode reports *its* members as unknown. The rule is disabled for
-# this file only -- the two modules that touch LangGraph directly -- rather than
+# this file only -- one of the three modules that touch LangGraph directly -- rather than
 # relaxed across src, so everything CostSentinel owns stays strictly checked.
 """Graph assembly.
 
@@ -41,6 +41,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from costsentinel.agents.anomaly_scout import make_anomaly_scout
+from costsentinel.agents.approval_gate import make_approval_gate
 from costsentinel.agents.memory_consult import make_memory_consult
 from costsentinel.agents.optimization_planner import make_optimization_planner
 from costsentinel.agents.policy_guard import make_policy_guard
@@ -66,6 +67,7 @@ NODE_OPTIMIZATION_PLANNER = "optimization_planner"
 NODE_POLICY_GUARD = "policy_guard"
 NODE_MEMORY_CONSULT = "memory_consult"
 NODE_REPORT_AUTHOR = "report_author"
+NODE_APPROVAL_GATE = "approval_gate"
 
 #: Every node a full sweep visits, in order.
 #:
@@ -82,6 +84,7 @@ SWEEP_NODES: tuple[str, ...] = (
     NODE_POLICY_GUARD,
     NODE_MEMORY_CONSULT,
     NODE_REPORT_AUTHOR,
+    NODE_APPROVAL_GATE,
 )
 
 #: Every node in the graph: the sweep nodes plus the supervisor.
@@ -101,6 +104,7 @@ _ROUTES: dict[Hashable, str] = {
     NODE_POLICY_GUARD: NODE_POLICY_GUARD,
     NODE_MEMORY_CONSULT: NODE_MEMORY_CONSULT,
     NODE_REPORT_AUTHOR: NODE_REPORT_AUTHOR,
+    NODE_APPROVAL_GATE: NODE_APPROVAL_GATE,
     "__end__": END,
 }
 
@@ -167,13 +171,17 @@ def build_graph(
     graph.add_node(NODE_POLICY_GUARD, make_policy_guard(settings=settings, policy=store))
     graph.add_node(NODE_MEMORY_CONSULT, make_memory_consult(memory=recall, settings=settings))
     graph.add_node(NODE_REPORT_AUTHOR, make_report_author(llm=llm, settings=settings))
+    # Takes no provider and no execution handler, because there is nothing for it
+    # to call. The signature is the first of the four no-mutation proofs (D118).
+    graph.add_node(NODE_APPROVAL_GATE, make_approval_gate(settings=settings))
 
     graph.add_edge(START, NODE_SUPERVISOR)
     graph.add_conditional_edges(NODE_SUPERVISOR, route_from_supervisor, _ROUTES)
 
-    # Every specialist except the report author returns to the supervisor, so a
-    # single node decides every transition. The report author ends the run, which is
-    # what terminates the loop despite the star shape.
+    # Every specialist returns to the supervisor, so a single node decides every
+    # transition. From Phase 10 the report author returns too rather than ending the
+    # run: a sweep with gated items has somewhere left to go, and routing that from the
+    # report author would be a second node making a transition decision.
     for node in (
         NODE_ANOMALY_SCOUT,
         NODE_ROOT_CAUSE_ANALYST,
@@ -181,8 +189,9 @@ def build_graph(
         NODE_OPTIMIZATION_PLANNER,
         NODE_POLICY_GUARD,
         NODE_MEMORY_CONSULT,
+        NODE_REPORT_AUTHOR,
+        NODE_APPROVAL_GATE,
     ):
         graph.add_edge(node, NODE_SUPERVISOR)
-    graph.add_edge(NODE_REPORT_AUTHOR, END)
 
     return graph.compile(checkpointer=checkpointer)

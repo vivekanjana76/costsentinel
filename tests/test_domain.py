@@ -359,8 +359,30 @@ def test_approval_decision_authorises_only_when_approved() -> None:
 
 
 def test_decision_has_no_timeout_means_approved_member() -> None:
-    """Absence of a decision is never authorisation (ARCHITECTURE.md section 8)."""
-    assert {d.value for d in Decision} == {"approved", "rejected"}
+    """Absence of a decision is never authorisation (ARCHITECTURE.md section 8).
+
+    `deferred` joined in Phase 10, when the gate became a durable interrupt and an
+    approver gained the ability to say "not now" to a sweep actually waiting on them.
+    It is a *recorded* answer that resolves nothing, which is the opposite of a
+    timeout: the item stays in the queue and the sweep stays paused.
+
+    The claim this test exists for is unchanged and is asserted directly below: there
+    is no member meaning "nobody answered, so proceed".
+    """
+    assert {d.value for d in Decision} == {"approved", "rejected", "deferred"}
+    assert not any("timeout" in d.value or "timed" in d.value for d in Decision)
+    assert not any("default" in d.value or "auto" in d.value for d in Decision)
+    # And only one of the three authorises anything at all.
+    authorising = [
+        d
+        for d in Decision
+        if ApprovalDecision(recommendation_id="rec-1", decision=d, approver="ops").is_approved
+    ]
+    assert authorising == [Decision.APPROVED]
+    # A deferral is the one answer that leaves the item pending.
+    assert not Decision.DEFERRED.resolves
+    assert Decision.APPROVED.resolves
+    assert Decision.REJECTED.resolves
 
 
 def test_audit_event_detail_is_flat_strings() -> None:

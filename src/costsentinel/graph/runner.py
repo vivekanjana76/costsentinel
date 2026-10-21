@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable, Sequence
+from typing import cast
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
@@ -67,6 +68,52 @@ def clients_in_scope(provider: AzureProvider, client: str | None = None) -> tupl
     if client is not None:
         return (client,)
     return tuple(sorted({sub.client for sub in provider.list_subscriptions()}))
+
+
+def state_from(final: object) -> ScanState:
+    """Validate a graph's output into a :class:`ScanState`.
+
+    A sweep that halted at the approval gate returns with LangGraph's own
+    ``__interrupt__`` key alongside the state. It is stripped rather than tolerated:
+    ``ScanState`` forbids extra fields on purpose, and relaxing that to accommodate one
+    framework key would relax it for everything.
+
+    Public because the runner is not the only caller -- a test that invokes a compiled
+    graph directly needs the same treatment, and two copies of this would be two
+    places to forget it.
+    """
+    if not isinstance(final, dict):
+        return ScanState.model_validate(final)
+    values = dict(cast("dict[str, object]", final))
+    values.pop("__interrupt__", None)
+    return ScanState.model_validate(values)
+
+
+def interrupts_in(final: object) -> Sequence[object]:
+    """Whatever interrupts a finished invoke reported, or an empty sequence."""
+    if not isinstance(final, dict):
+        return ()
+    raw: object = cast("dict[str, object]", final).get("__interrupt__", ())
+    return cast("Sequence[object]", raw) if isinstance(raw, list | tuple) else ()
+
+
+def _pending_count(interrupts: Sequence[object]) -> int:
+    """How many gated actions a paused sweep is waiting on.
+
+    Read out of the interrupt payload rather than recounted from state, so the number
+    reported is the number the gate actually asked about. Defensive about the shape
+    because it crosses a framework boundary: a LangGraph release that changed it
+    should cost an accurate count, not a crashed sweep.
+    """
+    total = 0
+    for one in interrupts:
+        value: object = getattr(one, "value", None)
+        if not isinstance(value, dict):
+            continue
+        queue: object = cast("dict[str, object]", value).get("pending")
+        if isinstance(queue, list | tuple):
+            total += len(cast("Sequence[object]", queue))
+    return total
 
 
 def run_client_scan(
@@ -147,7 +194,13 @@ def run_client_scan(
     try:
         with timed(active_tracer, "costsentinel.scan", kind="run") as timer:
             final = graph.invoke(initial, config={"configurable": {"thread_id": thread_id}})
-        state = ScanState.model_validate(final)
+        # A sweep that halted at the approval gate returns with LangGraph's own
+        # ``__interrupt__`` key alongside the state. Stripped rather than tolerated,
+        # because ``ScanState`` forbids extra fields on purpose and relaxing that to
+        # accommodate one framework key would relax it for everything.
+        interrupts = interrupts_in(final)
+        state = state_from(final)
+        pending = _pending_count(interrupts)
 
         memory_metrics = state.memory_metrics or MemoryMetrics()
         for access in memory_metrics.accesses:
@@ -159,7 +212,20 @@ def run_client_scan(
             calls=traced.collected(),
             memory=memory_metrics,
             total_latency_ms=timer.elapsed_ms,
+            paused_for_approval=bool(interrupts),
+            pending_approvals=pending,
         )
+        if interrupts:
+            _log.info(
+                "sweep paused for approval",
+                extra={
+                    "run_id": thread_id,
+                    "client": client,
+                    "pending_approvals": pending,
+                    # The key a second process needs in order to find this sweep.
+                    "resume_key": thread_id,
+                },
+            )
         _log.info(
             "run metrics",
             extra={

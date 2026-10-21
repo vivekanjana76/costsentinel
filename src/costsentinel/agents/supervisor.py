@@ -123,6 +123,37 @@ def _decide(state: ScanState) -> SupervisorDecision:
     Deliberately a pure function of state, so a routing decision can be tested by
     constructing a state rather than by running a graph.
     """
+    # --- the post-report phase ------------------------------------------
+    #
+    # Once the report is written the sweep is in its final phase, and the only
+    # business left is a decision on anything gated. Checked first, and it has to be:
+    # from Phase 10 the report author returns to the supervisor rather than ending the
+    # run, so without this every earlier branch that routes *to* the report author
+    # would fire again on the way back and loop forever. That is not hypothetical --
+    # it is what happened, and a hanging test is how it was found.
+    if state.report is not None:
+        undecided = pending_recommendations(state)
+        if undecided:
+            return _record(
+                action=RouteAction.REQUIRE_APPROVAL,
+                to_node="approval_gate",
+                reason=(
+                    f"{len(undecided)} action(s) need a recorded human decision; the "
+                    f"sweep halts at a durable checkpoint until one is given. "
+                    f"Approval hands the action to a person -- CostSentinel has no "
+                    f"execution path"
+                ),
+            )
+        return _record(
+            action=RouteAction.COMPLETE,
+            to_node="__end__",
+            reason=(
+                "the report has been produced and every gated action has a recorded decision"
+                if state.classifications
+                else "the report has been produced"
+            ),
+        )
+
     # Nothing was read: the scout has not run yet.
     if state.estate is None:
         return _record(
@@ -257,32 +288,42 @@ def _decide(state: ScanState) -> SupervisorDecision:
             ),
         )
 
-    # Classified. Anything gated routes through the approval seam.
+    # Classified, memory consulted, and no report yet. The report is written *before*
+    # the approval gate rather than after it (D119): a client waiting on their cost
+    # review must not be waiting on their own approval of the things in it, and the
+    # document is correct and complete either way. What happens next is decided by the
+    # post-report branch at the top of this function, on the way back.
     gated = [c for c in state.classifications if c.requires_approval]
-    undecided = [c for c in gated if state.decision_for(c.recommendation_id) is None]
-    if undecided:
-        return _record(
-            action=RouteAction.REQUIRE_APPROVAL,
-            to_node="report_author",
-            reason=(
-                f"{len(undecided)} of {len(state.classifications)} action(s) need a "
-                f"recorded human decision before they can be executed; none has an "
-                f"execution path in this phase, so they are reported for approval"
-            ),
-        )
-
-    if state.report is None:
-        return _record(
-            action=RouteAction.PROCEED,
-            to_node="report_author",
-            reason="every action is classified and decided; the report can be written",
-        )
-
     return _record(
-        action=RouteAction.COMPLETE,
-        to_node="__end__",
-        reason="the report has been produced",
+        action=RouteAction.PROCEED,
+        to_node="report_author",
+        reason=(
+            f"every action is classified; writing the report, which will list "
+            f"{len(gated)} action(s) awaiting a decision"
+            if gated
+            else "every action is classified and none is gated; the report can be written"
+        ),
     )
+
+
+def pending_recommendations(state: ScanState) -> tuple[str, ...]:
+    """Gated recommendations the approval gate would actually ask about.
+
+    Delegates to :func:`~costsentinel.agents.approval_gate.pending_for` rather than
+    recomputing the condition, and that is not tidiness -- it is the fix for a hang.
+    The first version counted every classified-and-gated recommendation, while the
+    gate only queues the ones it can show an approver (present in the report, with a
+    figure). A recommendation classified but absent from the report made the two
+    disagree: the supervisor routed to the gate, the gate found nothing to ask, the
+    supervisor routed to the gate again, forever.
+
+    One definition of "pending", used by both the node that asks and the node that
+    decides whether to ask. A *deferral* leaves an item pending, which is the whole
+    difference between it and a rejection.
+    """
+    from costsentinel.agents.approval_gate import pending_for  # noqa: PLC0415 -- cycle
+
+    return tuple(item.recommendation_id for item in pending_for(state))
 
 
 def route_from_supervisor(state: ScanState) -> str:
