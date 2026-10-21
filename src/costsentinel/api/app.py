@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from costsentinel import __version__
 from costsentinel.a2a.server import mount
 from costsentinel.config import Settings, get_settings
+from costsentinel.dashboard.app import mount as mount_dashboard
 from costsentinel.domain.report import ScanResult
 from costsentinel.graph.runner import ScanFailedError, run_scan
 from costsentinel.llm.base import LLMError
@@ -85,8 +86,10 @@ def create_app() -> FastAPI:
         ),
     )
 
-    # Off unless an operator turned it on. The card is published either way.
+    # Both off unless an operator turned them on. The A2A card is published
+    # either way; the dashboard serves nothing until enabled.
     mount(app, get_settings())
+    mount_dashboard(app, get_settings())
 
     @app.get("/health", response_model=HealthResponse, tags=["meta"])
     def health(settings: SettingsDep) -> HealthResponse:

@@ -130,6 +130,31 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- operator dashboard ----------------------------------------------
+    dashboard_enabled: bool = Field(
+        default=False,
+        validation_alias=_env("DASHBOARD_ENABLED"),
+        description=(
+            "Whether to serve the operator surface. Off by default, like the A2A "
+            "endpoint: a page somebody can reach should be something an operator "
+            "turned on."
+        ),
+    )
+    dashboard_can_decide: bool = Field(
+        default=False,
+        validation_alias=_env("DASHBOARD_CAN_DECIDE"),
+        description=(
+            "Whether the dashboard may record an approval decision. Off by default, so "
+            "the surface is a viewer unless somebody chose otherwise -- and a "
+            "deployment that wants eyes on the estate without hands on the queue gets "
+            "that by default rather than by configuration. "
+            "Enabling it adds no new way to decide: a decision from the page goes "
+            "through the same functions `costsentinel approvals decide` calls, and an "
+            "approval still hands the action to a person. The POST is refused outright "
+            "when this is off, because a hidden form field is not a permission check."
+        ),
+    )
+
     # --- A2A surface -----------------------------------------------------
     a2a_enabled: bool = Field(
         default=False,
