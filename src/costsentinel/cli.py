@@ -35,6 +35,7 @@ from costsentinel.config import (
     Settings,
     get_settings,
 )
+from costsentinel.dashboard.static import write_static
 from costsentinel.domain.governance import Decision, DecisionRequest
 from costsentinel.domain.memory import Outcome
 from costsentinel.domain.report import ClientReport, ScanResult
@@ -73,6 +74,10 @@ DEFAULT_REAL_OUTPUT_DIR = Path("var/real-runs")
 #: Where `costsentinel eval` writes its scorecard. Committed, so a diff shows what
 #: moved between runs.
 DEFAULT_REPORT = Path("evals/REPORT.md")
+
+#: Where the operator surface is written by default. Under ``tmp/`` and gitignored:
+#: a rendered page is an artefact, and some of them describe a real estate.
+DEFAULT_DASHBOARD_DIR = Path("tmp/dashboard")
 
 #: Where a mock-estate rendering goes by default. Under ``tmp/`` and gitignored: a
 #: rendered report is an artefact, and the one copy that belongs in the repository is
@@ -202,6 +207,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--by",
         default=None,
         help="Who decided. Defaults to the operating system user.",
+    )
+
+    dashboard = subcommands.add_parser(
+        "dashboard",
+        help="Write the operator surface to HTML files, or say how to serve it.",
+        description=(
+            "Renders the same ClientReport the Markdown report renders, as HTML pages "
+            "that open over file:// with nothing listening. Every figure on them is a "
+            "string the report already produced; the view layer computes none, "
+            "which the evaluation harness asserts the same way it asserts the "
+            "rendered document. "
+            "To serve it instead, set DASHBOARD_ENABLED=true and run the API. The "
+            "served pages can record an approval decision when DASHBOARD_CAN_DECIDE is "
+            "also set, through the same path `costsentinel approvals decide` uses."
+        ),
+    )
+    dashboard.add_argument(
+        "--out",
+        default=None,
+        metavar="PATH",
+        help=f"Directory to write into. Default: {DEFAULT_DASHBOARD_DIR}, which is gitignored.",
     )
 
     approvals = subcommands.add_parser(
@@ -999,6 +1025,21 @@ def run_approvals(args: argparse.Namespace, settings: Settings) -> int:
         return 0
 
 
+def run_dashboard(args: argparse.Namespace, settings: Settings) -> int:
+    """Write the operator surface to files."""
+    directory = Path(args.out) if args.out else DEFAULT_DASHBOARD_DIR
+    written = write_static(settings, directory)
+    if len(written) == 1:
+        print(
+            "No stored report to show. Run `costsentinel scan` first -- the dashboard "
+            "reads what a sweep left in the checkpoint rather than running one."
+        )
+    for path in written:
+        print(f"Written {path}")
+    print(f"Open {written[0].resolve().as_uri()}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point.
 
@@ -1027,6 +1068,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "approvals":
         return run_approvals(args, settings)
+
+    if args.command == "dashboard":
+        return run_dashboard(args, settings)
 
     real = bool(args.real) or settings.mode is RunMode.REAL
     scope: tuple[str, ...] = ()
