@@ -92,7 +92,8 @@ reaches it.
 | Reporting | Markdown renderer with five sections (Phase 8); every number in the document must trace to a figure the pipeline produced, as a blocking gate. PDF behind an optional `reports` extra |
 | Spend attribution | Deterministic arithmetic over a per-meter cost breakdown (Phase 9): the component whose share of the change exceeds its share of the spend. A proportional rise is reported as having no single cause |
 | Model resilience | Optional fallback to a secondary backend and an optional per-sweep token ceiling (Phase 9). Both opt-in; either one degrades the prose and no figure, finding or classification |
-| Entry points | `costsentinel scan`, `report`, `approvals list|decide`, `POST /scan`, and the opt-in A2A endpoint |
+| Operator surface | A read-only dashboard (Phase 11) over the **same** `ClientReport` the report renders, computing no figure. The queue page can record a decision, through the one audited path the CLI uses |
+| Entry points | `costsentinel scan`, `report`, `approvals list|decide`, `dashboard`, `POST /scan`, and the opt-in A2A and dashboard surfaces |
 
 ### What Phase 1 contained
 
@@ -168,6 +169,34 @@ copy a figure and may never compose one, so a rounded total or a sum computed in
 layout fails the build. Model-written sentences are quoted verbatim and graded for
 groundedness in the rendered text, because grading the internal object says nothing
 about the document unless the document quotes it.
+
+### The operator surface
+
+![The estate overview](docs/dashboard/1-estate-overview.jpg)
+
+A read-only dashboard over the same `ClientReport` the Markdown report renders — the
+same object, the same sections, in the same order, so two readers of one sweep cannot
+see different things about it. [Four captures of it on the mock
+estate](docs/dashboard/) are committed, so you can see the surface without running it.
+
+```bash
+# Write the pages to files; they open with nothing listening
+uv run costsentinel dashboard
+
+# ... or serve them
+DASHBOARD_ENABLED=true uv run uvicorn costsentinel.api.app:create_app --factory
+```
+
+**The view computes no figure.** Every value on a page is a string the report already
+produced, and the check that holds that line is the same function the rendered-report
+gate uses — one standard for the document and the page, weakened in one place or not at
+all. The stylesheet is inline and nothing is fetched at runtime, so a page renders
+identically on a machine with no network.
+
+The queue page can record a decision when `DASHBOARD_CAN_DECIDE=true`, and it does so by
+calling the same three functions `costsentinel approvals decide` calls. There is no
+second decision implementation — asserted in both directions, so removing the shared
+call fails as loudly as adding a local one.
 
 ### Approving something
 
@@ -410,6 +439,7 @@ src/costsentinel/
   reports/           Markdown and PDF rendering (Phase 8)
   observability/     structured logging + the tracing seam
   tools/             read-only MCP Azure tool server
+  dashboard/         the operator surface: view model, HTML, routes (Phase 11)
   a2a/               the read-only Agent Card and task lifecycle (Phase 10)
   api/               FastAPI app
   cli.py             CLI entry point

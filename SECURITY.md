@@ -292,6 +292,35 @@ meaning "timed out, therefore approved", and the gate has no path to one: a swee
 nothing recorded simply stays halted. `deferred` is a *recorded* answer that resolves
 nothing and leaves the item in the queue.
 
+### Optional: the operator dashboard
+
+```bash
+DASHBOARD_ENABLED=true
+DASHBOARD_CAN_DECIDE=true   # off by default; the surface is a viewer without it
+```
+
+Off by default. When enabled it serves three pages -- the estate, a client's report,
+and the pending-approval queue -- rendering the **same** `ClientReport` the Markdown
+report renders. The view layer computes no figure: every value is a string the report
+already produced, enforced by the same check that gates the rendered document.
+
+The queue page can record a decision only when `DASHBOARD_CAN_DECIDE` is also set, and
+it does so through the **same path** `costsentinel approvals decide` uses --
+`find_pending`, `DecisionRequest`, `resume`. There is no second decision
+implementation; a test asserts both the absence of one and the presence of the shared
+calls. The POST is refused outright when the flag is off, because a hidden form field
+is not a permission check.
+
+**Approving from a page does what approving from a terminal does**: it records a
+decision and hands the action to a person. The four-way no-mutation proof of section 5
+is unchanged -- the dashboard package imports nothing from `azure`, carries no
+executable handle, and a decision made through it lands in the same `handed_off`
+terminal state with the same audit events.
+
+The pages fetch nothing at runtime: the stylesheet is inline and there is no script,
+no font and no CDN. Every provider-supplied value -- resource names and tags in
+particular -- is HTML-escaped with quotes included.
+
 ### Optional: the A2A surface
 
 ```bash

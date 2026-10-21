@@ -80,9 +80,7 @@ def stored_reports(settings: Settings) -> tuple[ReportView, ...]:
     """
     with checkpointer_for(settings) as saver:
         graph = approvals_graph(settings, saver)
-        pending_by_run = {
-            sweep.run_id: sweep.pending for sweep in paused_sweeps(graph, saver)
-        }
+        pending_by_run = {sweep.run_id: sweep.pending for sweep in paused_sweeps(graph, saver)}
 
         latest: dict[str, ReportView] = {}
         for run_id in thread_ids(saver):
@@ -96,9 +94,7 @@ def stored_reports(settings: Settings) -> tuple[ReportView, ...]:
             # is its most recent and later ones are history.
             if state.client in latest:
                 continue
-            latest[state.client] = report_view(
-                state.report, pending=pending_by_run.get(run_id, ())
-            )
+            latest[state.client] = report_view(state.report, pending=pending_by_run.get(run_id, ()))
 
     return tuple(latest[client] for client in sorted(latest))
 
@@ -108,9 +104,7 @@ def pending_queue(settings: Settings) -> tuple[PendingView, ...]:
     with checkpointer_for(settings) as saver:
         graph = approvals_graph(settings, saver)
         return tuple(
-            pending_view(item)
-            for sweep in paused_sweeps(graph, saver)
-            for item in sweep.pending
+            pending_view(item) for sweep in paused_sweeps(graph, saver) for item in sweep.pending
         )
 
 
@@ -274,9 +268,7 @@ def build_router(settings: Settings) -> APIRouter:
         except ApprovalsError as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
-        return RedirectResponse(
-            f"{BASE_PATH}/approvals", status_code=status.HTTP_303_SEE_OTHER
-        )
+        return RedirectResponse(f"{BASE_PATH}/approvals", status_code=status.HTTP_303_SEE_OTHER)
 
     return router
 
