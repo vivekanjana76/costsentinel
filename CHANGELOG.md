@@ -8,10 +8,78 @@ CostSentinel is pre-1.0, so the public API may change between minor versions.
 
 ## [Unreleased]
 
-Nothing yet. Next up is Phase 10b: the approval adapters -- Teams, Slack, a
-signature-verified webhook, approver authorisation, callback deduplication and the
-escalation policy. All of it needs recorded payloads from real workspaces and two new
-dependencies, which is why it is its own phase.
+Nothing yet. Next up is Phase 12: the rest of the A2A layer -- per-specialist cards,
+per-caller authorisation, JWS card signing, Foundry interop, and CostSentinel as an A2A
+*client* rather than only a published card.
+
+## [0.11.0] - 2026-10-21
+
+Phase 11: the operator dashboard. Everything built through Phase 10 was visible only
+through a terminal or a Markdown file -- including an approval queue that halts a sweep
+until somebody answers it. A gate nobody can see is a gate nobody uses.
+
+### Added
+
+- **A read-only operator surface**: three pages (the estate, a client's report, the
+  pending-approval queue) rendering the **same `ClientReport`** the Markdown renderer
+  turns into a document. The same object, the same sections, the same order -- two
+  readers of one sweep must not be able to see different things about it, and the
+  cheapest way to guarantee that is to leave them nothing to disagree about (D123).
+
+- **A view model that computes no figure.** It holds no `Decimal` and no `MoneyAmount`:
+  every monetary value arrives as the string `MoneyAmount.display()` already produced,
+  and a string cannot be re-rounded. Two derivations survive and both are named in the
+  test that pins them -- a count of findings, and a fraction turned into a percentage --
+  so a third fails the build rather than blending in.
+
+- **The no-recompute claim enforced by the rendered-report gate's own function.**
+  `unrendered_figures` is what checks the document; reusing it means the page and the
+  document are held to one standard, so weakening it weakens both at once. 112 figures
+  on the mock estate's page, none introduced; the three headlines verbatim; and a
+  red-then-green test that corrupts one digit.
+
+- **A decision from the dashboard, through the one audited path** (D124). The queue page
+  calls `find_pending`, `DecisionRequest` and `resume` -- the same three things
+  `costsentinel approvals decide` calls -- and constructs no record of its own. Asserted
+  in **both** directions, so removing the shared call fails as loudly as adding a local
+  one, and a decision made on a page is compared field by field with one made in a
+  terminal.
+
+- **`costsentinel dashboard`**, writing the same pages to files that open with nothing
+  listening. The committed screenshots come from the surface rather than from a mock-up,
+  and a reviewer can look at the output of a change without starting anything.
+
+- **Four captures of the surface on the mock estate** under `docs/dashboard/`, including
+  the queue before and after a decision -- where the count drops from 11 to 10 because
+  that decision resumed the paused sweep.
+
+### Changed
+
+- **The dashboard and the A2A layer traded places** (D122): the operator surface is now
+  Phase 11 and the rest of A2A is Phase 12. Phase 10 published the one card anybody
+  would ask for first, so what remains in the A2A phase is agent-to-agent plumbing with
+  no human in it.
+
+- `price_sources` and `SOURCE_LABELS` are promoted out of the Markdown renderer rather
+  than copied. Two definitions of "what to call a provenance source" would be two places
+  for a page and a document to start describing one sweep differently.
+
+### Notes
+
+- **No new dependency.** The HTML is composed in Python with no template engine, for the
+  reason D108 gave for the Markdown renderer; the stylesheet is inline and nothing is
+  fetched at runtime. The decision form's body is parsed with `urllib.parse.parse_qs`
+  rather than FastAPI's `Form`, which requires `python-multipart` -- a constraint
+  discovered by the server refusing to start, which is the right way for a dependency
+  promise to be enforced.
+
+- **Deciding is separately gated** by `DASHBOARD_CAN_DECIDE`, off by default, and the
+  POST is refused when it is off rather than merely unoffered. A hidden form field is
+  not a permission check.
+
+- Four items deferred out of this phase with their reasons recorded: per-client views
+  with multi-tenancy enforced in a query layer, a run-history browser,
+  realised-versus-projected savings, and a React rewrite.
 
 ## [0.10.0] - 2026-10-21
 
@@ -850,7 +918,8 @@ Phase 1: the scaffold and a thin vertical slice.
 - Landed as an honest commit series dated when it was actually committed; it predates
   the issue-driven workflow and has no backing issues.
 
-[Unreleased]: https://github.com/vivekanjana76/costsentinel/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/vivekanjana76/costsentinel/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.7.0...v0.8.0

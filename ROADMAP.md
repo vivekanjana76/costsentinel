@@ -805,28 +805,28 @@ nobody uses, so the human surface goes first (ARCHITECTURE.md D122).
 
 Milestone: *Phase 11 - The operator dashboard*.
 
-- [ ] A **view model** built from a `ClientReport`, carrying only strings, enums and
+- [x] A **view model** built from a `ClientReport`, carrying only strings, enums and
       already-computed values. The view decides order and emphasis, never a figure
       (#95)
-- [ ] A **dependency-free HTML renderer** over that view model. No template engine, for
+- [x] A **dependency-free HTML renderer** over that view model. No template engine, for
       the reason D108 gave for the Markdown renderer; no external CDN or hosted asset,
       so a page renders identically on a laptop with no network (#96)
-- [ ] **The view recomputes nothing**, asserted with the machinery the rendered-report
+- [x] **The view recomputes nothing**, asserted with the machinery the rendered-report
       gate already uses: every decimal in the HTML is a figure the report supplied or a
       string it carries, and the headline figures appear verbatim (#97)
-- [ ] **The surface itself**, off by default, served from the existing FastAPI app, plus
+- [x] **The surface itself**, off by default, served from the existing FastAPI app, plus
       a `--static` mode that writes the same HTML to files so it is reviewable with no
       server and no browser (#98)
-- [ ] **A decision from the dashboard goes through the one audited durable path** -- the
+- [x] **A decision from the dashboard goes through the one audited durable path** -- the
       same functions the CLI calls, no second implementation, no record constructed in
       the view layer, and the four-way no-mutation invariant unchanged (#99)
-- [ ] **Honesty carried into the second format:** unknown stays "unknown", an exempt
+- [x] **Honesty carried into the second format:** unknown stays "unknown", an exempt
       item shows a cost, an anomaly is visibly non-actionable, hostile names are
       escaped, and the synthetic banner derives from the same marker the report and the
       commit guard use (#100)
-- [ ] **Committed screenshots** of the mock estate, so a repository visitor sees the
+- [x] **Committed screenshots** of the mock estate, so a repository visitor sees the
       operator surface without running anything (#101)
-- [ ] ARCHITECTURE, README and the diagram updated; CHANGELOG entry for v0.11.0 (#102)
+- [x] ARCHITECTURE, README and the diagram updated; CHANGELOG entry for v0.11.0 (#102)
 
 **Exit criteria:** an operator opens the dashboard, reads a client's report with every
 section the Markdown renderer has, sees the pending-approval queue, and records a
