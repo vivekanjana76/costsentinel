@@ -155,6 +155,19 @@ class Settings(BaseSettings):
         ),
     )
 
+    bind_host: str = Field(
+        default="127.0.0.1",
+        validation_alias=_env("BIND_HOST"),
+        description=(
+            "The address `costsentinel serve` listens on, and the one the decision "
+            "interlock judges. Loopback by default. With DASHBOARD_CAN_DECIDE=true and "
+            "no authenticator, a non-loopback value refuses to start: anybody who could "
+            "reach the page could approve under any name (ARCHITECTURE.md D126). A "
+            "server started some other way is still checked per request, against the "
+            "socket a decision actually arrived on."
+        ),
+    )
+
     # --- A2A surface -----------------------------------------------------
     a2a_enabled: bool = Field(
         default=False,

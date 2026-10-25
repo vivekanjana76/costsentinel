@@ -124,7 +124,7 @@ class ApproverAssurance(StrEnum):
                 return "verified"
 
 
-def _check_assurance(assurance: ApproverAssurance, verified_by: str | None) -> None:
+def check_assurance(assurance: ApproverAssurance, verified_by: str | None) -> None:
     """A verified identity names its verifier; a self-asserted one cannot name any.
 
     The second half matters as much as the first. A self-asserted record carrying an
@@ -183,7 +183,7 @@ class ApprovalDecision(Frozen):
 
     @model_validator(mode="after")
     def _assurance_is_consistent(self) -> ApprovalDecision:
-        _check_assurance(self.approver_assurance, self.verified_by)
+        check_assurance(self.approver_assurance, self.verified_by)
         return self
 
     @property
@@ -332,7 +332,7 @@ class DecisionRequest(Frozen):
 
     @model_validator(mode="after")
     def _assurance_is_consistent(self) -> DecisionRequest:
-        _check_assurance(self.approver_assurance, self.verified_by)
+        check_assurance(self.approver_assurance, self.verified_by)
         return self
 
 
@@ -379,7 +379,7 @@ class ApprovalRecord(Frozen):
 
     @model_validator(mode="after")
     def _assurance_is_consistent(self) -> ApprovalRecord:
-        _check_assurance(self.approver_assurance, self.verified_by)
+        check_assurance(self.approver_assurance, self.verified_by)
         return self
 
     @property

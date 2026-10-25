@@ -79,6 +79,15 @@ def section_of(html: str, heading: str) -> str:
     return html.split(marker, 1)[1].split("</section>", 1)[0]
 
 
+def _local(app: FastAPI) -> TestClient:
+    """A client whose requests arrive on a loopback socket, as a local operator's do.
+
+    The default test client reports its server as ``testserver``, which is not
+    loopback, and the decision interlock rightly refuses a decision from it (D126).
+    """
+    return TestClient(app, base_url="http://127.0.0.1")
+
+
 def _settings(scratch: Path, *, enabled: bool = False, decide: bool = False) -> Settings:
     return Settings(
         mode=RunMode.MOCK,
@@ -559,7 +568,7 @@ def test_the_post_records_a_decision_and_redirects(tmp_path: Path) -> None:
     settings = _scanned(tmp_path, CLIENT_MINISTRY)
     app = FastAPI()
     mount(app, settings)
-    client = TestClient(app)
+    client = _local(app)
 
     target = pending_queue(settings)[0].recommendation_id
     response = client.post(
@@ -591,7 +600,7 @@ def test_a_malformed_decision_is_refused(tmp_path: Path, body: str, expected: in
     settings = _scanned(tmp_path, CLIENT_MINISTRY)
     app = FastAPI()
     mount(app, settings)
-    response = TestClient(app).post(
+    response = _local(app).post(
         f"{BASE_PATH}/decide",
         content=body,
         headers={"content-type": "application/x-www-form-urlencoded"},

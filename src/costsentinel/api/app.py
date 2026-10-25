@@ -18,6 +18,7 @@ from costsentinel import __version__
 from costsentinel.a2a.server import mount
 from costsentinel.config import Settings, get_settings
 from costsentinel.dashboard.app import mount as mount_dashboard
+from costsentinel.dashboard.auth import Authenticator
 from costsentinel.domain.report import ScanResult
 from costsentinel.graph.runner import ScanFailedError, run_scan
 from costsentinel.llm.base import LLMError
@@ -74,8 +75,24 @@ def settings_dependency() -> Settings:
 SettingsDep = Annotated[Settings, Depends(settings_dependency)]
 
 
-def create_app() -> FastAPI:
-    """Build the FastAPI application."""
+def create_app(
+    settings: Settings | None = None, authenticator: Authenticator | None = None
+) -> FastAPI:
+    """Build the FastAPI application.
+
+    Args:
+        settings: The configuration to mount the surfaces with. Defaults to the
+            process settings; `costsentinel serve` passes its own so a ``--host``
+            override is the bind the interlock judges.
+        authenticator: Who stands behind a dashboard decision. Defaults to the
+            null authenticator, which verifies nothing and is refused off loopback.
+
+    Raises:
+        UnsafeDecisionSurfaceError: When the dashboard would serve an unauthenticated
+            decision surface on a non-loopback bind. The app is not built, so the
+            server does not start (ARCHITECTURE.md D126).
+    """
+    configured = settings or get_settings()
     app = FastAPI(
         title=API_TITLE,
         version=API_VERSION,
@@ -88,8 +105,8 @@ def create_app() -> FastAPI:
 
     # Both off unless an operator turned them on. The A2A card is published
     # either way; the dashboard serves nothing until enabled.
-    mount(app, get_settings())
-    mount_dashboard(app, get_settings())
+    mount(app, configured)
+    mount_dashboard(app, configured, authenticator)
 
     @app.get("/health", response_model=HealthResponse, tags=["meta"])
     def health(settings: SettingsDep) -> HealthResponse:
@@ -138,5 +155,16 @@ def create_app() -> FastAPI:
     return app
 
 
-#: The ASGI application, for ``uvicorn costsentinel.api.app:app``.
-app = create_app()
+def __getattr__(name: str) -> FastAPI:
+    """The ASGI application, for ``uvicorn costsentinel.api.app:app``.
+
+    Built on first access rather than at import. Building it is where the decision
+    interlock runs, and an import-time build would make an unsafe environment break
+    every importer, `costsentinel serve --host 127.0.0.1` included, before the override
+    could be read. Uvicorn resolves ``:app`` through ``getattr``, so a server started
+    that way still refuses to start.
+    """
+    if name == "app":
+        return create_app()
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)
