@@ -184,15 +184,26 @@ class Settings(BaseSettings):
         validation_alias=_env("A2A_URL"),
         description="Where the card says the endpoint lives.",
     )
+    a2a_jws_key_file: Path | None = Field(
+        default=None,
+        validation_alias=_env("A2A_JWS_KEY_FILE"),
+        description=(
+            "A PEM P-256 private key the Agent Card is signed with: a JWS per A2A v1 "
+            "section 8.4, ES256 over the RFC 8785 canonical card (D129). Unset in mock "
+            "mode signs with a synthetic key derived from a committed, labelled seed, so "
+            "CI verifies the signature on every run. Unset in real mode serves an "
+            "*unsigned* card, because a signature anybody can forge invites trust."
+        ),
+    )
     a2a_signing_key: SecretStr | None = Field(
         default=None,
         validation_alias=_env("A2A_SIGNING_KEY"),
         description=(
-            "Key the Agent Card is signed with. Unset in mock mode uses the committed "
-            "synthetic key, so the signature is exercised in CI -- one whose signing "
-            "has never been checked is not a feature. Unset in real mode produces an "
-            "*unsigned* card rather than one signed with a published key, because a "
-            "signature anybody can forge invites a consumer to trust it."
+            "Optional fallback: a shared secret for the detached HMAC-SHA256 Phase 10 "
+            "shipped, kept for consumers that already check it. NOT an A2A v1 "
+            "signature. Served out of band in the X-CostSentinel-Card-HMAC header, "
+            "never in the card's `signatures`, and symmetric -- anybody who can verify "
+            "it can forge it. Unset by default."
         ),
     )
 
