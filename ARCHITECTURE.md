@@ -19,7 +19,16 @@ spine. The spine is:
 
 ```
 signals -> detection -> diagnosis -> proposal -> governance -> action -> report -> learning
+                                                      |                      |
+                                            durable approval gate      operator surface
+                                             (halts; hands off)       (reads; one write)
 ```
+
+The two branches below the line are where a **person** meets the spine. The approval
+gate halts a sweep at a checkpoint until somebody decides (section 13); the operator
+surface renders the same report a client reads and is the second place that decision
+can be recorded -- through the same path, never a second one (section 14). Neither can
+execute anything: there is no action implementation to reach.
 
 Every layer is separated by a typed Pydantic v2 boundary, so a second mission can
 reuse the orchestration, governance, memory, audit, observability and reporting
@@ -39,6 +48,7 @@ machinery while swapping the specialists and the policy pack.
 | Memory | `memory/` | Semantic (RAG) + episodic (outcomes) memory on PostgreSQL + pgvector. |
 | Guardrails | `guardrails/` | Policy store, action classification, approval gate, audit trail. |
 | Reports | `reports/` | Markdown + PDF client-ready report rendering. |
+| Dashboard | `dashboard/` | The operator surface: a view model over the same `ClientReport`, HTML, and the queue page's one decision route. |
 | Observability | `observability/` | Langfuse wiring, structured JSON logging, run-id correlation. |
 | A2A | `a2a/` | Agent2Agent v1 Agent Cards + server exposing specialists to external agents. |
 | API | `api/` | FastAPI application. |
@@ -1213,7 +1223,116 @@ discover what is available rather than probe for it.
 
 ---
 
-## 14. Evaluation approach
+## 14. The operator surface
+
+Implemented in Phase 11. Everything built through Phase 10 was visible only through a
+terminal or a Markdown file -- including an approval queue that halts a sweep until
+somebody answers it. A gate nobody can see is a gate nobody uses, which is why the
+human surface went ahead of the rest of the A2A layer (D122).
+
+### One report, two formats
+
+The dashboard renders the **same `ClientReport`** the Markdown renderer turns into a
+document, through a view model that decides order and emphasis and computes no figure
+(D123). Not "a dashboard that shows similar information" -- the same object, the same
+sections, in the same order. Two readers of one sweep must not be able to see different
+things about it, and the cheapest way to guarantee that is to leave them nothing to
+disagree about.
+
+The view model holds no `Decimal` and no `MoneyAmount`: every monetary value arrives as
+the string `MoneyAmount.display()` already produced. That is the same reasoning
+`FrozenFigures` carries -- what somebody must see is what the report *rendered*, down
+to the grouping and the currency, and re-deriving it in a view would be re-deriving it
+from data a second formatter could disagree about. A string cannot be re-rounded.
+
+Two derivations survive, and both are named in the test that pins them rather than
+waved past: a **count** of findings split into observed and estimated, and a fraction
+the pipeline computed turned into a percentage. Neither touches money, and a third
+expression fails the build rather than blending in.
+
+### The same gate, over a second format
+
+The no-recompute claim is enforced with `unrendered_figures` -- the function the
+rendered-report gate already calls (D109). Reusing it rather than writing a second
+checker means the document and the page are held to one standard: weakening it weakens
+both at once, which somebody would notice, unlike two checkers quietly drifting apart.
+On the mock estate's page that is 112 figures checked and none introduced, plus the
+three headline figures required verbatim.
+
+One exclusion, and it is narrow: `content_of` removes the `<style>` element before the
+check, because `font: 15px/1.55` is a decimal and nobody reads a line height as money.
+Only the stylesheet comes out. Tags and attributes stay in, so a figure smuggled into a
+`title` or a `value` is still caught -- a test puts one there to prove the exclusion did
+not become a hiding place.
+
+### Composed in Python, fetching nothing
+
+No template engine, for the reason D108 gave for the Markdown renderer. The stylesheet
+is inline and there is no script, no font and no CDN: a page that fetched a stylesheet
+would render differently on a laptop with no network, and an operator reviewing a cost
+estate on a locked-down machine is exactly the person who would discover that. It also
+means a screenshot and the page are the same artefact.
+
+Every interpolated value is escaped with quotes included, because resource names and
+tags are provider-supplied and the injection corpus puts hostile text in precisely those
+fields. That is the same boundary the prompt builder enforces, in a second output
+format.
+
+### One decision path, asserted in both directions
+
+The surface is a viewer with one exception: the queue page can record a decision. It
+does so by calling the three things `costsentinel approvals decide` calls --
+`find_pending`, `DecisionRequest`, `resume` -- and nothing else (D124). It constructs no
+`ApprovalRecord`, validates nothing itself, and has no path that reaches the gate's
+internals. Every rule about what a valid decision is stays where the state is; a check
+in the view as well would be a second place for those rules to drift, and the dashboard
+is not the component that should win such a disagreement.
+
+"We reused the shared function" is the sort of claim that stays true right up until
+somebody adds a shortcut, so it is asserted structurally in **both** directions: the
+dashboard package may not mention `ApprovalRecord(`, `ApprovalDecision(`, `build_record`,
+`read_payload`, `interrupt(` or `Command(`; and it *must* mention `find_pending`,
+`DecisionRequest(` and `resume(`, so removing the shared call fails the test rather than
+passing because nothing forbidden was added. A decision made on a page and one made in
+a terminal are compared field by field and are identical but for their timestamps.
+
+Deciding is separately gated by `DASHBOARD_CAN_DECIDE`, off by default, and the POST is
+**refused** when it is off rather than merely unoffered. A hidden form field is not a
+permission check. A deployment that wants eyes on the estate without hands on the queue
+gets that by default rather than by configuration.
+
+The Phase 10 no-mutation invariant is untouched (D118): the dashboard package imports
+nothing from `azure`, carries no executable handle, and a decision made through it lands
+in the same `HANDED_OFF` terminal state with the same audit events.
+
+### Reading from the checkpoint, not from a sweep
+
+The pages read reports back out of the checkpoint rather than running a scan. Opening a
+page must not cost a provider call, and "what did the last review find" is a different
+question from "what would a review find now" -- an operator looking at a queue wants the
+figures somebody was actually shown, which is also what makes the page and the report
+comparable.
+
+### Two surfaces, one body parser
+
+`POST /dashboard/decide` parses its body with `urllib.parse.parse_qs` rather than
+FastAPI's `Form`, which is not a style preference: `Form` requires `python-multipart`,
+and this phase promised no new default dependency. Multipart exists for file uploads and
+this form has none, so an `application/x-www-form-urlencoded` body is a standard-library
+parse. That constraint was discovered by the server refusing to start, which is the
+right way for a dependency promise to be enforced.
+
+### Static rendering
+
+`costsentinel dashboard` writes the same pages to files, which open with nothing
+listening. Three reasons it is a feature rather than a convenience: the committed
+screenshots in `docs/dashboard/` come from the surface rather than from a mock-up; a
+reviewer can look at the output of a change without starting anything; and the decision
+form is omitted, because a button that posts nowhere is worse than no button.
+
+---
+
+## 15. Evaluation approach
 
 Implemented in Phase 5. Evals are a deliverable, not an afterthought, because "did we
 find the waste" and "did we gate the dangerous thing" are the product's actual claims
@@ -1361,7 +1480,7 @@ reproducible.
 
 ---
 
-## 15. MCP and A2A boundaries
+## 16. MCP and A2A boundaries
 
 These are two different seams and are deliberately not conflated.
 
@@ -1428,7 +1547,7 @@ both ways is defined once in the domain layer and adapted at both edges.
 
 ---
 
-## 16. Non-functional posture
+## 17. Non-functional posture
 
 - **Zero-credential by default.** `MODE=mock` is the default. CI never has secrets or
   network access to a cloud or LLM provider.
@@ -1440,7 +1559,7 @@ both ways is defined once in the domain layer and adapted at both edges.
 
 ---
 
-## 17. Decision log
+## 18. Decision log
 
 Each entry records the decision, the alternatives considered, and why.
 
@@ -2507,3 +2626,39 @@ library, and is *named* for what it is rather than for what it resembles. The sy
 key is committed and labelled worthless so CI verifies an actual signature; real mode
 with no key produces an unsigned card rather than one signed with a published key,
 because a forgeable signature invites a consumer to trust it. JWS is a Phase 11 item.
+
+**D122. The operator dashboard went ahead of the rest of the A2A layer.**
+*Alternatives:* keep the planned order and finish A2A -- per-specialist cards, per-caller
+authorisation, Foundry interop, consuming other agents -- first. *Why:* Phase 10
+published the one card anybody would ask for first, so what remained in the A2A phase is
+agent-to-agent plumbing with no human in it. Meanwhile everything built through Phase 10
+was visible only through a terminal or a Markdown file, including an approval queue that
+*halts a sweep* until somebody answers it. A gate nobody can see is a gate nobody uses,
+and a governance feature that only an engineer with a shell can reach is a governance
+feature for engineers. Nothing else renumbered.
+
+**D123. The dashboard renders the same `ClientReport` and computes no figure.**
+*Alternatives:* a view that queries state directly and formats what it needs, which is
+how most dashboards are built and would have been less code. *Why:* two readers of one
+sweep must not be able to see different things about it, and the cheapest way to
+guarantee that is to leave them nothing to disagree about. So the page renders the same
+object the document renders, through a view model that holds no `Decimal` and no
+`MoneyAmount` -- only the strings `MoneyAmount.display()` already produced, which cannot
+be re-rounded. The claim is enforced with `unrendered_figures`, the function the
+rendered-report gate already uses, rather than a second checker that could drift from
+the first: one standard, weakened in one place or not at all. Two derivations are
+permitted and both are named in the test that pins them -- a count, and a fraction turned
+into a percentage -- so a third fails the build rather than blending in.
+
+**D124. A decision from the dashboard takes the one audited path, asserted both ways.**
+*Alternatives:* a small decision helper in the view layer, which would have been easy
+and would have been a second implementation of the most consequential operation in the
+system. *Why:* there is exactly one way to record a decision -- `find_pending`,
+`DecisionRequest`, `resume` -- and every rule about what a valid decision is lives in
+the gate, where the state is. A check in the view as well would be a second place for
+those rules to drift, and the dashboard is not the component that should win such a
+disagreement. "We reused the shared function" stays true right up until somebody adds a
+shortcut, so the test asserts the absence of a second implementation *and* the presence
+of the shared calls: removing the shared call fails just as loudly as adding a local
+one. Deciding is separately gated and the POST is refused when the gate is off, because
+a hidden form field is not a permission check.

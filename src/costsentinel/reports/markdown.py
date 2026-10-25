@@ -71,7 +71,10 @@ _DECIMAL = re.compile(r"\b\d{1,3}(?:,\d{3})*\.\d{2}\b")
 
 #: How a provenance source is described to a client. A client should not have to read
 #: an enum to find out where their numbers came from.
-_SOURCE_LABELS: dict[ProvenanceSource, str] = {
+#: Public because the dashboard's view model needs the same mapping. Two copies of
+#: "what to call a provenance source" would be two places for a page and a document
+#: to start describing one sweep differently.
+SOURCE_LABELS: dict[ProvenanceSource, str] = {
     ProvenanceSource.AZURE_RETAIL_PRICES: "Azure Retail Prices",
     ProvenanceSource.AZURE_COST_MANAGEMENT: "Azure Cost Management",
     ProvenanceSource.AZURE_RESOURCE_GRAPH: "Azure Resource Graph",
@@ -144,7 +147,7 @@ def _figure_basis(is_estimated: bool) -> str:
     return "**observed** -- the provider's reported cost for something being removed"
 
 
-def _price_sources(report: ClientReport) -> tuple[set[ProvenanceSource], datetime | None]:
+def price_sources(report: ClientReport) -> tuple[set[ProvenanceSource], datetime | None]:
     """Where this report's figures came from, read off the figures themselves.
 
     Derived rather than declared. A hardcoded "prices from Azure Retail Prices" line
@@ -339,7 +342,7 @@ def _summary(report: ClientReport) -> list[str]:
 
 
 def _describe(provenance: Provenance) -> str:
-    return _SOURCE_LABELS.get(provenance.source, provenance.source.value)
+    return SOURCE_LABELS.get(provenance.source, provenance.source.value)
 
 
 def _finding_block(finding: ReportFinding, *, position: int) -> list[str]:
@@ -644,10 +647,10 @@ def _approval_queue(report: ClientReport) -> list[str]:
 
 
 def _provenance_section(report: ClientReport, *, synthetic: bool) -> list[str]:
-    sources, retrieved = _price_sources(report)
+    sources, retrieved = price_sources(report)
     described = sorted(
         {
-            _SOURCE_LABELS.get(source, source.value)
+            SOURCE_LABELS.get(source, source.value)
             for source in sources
             if source is not ProvenanceSource.CALCULATION
         }
@@ -726,7 +729,7 @@ def is_synthetic(report: ClientReport) -> bool:
     nil-prefixed means no real tenant issued them, which is exactly the test the
     commit guard applies before letting an id into the repository.
     """
-    sources, _ = _price_sources(report)
+    sources, _ = price_sources(report)
     if ProvenanceSource.MOCK_PROVIDER in sources:
         return True
     return bool(report.subscriptions_in_scope) and all(

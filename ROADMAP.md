@@ -1,6 +1,6 @@
 # CostSentinel — Roadmap
 
-**Current phase: 10** — the durable approval gate, and the first A2A surface.
+**Current phase: 11** — the operator dashboard.
 
 Phases are sequential. Do not start work in a later phase before the current phase
 is complete and its exit criteria are met. If an idea arrives mid-phase, record it
@@ -8,7 +8,7 @@ under "Parked ideas" at the bottom and stay on the current slice.
 
 Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
-> **Phase order has changed five times.** After Phase 1 the specialist graph and the
+> **Phase order has changed six times.** After Phase 1 the specialist graph and the
 > MCP Azure tool server were swapped, because the graph is entirely mock-runnable and
 > the MCP server is the first thing needing real credentials (ARCHITECTURE.md D34).
 > After Phase 2, statistical cost-anomaly detection and real-model hardening were
@@ -111,6 +111,14 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 > queue is the first thing another agent would have a reason to ask about, and an A2A
 > surface built after half a dozen specialists are already exposed is one where
 > "is this read-only?" has to be re-established for each of them (ARCHITECTURE.md D117).
+>
+> After Phase 10, **the dashboard and the A2A layer traded places**: the operator surface
+> is now Phase 11 and the rest of A2A is Phase 12. Phase 10 published the one card
+> anybody would ask for first, so what remains in the A2A phase is agent-to-agent
+> plumbing with no human in it -- while everything built through Phase 10 is visible only
+> through a terminal or a Markdown file, including an approval queue that halts a sweep
+> until somebody answers it. A gate nobody can see is a gate nobody uses
+> (ARCHITECTURE.md D122). Nothing else renumbered.
 
 ---
 
@@ -780,18 +788,80 @@ library. All behind an optional extra CI does not install.
 
 ---
 
-## Phase 11 — A2A layer
+## Phase 11 — The operator dashboard
+
+**Goal:** a human can see what CostSentinel found, and decide what it is waiting on,
+without reading a terminal.
+
+**One swap, flagged.** The dashboard was Phase 12 and the rest of the A2A layer Phase
+11; they trade places. Phase 10 published one A2A card and the queue behind it, so the
+agent-facing surface exists for the capability anybody would ask about first. What is
+left in the A2A phase -- per-specialist cards, per-caller authorisation, Foundry
+interop, consuming other agents -- is agent-to-agent plumbing with no human in it. And
+everything built through Phase 10 is now visible only through a terminal or a Markdown
+file: the report, the exemptions, the anomalies with their attribution, and an approval
+queue that halts a sweep until somebody answers it. A gate nobody can see is a gate
+nobody uses, so the human surface goes first (ARCHITECTURE.md D122).
+
+Milestone: *Phase 11 - The operator dashboard*.
+
+- [x] A **view model** built from a `ClientReport`, carrying only strings, enums and
+      already-computed values. The view decides order and emphasis, never a figure
+      (#95)
+- [x] A **dependency-free HTML renderer** over that view model. No template engine, for
+      the reason D108 gave for the Markdown renderer; no external CDN or hosted asset,
+      so a page renders identically on a laptop with no network (#96)
+- [x] **The view recomputes nothing**, asserted with the machinery the rendered-report
+      gate already uses: every decimal in the HTML is a figure the report supplied or a
+      string it carries, and the headline figures appear verbatim (#97)
+- [x] **The surface itself**, off by default, served from the existing FastAPI app, plus
+      a `--static` mode that writes the same HTML to files so it is reviewable with no
+      server and no browser (#98)
+- [x] **A decision from the dashboard goes through the one audited durable path** -- the
+      same functions the CLI calls, no second implementation, no record constructed in
+      the view layer, and the four-way no-mutation invariant unchanged (#99)
+- [x] **Honesty carried into the second format:** unknown stays "unknown", an exempt
+      item shows a cost, an anomaly is visibly non-actionable, hostile names are
+      escaped, and the synthetic banner derives from the same marker the report and the
+      commit guard use (#100)
+- [x] **Committed screenshots** of the mock estate, so a repository visitor sees the
+      operator surface without running anything (#101)
+- [x] ARCHITECTURE, README and the diagram updated; CHANGELOG entry for v0.11.0 (#102)
+
+**Exit criteria:** an operator opens the dashboard, reads a client's report with every
+section the Markdown renderer has, sees the pending-approval queue, and records a
+decision that resumes the paused sweep -- through the same path `costsentinel approvals
+decide` uses.
+
+**Deliberately *not* in this phase:** per-client views with multi-tenancy enforced in a
+query layer, a run-history and audit-trail browser, realised-versus-projected savings,
+and any React rewrite. The first two are worth doing and need a multi-tenant query seam
+that does not exist yet; the third needs episodic outcomes accumulated over real time;
+the fourth is polish on content that has not been looked at by an operator even once.
+All four are recorded under "Later features, scheduled".
+
+**New dependencies to flag:** none for the default path. The HTML is composed in Python
+and the server is the FastAPI app that already exists.
+
+---
+
+## Phase 12 — A2A layer
 
 **Goal:** specialists are discoverable and invocable by external agents, without
 routing around governance.
 
-- [ ] A2A v1 Agent Cards for **each specialist**. Phase 10 published one card for
-      the read-only report-and-queue capability; this is the rest of them
-- [ ] A2A server exposing the specialists, beyond the opt-in single-capability
-      server Phase 10 built
+Phase 10 published one read-only card for the report-and-queue capability (D117). This
+is the rest of it.
+
+- [ ] A2A v1 Agent Cards for **each specialist**
+- [ ] A2A server exposing the specialists, beyond the opt-in single-capability server
+      Phase 10 built
 - [ ] **Consuming other agents**: CostSentinel as an A2A *client*, discovering and
-      invoking an external agent. Deliberately not started in Phase 10, which
-      published a card and nothing that reads anybody else's
+      invoking an external agent. Deliberately not started in Phase 10, which published
+      a card and nothing that reads anybody else's
+- [ ] **JWS card signing**, replacing the detached HMAC Phase 10 shipped (D121). Needs
+      an asymmetric key and a JSON-canonicalisation library, both of which belong in a
+      phase that can take a dependency
 - [ ] Cards declare capability, input and output schema, and the action class of
       anything the agent can propose
 - [ ] Authentication and per-caller authorisation
@@ -799,26 +869,8 @@ routing around governance.
 - [ ] Test asserting an external caller cannot obtain execution of a `review` or
       `block` action without a recorded `ApprovalDecision`
 
-**Exit criteria:** an external agent invokes the Savings Estimator and receives a
-typed result; an external attempt to execute a gated action is refused.
-
----
-
-## Phase 12 — Dashboard
-
-**Goal:** an operator view across the estate.
-
-- [ ] Streamlit dashboard: estate overview, findings, pending approvals, savings
-      realised vs projected
-- [ ] Approval actions from the dashboard, via the same gate interface
-- [ ] Per-client views with multi-tenancy enforced in the query layer
-- [ ] Run history and audit-trail browser
-- [ ] React rewrite for polish (optional, after Streamlit proves the content)
-
-**Exit criteria:** an operator can run a sweep, review findings and approve a gated
-action entirely from the dashboard.
-
-**New dependencies to flag:** `streamlit`.
+**Exit criteria:** an external agent invokes the Savings Estimator and receives a typed
+result; an external attempt to execute a gated action is refused.
 
 ---
 
@@ -849,6 +901,24 @@ a complete audit chain from signal to execution, and the outcome recorded.
 ---
 
 ## Later features, scheduled
+
+- [ ] **Per-client dashboard views with multi-tenancy enforced in the query layer.**
+      Deferred from Phase 11, which serves one client per page from a report that is
+      already single-client by construction. Enforcing tenancy *in the query layer* is
+      the claim worth making and it needs a query seam that does not exist: today a view
+      reads a `ClientReport` somebody already scoped, which is safe and is not the same
+      as a store that cannot return another client's rows.
+- [ ] **A run-history and audit-trail browser.** Deferred from Phase 11. Every event is
+      already recorded and the checkpoint holds every sweep; what is missing is a way to
+      page through them without knowing a run id, which is a listing problem rather than
+      a dashboard problem.
+- [ ] **Realised versus projected savings on the dashboard.** Needs episodic outcomes
+      accumulated over real elapsed time -- a panel comparing the two before anybody has
+      accepted anything would show one number twice.
+- [ ] **A React rewrite of the operator surface.** Deferred from Phase 11 and
+      deliberately last: it is polish on content no operator has looked at even once,
+      and the server-rendered pages exist precisely so the content can be judged before
+      a frontend build is added to the repository.
 
 - **Config-tunable ranking weights per client** (Phase 10, with the client policy
   overlays the approval gate needs anyway).
