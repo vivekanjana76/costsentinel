@@ -311,6 +311,20 @@ implementation; a test asserts both the absence of one and the presence of the s
 calls. The POST is refused outright when the flag is off, because a hidden form field
 is not a permission check.
 
+**An unauthenticated decision surface off loopback refuses to start.** With
+`DASHBOARD_CAN_DECIDE=true`, a non-loopback `BIND_HOST` and no authenticator configured,
+the app is not built and the server exits with an error naming the fix. A decision that
+arrives on a non-loopback socket is also refused per request, which covers a server
+started with a wider `--host` than `BIND_HOST` says. **One thing the process cannot
+see:** a reverse proxy on the same machine forwards over loopback, and looks like a local
+operator. Do not front a decision surface with a proxy until Phase 10b's authenticator
+exists; serve it display-only instead.
+
+**Every approver is recorded as self-asserted and unverified** until that authenticator
+exists. The name on a decision is what the approver typed, and the record, the
+authorisation and the audit events all say so, so the trail never claims an identity
+was established when it was only asserted.
+
 **Approving from a page does what approving from a terminal does**: it records a
 decision and hands the action to a person. The four-way no-mutation proof of section 5
 is unchanged -- the dashboard package imports nothing from `azure`, carries no
@@ -326,22 +340,30 @@ particular -- is HTML-escaped with quotes included.
 ```bash
 A2A_ENABLED=true
 A2A_URL=https://costsentinel.internal.example
-A2A_SIGNING_KEY=<your own key>
+A2A_JWS_KEY_FILE=/run/secrets/costsentinel-card-key.pem   # a P-256 key you generated
 ```
 
 Off by default. When enabled it serves one Agent Card at
 `/.well-known/agent-card.json` and three **read-only** skills: request a cost review,
 fetch the current findings, fetch the pending-approval queue. There is no advertised
-skill that decides an approval, and no route that is a PUT, PATCH or DELETE; a caller
-asking for `approvals.decide` is refused with the advertised list.
+skill that decides an approval. The only POSTs create a read task or cancel one before
+it runs, and neither can reach a sweep, a checkpoint or a decision. A caller asking for
+`approvals.decide` is refused with the advertised list.
 
-The card carries a detached HMAC-SHA256 over its canonical JSON. This is **not** a JWS,
-which is what A2A v1 describes -- a JWS needs an asymmetric key and a canonicalisation
-library, and adding either would put an unverified dependency on the path CI gates. In
-mock mode the card is signed with a committed synthetic key so the signature is actually
-verified in CI; in real mode with no `A2A_SIGNING_KEY` the card is **unsigned** rather
-than signed with a published key, because a forgeable signature invites a consumer to
-trust it.
+**The card is signed with a JWS per A2A v1 section 8.4**: ES256 over the RFC 8785
+canonical card, with a detached payload. CI verifies it with an independent JOSE
+implementation. The public key is published at `/.well-known/agent-card-jwks.json`.
+**The signature proves the card was not modified; it does not prove who signed it**,
+because the key is served from the same origin as the card. Consumers that need
+provenance should pin your public key out of band. In mock mode the card is signed with
+a key derived from a committed, labelled seed. In real mode with no `A2A_JWS_KEY_FILE`
+the card is **unsigned** rather than signed with a published key, because a forgeable
+signature invites trust. The key file is a secret: keep it out of git and out of the
+image.
+
+`A2A_SIGNING_KEY` keeps Phase 10's detached HMAC as an optional fallback, in an
+`X-CostSentinel-Card-HMAC` header. It is **not** an A2A signature, it never appears in
+`signatures`, and it is symmetric: anybody who can verify it can forge it.
 
 ---
 

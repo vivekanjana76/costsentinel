@@ -175,8 +175,7 @@ class Settings(BaseSettings):
         description=(
             "Whether to serve the A2A endpoint. Off by default: a surface another "
             "agent can reach should be something an operator turned on, not something "
-            "that appeared. The Agent Card is published either way, so a consumer can "
-            "discover what is available rather than probe for it."
+            "that appeared. The Agent Card and its JWKS are served only when this is on."
         ),
     )
     a2a_url: str = Field(

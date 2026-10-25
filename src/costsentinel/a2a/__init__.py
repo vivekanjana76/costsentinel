@@ -1,13 +1,13 @@
-"""Agent2Agent (A2A) layer (Phase 11).
+"""Agent2Agent (A2A) layer.
 
-A2A v1 Agent Cards publish each specialist as a discoverable, invocable agent, so an
-Azure AI Foundry orchestrator or a client's own agent can call, say, the Savings
-Estimator without adopting our graph.
+One read-only Agent Card in the A2A v1 wire shape, signed with a JWS per spec section
+8.4, and a task lifecycle (submit, status, artefact, cancel) for three read-only skills
+(Phase 10, completed in Phase 12). Per-specialist cards, an official protocol binding,
+per-caller authorisation and consuming other agents are Phase 12b.
 
-The governance requirement is the point: a published card declares the action class
-of anything its agent can propose, so an external caller inherits the same approval
-gate and cannot route around it. MCP is for tools we consume; A2A is for agents we
-expose (ARCHITECTURE.md D16).
+The governance requirement is the point: nothing on this surface can record a decision
+or change a resource, so an external caller cannot route around the approval gate. MCP
+is for tools we consume; A2A is for agents we expose (ARCHITECTURE.md D16).
 
-See ARCHITECTURE.md section 12 and ROADMAP.md Phase 11.
+See ARCHITECTURE.md section 13 and ROADMAP.md Phases 12 and 12b.
 """

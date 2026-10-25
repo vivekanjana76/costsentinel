@@ -1203,23 +1203,90 @@ fail the build. The descriptions get a different check, because the most useful 
 on the card -- "has no path to change a resource" -- contains a mutating word, so a
 description may use one only to deny the capability.
 
-The card carries a detached HMAC-SHA256 over canonical JSON, labelled as that rather
-than as a JWS (D121). A2A v1 describes JWS and a real deployment should use one; that
-needs an asymmetric key and a canonicalisation library, neither of which belongs in a
-phase whose rule is that CI installs no optional extra. The signing key is the committed
-synthetic one in mock mode, so CI verifies an actual signature -- one that has never
-been checked is not a feature -- and real mode with no configured key produces an
-*unsigned* card rather than one signed with a published key, because a forgeable
-signature invites trust.
+The card is serialised in the **A2A v1 wire shape** -- camelCase, `supportedInterfaces`
+in place of a top-level URL and protocol version, `signatures` as a list of
+`AgentCardSignature` (D128). A signature only verifies if the verifier canonicalises the
+bytes the signer did, and a verifier written against the spec canonicalises the spec's
+shape. Two places where the card says less than it could, both on purpose. Read-only is
+declared as a capability extension, `urn:costsentinel:a2a:read-only`, because a strict
+proto parser rejects unknown top-level fields. And the interface's binding is
+`COSTSENTINEL-TASKS`, not `HTTP+JSON`: the routes are a task API shaped like A2A's, not
+the official binding with `SendMessage` and `Message` parts, and claiming it would invite
+a conformant client to send requests nothing here understands. A strict xfail encodes the
+target, and it is tracked as #113.
 
-The task lifecycle is real and the concurrency is not: work runs inside `submit`, so a
-task is `COMPLETED` or `FAILED` by the time its id returns. That is the honest order --
-the shape a consumer codes against is settled, and nothing pretends to an asynchrony
-that has not been tested. `TaskState` declares only the states a consumer can observe.
+### Signing: a JWS per A2A v1, verified by code we did not write
 
-The server is off by default and mounted on the existing FastAPI app, so there is no new
-dependency and no second process. The card is published either way: a consumer should
-discover what is available rather than probe for it.
+Phase 12 replaced Phase 10's detached HMAC with **a JWS per spec section 8.4** (D129):
+the card minus `signatures`, with absent fields omitted, canonicalised per RFC 8785, then
+signed ES256 with a detached payload and a protected header of `alg`, `typ: JOSE`, `kid`
+(the key's RFC 7638 thumbprint) and `jku` (the JWKS this server publishes at
+`/.well-known/agent-card-jwks.json`). The signature is raw `r || s` per RFC 7518, not the
+DER the crypto library emits, which is the classic way ES256 goes subtly wrong.
+
+The claim is limited to what is tested, and three tests carry it:
+
+- **The spec's own canonicalisation example**, from section 8.4.1, reproduced byte for
+  byte -- the presence rule and RFC 8785 together. Canonicalisation is where a signature
+  that verifies against our own code and nobody else's would come from.
+- **PyJWT, an independent JOSE implementation, accepts the JWS** over the card as
+  served, with the key rebuilt from the published JWKS, and refuses it after a
+  one-character tamper. A dev dependency only: nothing in `src` imports it.
+- **Every tamper that matters fails**: an added write skill, a dropped read-only
+  extension, a redirected interface URL. So do `none`, `HS256` and the other algorithm
+  confusions, and malformed signatures return `False` rather than raising.
+
+What it does **not** claim: who holds the key. `jku` is served from the same origin as
+the card, so fetching the key over it adds nothing that TLS did not already give. A
+consumer who wants provenance pins the key out of band, which is spec 8.4.3's "trusted
+key store". Mock mode signs with a key *derived* from a committed, labelled seed, so CI
+signs and verifies on every run and no PEM is in the repository for `detect-private-key`
+to refuse. Real mode signs with `A2A_JWS_KEY_FILE`, or serves an unsigned card, because a
+forgeable signature invites trust. A wrong or unreadable key file fails while the app is
+built, not on the first request.
+
+The Phase 10 HMAC stays as an **opt-in fallback**, for consumers that already check it,
+when `A2A_SIGNING_KEY` is set. It is served **out of band** in an
+`X-CostSentinel-Card-HMAC` header and never in `signatures`, because it is not a JWS and
+an A2A client must never mistake a symmetric MAC for the card's signature. It covers the
+same RFC 8785 payload.
+
+### The task lifecycle: submit, poll, collect, cancel
+
+Phase 10 ran the work inside `submit`, so a task was finished before its id came back,
+and cancellation had nothing to act on. Phase 12 makes the lifecycle real (D130). `POST
+/a2a/tasks` records the task **submitted** and returns it, the server runs it after the
+response is sent, and `GET /a2a/tasks/{id}` and `.../artifact` poll and collect. `POST
+/a2a/tasks/{id}:cancel` follows the spec's `tasks/{id}:cancel` path.
+
+Cancel is honest about what it can stop. A *submitted* task is cancelled before its read
+starts, and the read never runs, which a test proves by making the read fail the test if
+it is reached. A *working* task is not cancelable: a sweep has no safe midpoint to
+abandon, and claiming otherwise would describe a capability that does not exist. A
+finished task is not cancelable either, and that is a `409`. A repeated cancel returns
+the cancelled task unchanged, because spec 3.3.1 makes cancel idempotent. `TaskState`
+gained `canceled` and nothing else, since every member must be observable.
+
+Artefacts are **typed**: `ScanArtifact`, `FindingsArtifact` and `QueueArtifact`,
+discriminated on `name` and validated by a consumer through `ARTIFACT_ADAPTER`. Phase 10
+returned `payload: Mapping[str, Any]`, an untyped dict crossing the most external
+boundary in the system. CI drives all of it through an in-process fake client that
+consumes the surface the way an external agent would. It fetches the card, verifies it
+against the published key, submits, polls, validates and cancels, all without opening a
+socket.
+
+**The no-write guard, re-asserted against the fuller surface.** The twenty-two-verb
+vocabulary now walks every string on the served card -- skills, the extension, the
+interface -- and every route path. The only POSTs are task-create and task-cancel, which
+change an in-memory task this surface owns. A test snapshots everything the checkpoint
+holds and the approval queue, cancels a task of every skill, and finds both unchanged.
+The package names none of `resume`, `find_pending`, `DecisionRequest` or
+`record_decision`.
+
+The server is off by default and mounted on the existing FastAPI app, so it adds no
+second process. The card is served only when the surface is enabled. Earlier text said
+it was "published either way", which the code never did: a test pins the `404` when
+disabled. The text was wrong, and it is corrected here, not in the code.
 
 ---
 
@@ -1304,6 +1371,66 @@ gets that by default rather than by configuration.
 The Phase 10 no-mutation invariant is untouched (D118): the dashboard package imports
 nothing from `azure`, carries no executable handle, and a decision made through it lands
 in the same `HANDED_OFF` terminal state with the same audit events.
+
+### The decision-surface interlock
+
+Phase 11 left one sentence doing the work of a control. With `DASHBOARD_CAN_DECIDE=true`
+and a public bind, anybody who could reach the page could type any name and approve, and
+the only guard was the README saying "do not". Phase 12 makes that configuration
+impossible instead of documented (D126), in the same posture as the gate refusing to
+execute:
+
+- **At start-up.** When decide is on, `BIND_HOST` is not loopback and the authenticator
+  does not verify, `create_app` raises `UnsafeDecisionSurfaceError`. The app is not
+  built, so the server does not start. The message names the three settings and both safe
+  ways out, which are a loopback bind or a display-only dashboard. `costsentinel serve`
+  binds the address the check judged, with `--host` applied before the app is built, so
+  the check and the socket come from one value. The image declares `BIND_HOST=0.0.0.0`
+  and serves through that command.
+- **Per request.** A process can be bound more widely than its settings say: `uvicorn
+  --host 0.0.0.0` with `BIND_HOST` unset. So the route also judges `scope["server"]`, the
+  local address the connection was accepted on, and never the client-written `Host`
+  header. A decision that arrived on a non-loopback socket without a verifying
+  authenticator is a `403`, and the page renders no form for it.
+- **Unchanged:** a loopback bind with decide on, and a display-only dashboard on any
+  bind. Both are tested to still serve.
+
+The ASGI app is now built on first access, through a module `__getattr__`, and not at
+import. Uvicorn resolves `:app` through `getattr`, so a server started that way still
+refuses. But an unsafe environment no longer breaks every importer, including
+`serve --host 127.0.0.1` before it can read the override.
+
+**The seam.** An `Authenticator` turns a request, plus the name the approver typed, into
+an `ApproverIdentity`. The interlock reads exactly one thing off it: `verifies`. The only
+implementation is `NullAuthenticator`. It verifies nothing and is permitted only on
+loopback, and it does not refuse to record the name; it labels it. The real
+authenticator, a verified approver identity with authorisation, is a **Phase 10b** item
+that implements this protocol, and the dashboard does not change when it lands. A test
+injects a stand-in verifying authenticator to prove two things: the restriction lifts on
+`verifies`, and the name on the record is the one the authenticator established, not
+the one typed into the form.
+
+**One limit, recorded.** A reverse proxy on the same machine forwards over loopback, and
+the process cannot tell that from a local operator. Fronting a decision surface with a
+proxy is an operator choice outside what this process can observe, and SECURITY.md says
+so in those words.
+
+### Who approved, and how sure the record is
+
+A name typed into a terminal or a form is a claim. Every decision record now says which
+of two things it is (D127). `ApproverAssurance` is `self_asserted` or `verified`, and it
+is carried on the `DecisionRequest`, the `ApprovalRecord`, the `ApprovalDecision` and both
+audit events that name the approver (`APPROVAL_RECORDED`, `ACTION_HANDED_OFF`). Each of
+those may be read on its own later, so each has to stand on its own. The statement reads
+"ops@example.com (self-asserted, unverified) approved ...".
+
+The default is the weaker claim. A record from a checkpoint written before the field
+existed therefore reads as unverified, which is the only honest reading, since nothing
+could verify an approver then. A verified identity must name its verifier, and a
+self-asserted one may not name any. The record's provenance `verification` now follows
+the assurance. It had been hard-coded `VERIFIED`, which overclaimed on every decision
+ever recorded. Every decision today is self-asserted, the CLI's included, and the
+record says so.
 
 ### Reading from the checkpoint, not from a sweep
 
@@ -2626,6 +2753,7 @@ library, and is *named* for what it is rather than for what it resembles. The sy
 key is committed and labelled worthless so CI verifies an actual signature; real mode
 with no key produces an unsigned card rather than one signed with a published key,
 because a forgeable signature invites a consumer to trust it. JWS is a Phase 11 item.
+*Superseded in Phase 12 by D129*: the blocker turned out to be pinnable and offline.
 
 **D122. The operator dashboard went ahead of the rest of the A2A layer.**
 *Alternatives:* keep the planned order and finish A2A -- per-specialist cards, per-caller
@@ -2662,3 +2790,73 @@ shortcut, so the test asserts the absence of a second implementation *and* the p
 of the shared calls: removing the shared call fails just as loudly as adding a local
 one. Deciding is separately gated and the POST is refused when the gate is off, because
 a hidden form field is not a permission check.
+
+
+**D125. Phase 12 closes the dashboard's decide-surface gap first, and A2A interop splits
+out as Phase 12b.** *Alternatives:* proceed with the planned A2A phase and treat the
+dashboard bind as documentation. *Why:* a decision surface whose safety off loopback
+rests on a README sentence is a gap in an invariant, not a missing feature, and
+invariants come before surfaces. The A2A work that CI can check with no network -- the v1
+card shape, JWS signing, a typed lifecycle with cancellation -- stays in Phase 12.
+Per-specialist cards, an official binding, per-caller authorisation, Foundry interop and
+consuming other agents need either a real peer or the Phase 10b identity, so they move to
+12b (#113). The real authenticator stays in Phase 10b; Phase 12 builds only its seam.
+
+**D126. An unauthenticated decision surface off loopback refuses to start, and is
+refused per request.** *Alternatives:* a startup warning; or a check on the declared bind
+alone. *Why:* a warning is a configuration somebody can miss, and an app that is not
+built cannot be served. The declared bind alone is not enough either, because a server can
+be started with a wider `--host` than its settings say, and the app never sees the flag. So
+the route also judges the socket each decision arrived on (`scope["server"]`), which is
+the one fact about the bind the app can always see. It never judges the `Host` header,
+which the client writes. Both checks fail closed: an unparseable host, a hostname other
+than `localhost`, and the wildcard all count as reachable. A same-machine reverse proxy
+looks like loopback and is recorded as outside what the process can observe. The app
+moved from import-time construction to a module `__getattr__`, so the refusal happens when
+the server asks for the app and not whenever anything imports the module.
+
+**D127. A self-asserted approver is recorded as self-asserted and unverified.**
+*Alternatives:* leave `approver` as a bare string until Phase 10b authenticates it. *Why:*
+the audit trail answers "who approved deleting that disk?", and a bare name reads as an
+established identity when it is only a claim. The assurance travels with the name on
+every artefact that names an approver, and it defaults to the weaker claim so a legacy
+record cannot be upgraded by omission. Verified-by-nothing and self-asserted-but-verified
+are both rejected by the model. The record's provenance had said `VERIFIED` for a typed
+name; it now follows the assurance.
+
+**D128. The card speaks A2A v1's wire shape and claims no binding it does not speak.**
+*Alternatives:* keep the snake_case card and a top-level `read_only`; or declare
+`HTTP+JSON` because the routes are HTTP and JSON. *Why:* a JWS is only verifiable by a
+third party who canonicalises the same bytes, which means the spec's field names and its
+field-presence rule. A top-level `read_only` is an unknown field to a strict proto
+parser, so the claim moved to a capability extension, the spec's own place for it. And
+`HTTP+JSON` names a specific binding (`SendMessage`, `Message`, `Part`) that these routes
+do not implement; claiming it would be an interop promise that fails on first contact.
+The honest name is `COSTSENTINEL-TASKS`, and a strict xfail turns green when #113 lands.
+
+**D129. Agent Card signing is a JWS per A2A v1 section 8.4, and the HMAC becomes a
+labelled out-of-band fallback.** *Alternatives:* keep the detached HMAC (D121), whose
+stated blocker was a dependency CI could not install; or ship a JWS verified only by our
+own code. *Why:* both dependencies turned out to be pinnable and offline. `cryptography`
+was already in the lock through the Azure extra, and `rfc8785` is pure Python with no
+dependencies. Making them default rather than an extra means CI signs and verifies on
+every run, which was D121's whole objection. Verification by our own code alone would
+prove only that we agree with ourselves, so CI checks three ways: the spec's
+canonicalisation example byte for byte, PyJWT (dev-only) accepting the JWS, and every
+material tamper and algorithm confusion failing. ES256 because it is the spec's first
+example and has small keys. The `kid` is a thumbprint, so it cannot be chosen. The mock
+key is derived from a labelled seed, so no PEM is committed. The HMAC is kept for
+existing consumers but moved out of the card into a header, because a symmetric MAC
+inside `signatures` would be read as an A2A signature. The signature proves integrity,
+not provenance, and the docs say so.
+
+**D130. The task lifecycle runs after submit, so cancellation means something.**
+*Alternatives:* keep inline execution and declare `CANCELED` anyway; or a worker pool.
+*Why:* a state no consumer can reach is a misdescription, and inline execution made
+`CANCELED` unreachable. FastAPI's background tasks run the work after the response, with
+no new dependency and no second process. Cancel acts only on a submitted task, and the
+proof is that the read is never reached; a running sweep is not abandoned midway,
+because it has no safe midpoint. Transitions happen under one lock, because the run and
+a cancel can arrive on different threads. Artefacts became one Pydantic type per skill,
+because `Mapping[str, Any]` across the system's most external boundary broke golden
+rule 6.
