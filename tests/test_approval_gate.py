@@ -35,6 +35,7 @@ from costsentinel.agents.approval_gate import (
     record_id_for,
 )
 from costsentinel.config import LLMBackend, MemoryBackend, RunMode, Settings
+from costsentinel.domain.common import Verification
 from costsentinel.domain.estate import (
     CostSeries,
     Reservation,
@@ -44,8 +45,10 @@ from costsentinel.domain.estate import (
     Subscription,
 )
 from costsentinel.domain.governance import (
+    ApprovalDecision,
     ApprovalRecord,
     ApprovalState,
+    ApproverAssurance,
     AuditEventType,
     Decision,
     DecisionRequest,
@@ -340,13 +343,16 @@ def test_a_decision_cannot_supply_its_own_facts() -> None:
     """The fields a request carries, asserted against the model.
 
     If this ever grew a resource id or an action, a decision command could attach an
-    approval to a different resource than the one it named.
+    approval to a different resource than the one it named. The two identity fields
+    describe the *approver*, never the subject, and default to the weaker claim (D127).
     """
     assert set(DecisionRequest.model_fields) == {
         "recommendation_id",
         "decision",
         "approver",
         "reason",
+        "approver_assurance",
+        "verified_by",
     }
 
 
@@ -358,6 +364,88 @@ def test_a_record_copies_its_facts_from_the_pending_item() -> None:
     assert record.action is pending.action
     assert record.action_class is pending.action_class
     assert record.figures == pending.figures
+
+
+# ---------------------------------------------------------------------------
+# Who approved, and how much the record knows about it (D127)
+# ---------------------------------------------------------------------------
+
+
+def test_a_self_asserted_approver_is_recorded_as_unverified(tmp_path: Path) -> None:
+    """The audit trail must never overclaim who approved.
+
+    A decision taken with no authenticator -- the CLI, or the dashboard on loopback --
+    carries a name somebody typed. The record, the authorisation and both audit events
+    must all say so, because any one of them may be read on its own later.
+    """
+    settings = _settings(tmp_path)
+    with sqlite_checkpointer(tmp_path / "cp.sqlite") as saver:
+        graph = _graph(saver, settings)
+        graph.invoke(
+            ScanState(run_id="run-who", client=CLIENT, requested_by="test"),
+            config={"configurable": {"thread_id": "run-who"}},
+        )
+        sweep = paused_sweep(graph, "run-who")
+        assert sweep is not None
+        after = resume(graph, "run-who", _request(sweep.pending[0].recommendation_id))
+
+    record = after.approval_records[-1]
+    assert record.approver_assurance is ApproverAssurance.SELF_ASSERTED
+    assert record.verified_by is None
+    assert record.provenance.verification is Verification.UNVERIFIED
+    assert "ops@example.com (self-asserted, unverified) approved" in record.statement()
+
+    assert after.decisions[-1].approver_assurance is ApproverAssurance.SELF_ASSERTED
+
+    for kind in (AuditEventType.APPROVAL_RECORDED, AuditEventType.ACTION_HANDED_OFF):
+        event = next(e for e in after.audit if e.event_type is kind)
+        assert event.detail["approver_assurance"] == "self_asserted", kind
+        assert event.detail["approver_verified"] == "false", kind
+        assert "typed by the approver" in event.detail["verified_by"], kind
+
+
+def test_a_verified_approver_names_what_verified_them() -> None:
+    """The stronger claim is only recordable with its evidence attached."""
+    record = build_record(
+        _pending("rec-1"),
+        decision=Decision.APPROVED,
+        approver="ops",
+        reason="agreed",
+        approver_assurance=ApproverAssurance.VERIFIED,
+        verified_by="test-sso",
+    )
+    assert record.provenance.verification is Verification.VERIFIED
+    assert "ops (verified) approved" in record.statement()
+
+
+@pytest.mark.parametrize("model", [DecisionRequest, ApprovalDecision])
+def test_assurance_and_verifier_cannot_disagree(model: Any) -> None:
+    """Verified-by-nothing and self-asserted-but-verified are both refused.
+
+    Either would put a claim on the record that no authenticator made.
+    """
+    base = {"recommendation_id": "rec-1", "decision": "approved", "approver": "ops"}
+    if model is DecisionRequest:
+        base["reason"] = "x"
+    with pytest.raises(ValidationError, match="must name the authenticator"):
+        model.model_validate({**base, "approver_assurance": "verified"})
+    with pytest.raises(ValidationError, match="verified by nothing"):
+        model.model_validate({**base, "verified_by": "sso"})
+
+
+def test_a_record_from_before_assurance_existed_reads_as_unverified() -> None:
+    """An old checkpoint carries no assurance field, and must not be upgraded by default.
+
+    Nothing could verify an approver before Phase 12, so the default is the only honest
+    reading of a record written then.
+    """
+    current = build_record(_pending("rec-1"), decision=Decision.APPROVED, approver="o", reason="r")
+    legacy = current.model_dump(mode="json")
+    legacy.pop("approver_assurance")
+    legacy.pop("verified_by")
+    assert (
+        ApprovalRecord.model_validate(legacy).approver_assurance is ApproverAssurance.SELF_ASSERTED
+    )
 
 
 def test_a_record_id_is_derived_so_a_replay_is_recognisable() -> None:

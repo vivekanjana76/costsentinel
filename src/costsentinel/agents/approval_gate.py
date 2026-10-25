@@ -52,6 +52,7 @@ from costsentinel.domain.governance import (
     ApprovalDecision,
     ApprovalRecord,
     ApprovalState,
+    ApproverAssurance,
     AuditEventType,
     Decision,
     DecisionRequest,
@@ -173,6 +174,8 @@ def build_record(
     approver: str,
     reason: str,
     attempt: int = 0,
+    approver_assurance: ApproverAssurance = ApproverAssurance.SELF_ASSERTED,
+    verified_by: str | None = None,
 ) -> ApprovalRecord:
     """Turn one decision on one pending item into the record of it.
 
@@ -181,7 +184,13 @@ def build_record(
     resource, or to the right resource at the wrong price, and either would be a worse
     failure than a rejected command -- the same reasoning as
     :func:`costsentinel.memory.decisions.record_decision`.
+
+    The provenance's verification follows the approver's assurance. The decision was
+    checked against the queue either way, but a record is a claim about *who* decided,
+    and calling it verified when the name was only typed would be the one overclaim
+    this record exists to prevent (D127).
     """
+    verified = approver_assurance is ApproverAssurance.VERIFIED
     return ApprovalRecord(
         record_id=record_id_for(pending.run_id, pending.recommendation_id, attempt),
         run_id=pending.run_id,
@@ -195,15 +204,22 @@ def build_record(
         decision=decision,
         state=ApprovalState.for_decision(decision),
         approver=approver,
+        approver_assurance=approver_assurance,
+        verified_by=verified_by,
         reason=reason,
         figures=pending.figures,
         provenance=Provenance(
             source=ProvenanceSource.OPERATOR,
             retrieved_at=utc_now(),
             reference=f"{ACTOR}:{pending.run_id}",
-            verification=Verification.VERIFIED,
+            verification=Verification.VERIFIED if verified else Verification.UNVERIFIED,
         ),
     )
+
+
+def verified_identity(record: ApprovalRecord) -> bool:
+    """Whether the approver on a record is an established identity, not a typed name."""
+    return record.approver_assurance is ApproverAssurance.VERIFIED
 
 
 class DecisionPayloadError(ValueError):
@@ -307,7 +323,16 @@ def make_approval_gate(*, settings: Settings) -> Node:
             approver=approver,
             reason=reason,
             attempt=pending.deferrals,
+            approver_assurance=request.approver_assurance,
+            verified_by=request.verified_by,
         )
+        # Every event naming the approver also says how much is known about them, so
+        # an audit trail read on its own cannot overclaim who decided (D127).
+        identity = {
+            "approver_assurance": record.approver_assurance.value,
+            "approver_verified": str(verified_identity(record)).lower(),
+            "verified_by": record.verified_by or "nothing -- the name was typed by the approver",
+        }
 
         events = [
             audit(
@@ -324,6 +349,7 @@ def make_approval_gate(*, settings: Settings) -> Node:
                     "resource_id": record.target_resource_id,
                     "monthly_saving": record.figures.monthly_saving_display,
                     "record_id": record.record_id,
+                    **identity,
                 },
             )
         ]
@@ -336,6 +362,7 @@ def make_approval_gate(*, settings: Settings) -> Node:
                     subject=record.recommendation_id,
                     detail={
                         "approved_by": approver,
+                        **identity,
                         "action": record.action.value,
                         "resource_id": record.target_resource_id,
                         # Stated in the audit trail, not only in a docstring: this is
@@ -355,6 +382,7 @@ def make_approval_gate(*, settings: Settings) -> Node:
                 "decision": decision.value,
                 "state": record.state.value,
                 "approver": approver,
+                "approver_assurance": record.approver_assurance.value,
             },
         )
 
@@ -369,6 +397,8 @@ def make_approval_gate(*, settings: Settings) -> Node:
                     recommendation_id=record.recommendation_id,
                     decision=decision,
                     approver=approver,
+                    approver_assurance=record.approver_assurance,
+                    verified_by=record.verified_by,
                     decided_at=record.decided_at,
                     note=reason,
                 ),
