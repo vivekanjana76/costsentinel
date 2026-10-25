@@ -8,11 +8,90 @@ CostSentinel is pre-1.0, so the public API may change between minor versions.
 
 ## [Unreleased]
 
-Nothing yet. Next up is Phase 12: the rest of the A2A layer -- per-specialist cards,
-per-caller authorisation, JWS card signing, Foundry interop, and CostSentinel as an A2A
-*client* rather than only a published card.
+Nothing yet. Next up is Phase 12b, A2A interop: an official protocol binding,
+per-specialist cards, per-caller authorisation on the Phase 10b identity, Foundry
+interop, and CostSentinel as an A2A *client* (#113).
 
-## [0.11.0] - 2026-10-21
+## [0.12.0] - 2026-10-25
+
+Phase 12: the decision-surface interlock, and the A2A task lifecycle with JWS card
+signing. Phase 11 shipped a decision surface whose safety off loopback rested on one
+sentence in the README. This release replaces the sentence with a refusal, and makes
+the A2A surface conformant wherever CI can check it.
+
+### Added
+
+- **An unsafe decision surface refuses to start.** With `DASHBOARD_CAN_DECIDE=true`, a
+  non-loopback `BIND_HOST` and no verifying authenticator, `create_app` raises and the
+  server never starts. The error names the three settings and both safe ways out. A
+  per-request check covers a server bound more widely than its settings say: a decision
+  that arrives on a non-loopback socket is refused, and no form is rendered for it.
+  Loopback binds and display-only dashboards serve unchanged (D126).
+- **An `Authenticator` seam.** The default `NullAuthenticator` verifies nothing and is
+  permitted only on loopback. The real authenticator is a Phase 10b item that implements
+  the same protocol.
+- **`costsentinel serve`**, which binds `BIND_HOST` (with `--host` applied before the
+  app is built), so the address the interlock judges is the address the server binds.
+  The container image now serves through it with `BIND_HOST=0.0.0.0`.
+- **`ApproverAssurance` on every decision.** A record, the authorisation and both audit
+  events that name an approver say whether the name was verified or only typed. With no
+  authenticator yet, every decision reads "self-asserted, unverified" (D127).
+- **A JWS per A2A v1 section 8.4 on the Agent Card**: ES256 over the RFC 8785 canonical
+  card, detached payload, `alg`/`typ`/`kid`/`jku`, public key at
+  `/.well-known/agent-card-jwks.json`. Verified in CI three ways: the spec's own
+  canonicalisation example byte for byte, PyJWT (an independent implementation)
+  accepting it, and every material tamper and algorithm confusion failing. Mock mode
+  signs with a key derived from a labelled seed, so no private key is committed; real
+  mode signs with `A2A_JWS_KEY_FILE` or serves an unsigned card (D129).
+- **A task lifecycle with cancellation.** Submit returns a *submitted* task and the work
+  runs after the response. `POST /a2a/tasks/{id}:cancel` stops a task before its read
+  starts, refuses a running or finished one, and is idempotent on a cancelled one
+  (D130).
+- **Typed artefacts**: `ScanArtifact`, `FindingsArtifact` and `QueueArtifact`,
+  validated through `ARTIFACT_ADAPTER`, in place of an untyped payload mapping.
+- **`docs/a2a/agent-card.json`**, the served card, committed with its JWKS. A test
+  fails if it stops verifying or stops matching what the server serves.
+
+### Changed
+
+- **The Agent Card is in the A2A v1 wire shape**: camelCase, `supportedInterfaces`, and
+  `signatures`. Read-only is declared as a capability extension. The interface's binding
+  is `COSTSENTINEL-TASKS` rather than a claimed `HTTP+JSON` the routes do not implement,
+  and a strict xfail encodes the official binding as the target (#113, D128).
+  **Breaking** for any consumer of the Phase 10 card's snake_case fields.
+- **The detached HMAC is now an opt-in fallback** (`A2A_SIGNING_KEY`), served in an
+  `X-CostSentinel-Card-HMAC` header and never in `signatures`, labelled as not an A2A
+  signature.
+- **The ASGI app is built on first access**, not at import, so an unsafe environment no
+  longer breaks every importer. `costsentinel.api` no longer re-exports `app`; uvicorn's
+  `costsentinel.api.app:app` still works.
+- The twenty-two-verb mutation guard now walks every string on the served card and every
+  route path. The only POSTs create or cancel a read task, and cancelling one leaves the
+  checkpoint and the approval queue unchanged.
+
+### Fixed
+
+- **An approval record's provenance claimed `VERIFIED`** for a name the approver typed.
+  It now follows the approver's assurance.
+- **The docs said the Agent Card was published whether or not A2A was enabled.** The
+  code never did that, and a test pinned the 404. The docs now match the code.
+- The v0.11.0 entry below carried its preparation date. It is corrected to the date it
+  was tagged.
+
+### Deferred
+
+- An official A2A binding, per-specialist cards, per-caller authorisation, Foundry
+  interop and consuming other agents: Phase 12b (#113). Consuming other agents needs a
+  real external peer to test meaningfully.
+- A verified approver identity and authorisation on the dashboard: Phase 10b.
+
+### Dependencies
+
+- `cryptography` (already in the lock through the Azure extra) and `rfc8785` (pure
+  Python), as default dependencies so CI signs and verifies on every run. `pyjwt`
+  is in the dev group only.
+
+## [0.11.0] - 2026-10-25
 
 Phase 11: the operator dashboard. Everything built through Phase 10 was visible only
 through a terminal or a Markdown file -- including an approval queue that halts a sweep
@@ -918,7 +997,8 @@ Phase 1: the scaffold and a thin vertical slice.
 - Landed as an honest commit series dated when it was actually committed; it predates
   the issue-driven workflow and has no backing issues.
 
-[Unreleased]: https://github.com/vivekanjana76/costsentinel/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/vivekanjana76/costsentinel/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.8.0...v0.9.0

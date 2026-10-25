@@ -875,23 +875,23 @@ a real peer or real caller identity moves to Phase 12b (D125).
 
 Milestone: *Phase 12 - The decision-surface interlock and the A2A lifecycle*.
 
-- [ ] Roadmap set to this phase; the reordering flagged; the dashboard authenticator
+- [x] Roadmap set to this phase; the reordering flagged; the dashboard authenticator
       recorded as a Phase 10b item (#104)
-- [ ] **Refuse to start** when `DASHBOARD_CAN_DECIDE` is on, the bind is not loopback and
+- [x] **Refuse to start** when `DASHBOARD_CAN_DECIDE` is on, the bind is not loopback and
       no authenticator is configured -- and refuse a decision per request when the
       socket a request arrived on disagrees with the declared bind (#105)
-- [ ] An **`Authenticator` seam**, whose default `NullAuthenticator` verifies nothing and
+- [x] An **`Authenticator` seam**, whose default `NullAuthenticator` verifies nothing and
       is permitted only on loopback (#106)
-- [ ] **A self-asserted approver is recorded as unverified**, on the record, the
+- [x] **A self-asserted approver is recorded as unverified**, on the record, the
       authorisation and every audit event that names them (#107)
-- [ ] The **Agent Card in the A2A v1 wire shape**: camelCase, `supportedInterfaces`,
+- [x] The **Agent Card in the A2A v1 wire shape**: camelCase, `supportedInterfaces`,
       `signatures`, read-only declared as an extension (#108)
-- [ ] **JWS card signing per A2A v1** (RFC 8785, detached payload, ES256), verified by an
+- [x] **JWS card signing per A2A v1** (RFC 8785, detached payload, ES256), verified by an
       independent JOSE implementation in CI; the detached HMAC kept as a labelled,
       out-of-band fallback (#109)
-- [ ] A **typed task lifecycle with cancellation** for the three read-only skills (#110)
-- [ ] **The twenty-two-verb mutation guard re-asserted** against the fuller surface (#111)
-- [ ] ARCHITECTURE, README, SECURITY updated; CHANGELOG entry for v0.12.0 (#112)
+- [x] A **typed task lifecycle with cancellation** for the three read-only skills (#110)
+- [x] **The twenty-two-verb mutation guard re-asserted** against the fuller surface (#111)
+- [x] ARCHITECTURE, README, SECURITY updated; CHANGELOG entry for v0.12.0 (#112)
 
 **Exit criteria:** `create_app` refuses the unsafe combination with an actionable error,
 and loopback and display-only deployments still serve; a decision taken without an
