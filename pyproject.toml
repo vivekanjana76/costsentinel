@@ -16,6 +16,13 @@ dependencies = [
     "pydantic-settings>=2.5",
     "fastapi>=0.115",
     "uvicorn>=0.32",
+    # A2A v1 Agent Card signing (Phase 12, D129): ES256 JWS over an RFC 8785 canonical
+    # form. Default rather than an extra so CI signs and verifies on every run -- a
+    # signature path that only exists behind an extra CI never installs is untested.
+    # `cryptography` was already in the lock through the Azure extra; `rfc8785` is pure
+    # Python with no dependencies.
+    "cryptography>=44",
+    "rfc8785>=0.1.4",
 ]
 
 # Optional, never required. Tracing imports langfuse lazily and degrades to a no-op
@@ -70,6 +77,9 @@ dev = [
     # matching would pass on a commented-out line, which is exactly the mistake
     # those assertions exist to catch. Dev-only: nothing in src imports yaml.
     "pyyaml>=6.0",
+    # An independent JOSE implementation, so the card's JWS is checked by code we did
+    # not write. Dev-only: nothing in src imports jwt.
+    "pyjwt>=2.10",
 ]
 
 [build-system]
