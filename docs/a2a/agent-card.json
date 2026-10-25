@@ -1,0 +1,96 @@
+{
+  "name": "costsentinel-reporting",
+  "description": "Read-only FinOps reporting for multi-subscription Azure estates. Detects waste and spend anomalies, costs remediations from provider data, and reports what is awaiting a human decision. Every skill is read-only: this agent proposes and reports, and has no path to change a resource.",
+  "supportedInterfaces": [
+    {
+      "url": "http://localhost:8000",
+      "protocolBinding": "COSTSENTINEL-TASKS",
+      "protocolVersion": "1.0"
+    }
+  ],
+  "version": "0.11.0",
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false,
+    "extensions": [
+      {
+        "uri": "urn:costsentinel:a2a:read-only",
+        "description": "Every skill on this card only reads. A task can be cancelled before it runs; nothing on this surface can change a resource or record a decision."
+      }
+    ]
+  },
+  "defaultInputModes": [
+    "application/json"
+  ],
+  "defaultOutputModes": [
+    "application/json"
+  ],
+  "skills": [
+    {
+      "id": "report.scan",
+      "name": "Request a cost review",
+      "description": "Run a read-only sweep of a client's estate and return the report: findings, ranked recommendations, projected savings, spend changes and what is awaiting a human decision. Reads only. Proposes; never applies.",
+      "tags": [
+        "finops",
+        "read-only",
+        "report",
+        "analysis"
+      ],
+      "examples": [
+        "Produce a cost review for northwind-energy.",
+        "What waste is there in the ministry-of-transport estate?"
+      ],
+      "inputModes": [
+        "application/json"
+      ],
+      "outputModes": [
+        "application/json"
+      ]
+    },
+    {
+      "id": "report.findings",
+      "name": "Fetch the current findings",
+      "description": "Return the findings from the most recent sweep for a client, without running a new one. Reads a stored result; touches no cloud.",
+      "tags": [
+        "finops",
+        "read-only",
+        "report"
+      ],
+      "examples": [
+        "What did the last review of northwind-energy find?"
+      ],
+      "inputModes": [
+        "application/json"
+      ],
+      "outputModes": [
+        "application/json"
+      ]
+    },
+    {
+      "id": "approvals.queue",
+      "name": "Fetch the pending-approval queue",
+      "description": "Return the gated actions awaiting a human decision, with the figures the report showed. Read-only: this surface can report what is waiting and cannot decide it. A decision is recorded by a person, and an approval hands the action to a person -- CostSentinel has no execution path.",
+      "tags": [
+        "finops",
+        "read-only",
+        "governance",
+        "approvals"
+      ],
+      "examples": [
+        "What is waiting on an approval for the ministry estate?"
+      ],
+      "inputModes": [
+        "application/json"
+      ],
+      "outputModes": [
+        "application/json"
+      ]
+    }
+  ],
+  "signatures": [
+    {
+      "protected": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpPU0UiLCJraWQiOiJLZFRMQk90Mmk4SF9hdTJwaDRJVmUzMDkyeURLM0NiSXlKb3pWMU9VSF84Iiwiamt1IjoiaHR0cDovL2xvY2FsaG9zdDo4MDAwLy53ZWxsLWtub3duL2FnZW50LWNhcmQtandrcy5qc29uIn0",
+      "signature": "JW9jG4OM1kTjg7ipHALNxUe42fNX6bvylR7ZuH9d0ypXfDRIdGSHJWVf_ofB-xOM46eLz9_zzaE74D0F1i7IDQ"
+    }
+  ]
+}

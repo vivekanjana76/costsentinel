@@ -695,6 +695,31 @@ def test_the_hmac_fallback_is_out_of_band_and_never_poses_as_a_jws(tmp_path: Pat
     assert HMAC_HEADER.lower() not in without
 
 
+def test_the_committed_card_is_the_served_card_and_still_verifies(tmp_path: Path) -> None:
+    """The artefact a reviewer checks: `docs/a2a/agent-card.json` must be the real thing.
+
+    It must verify under the committed JWKS, both with our code and with PyJWT, and its
+    signed body must equal what the server serves today. A stale file would teach a
+    reviewer that something verifies which the server no longer produces. ECDSA
+    signatures are randomised, so the comparison is of the canonical payload, not the
+    signature bytes. To regenerate after a deliberate change, write
+    `card_document(settings)` and `jwks(synthetic_key())` in mock mode with the default
+    `A2A_URL` to the two files.
+    """
+    committed = json.loads(Path("docs/a2a/agent-card.json").read_text(encoding="utf-8"))
+    (jwk,) = json.loads(Path("docs/a2a/agent-card-jwks.json").read_text(encoding="utf-8"))["keys"]
+    assert jwk == public_jwk(synthetic_key().public_key())
+    assert "d" not in jwk
+
+    assert verify_card(committed, synthetic_key().public_key())
+    jwt.api_jws.decode_complete(_compact(committed), key=jwt.PyJWK(jwk), algorithms=["ES256"])
+
+    served = card_for(_settings(tmp_path)).wire()
+    assert canonical_payload(committed) == canonical_payload(served), (
+        "docs/a2a/agent-card.json no longer matches the served card; regenerate it"
+    )
+
+
 # ---------------------------------------------------------------------------
 # The task lifecycle (#110)
 # ---------------------------------------------------------------------------
