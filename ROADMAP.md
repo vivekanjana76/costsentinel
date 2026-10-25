@@ -1,6 +1,6 @@
 # CostSentinel — Roadmap
 
-**Current phase: 11** — the operator dashboard.
+**Current phase: 12** — the decision-surface interlock, and the A2A task lifecycle with JWS card signing.
 
 Phases are sequential. Do not start work in a later phase before the current phase
 is complete and its exit criteria are met. If an idea arrives mid-phase, record it
@@ -8,7 +8,7 @@ under "Parked ideas" at the bottom and stay on the current slice.
 
 Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
-> **Phase order has changed six times.** After Phase 1 the specialist graph and the
+> **Phase order has changed nine times.** After Phase 1 the specialist graph and the
 > MCP Azure tool server were swapped, because the graph is entirely mock-runnable and
 > the MCP server is the first thing needing real credentials (ARCHITECTURE.md D34).
 > After Phase 2, statistical cost-anomaly detection and real-model hardening were
@@ -119,6 +119,18 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 > through a terminal or a Markdown file, including an approval queue that halts a sweep
 > until somebody answers it. A gate nobody can see is a gate nobody uses
 > (ARCHITECTURE.md D122). Nothing else renumbered.
+>
+> After Phase 11, **Phase 12 was re-scoped and the rest of A2A interop split out as
+> Phase 12b** (ARCHITECTURE.md D125). Phase 11 shipped a decision surface whose safety
+> off loopback rested on a sentence in the README: with `DASHBOARD_CAN_DECIDE=true` and
+> a public bind, anybody who could reach the page could type any name and approve. That
+> is a gap in an invariant, so it goes first, before any new surface. Phase 12 therefore
+> does two things: the interlock (refuse to start), and the parts of the A2A layer that
+> CI can check with no network -- the v1 card shape, JWS signing, and a typed task
+> lifecycle with cancellation. Per-specialist cards, an official protocol binding,
+> per-caller authorisation, Foundry interop and consuming other agents all need either a
+> real peer or the Phase 10b authenticator, so they move to 12b. The *real*
+> authenticator stays in Phase 10b; Phase 12 builds only the seam and the refusal.
 
 ---
 
@@ -773,6 +785,12 @@ interrupt, the decision record and the CLI gate are the contract they implement.
 - [ ] Slack adapter: Block Kit message with approve and reject actions
 - [ ] Webhook receiver for decision callbacks, signature-verified
 - [ ] Approver identity and authorisation checks: who may approve what, for which client
+- [ ] **The dashboard authenticator**: a verified approver identity and authorisation on
+      the dashboard decision surface, implementing the `Authenticator` seam Phase 12
+      added. Until it exists the only authenticator is `NullAuthenticator`, which records
+      the approver as self-asserted and is refused off loopback (D125, D126). The same
+      identity check covers the adapters above; one notion of "who approved" rather than
+      one per surface
 - [ ] Decision deduplication and idempotency on replayed callbacks. A replayed approval
       must not become a second approval
 - [ ] Timeout and escalation policy. **No decision never means approved** -- the
@@ -845,27 +863,66 @@ and the server is the FastAPI app that already exists.
 
 ---
 
-## Phase 12 — A2A layer
+## Phase 12 — The decision-surface interlock, and the A2A task lifecycle
+
+**Goal:** an unsafe decision surface cannot be served, the audit trail never overclaims
+who approved, and the A2A surface is conformant where CI can check it -- still read-only.
+
+**One re-scope, flagged.** Phase 12 was "the rest of the A2A layer". Phase 11 left the
+dashboard's decide surface safe off loopback only by documentation, which is a gap in an
+invariant rather than a missing feature, so it is closed first. The A2A work that needs
+a real peer or real caller identity moves to Phase 12b (D125).
+
+Milestone: *Phase 12 - The decision-surface interlock and the A2A lifecycle*.
+
+- [ ] Roadmap set to this phase; the reordering flagged; the dashboard authenticator
+      recorded as a Phase 10b item (#104)
+- [ ] **Refuse to start** when `DASHBOARD_CAN_DECIDE` is on, the bind is not loopback and
+      no authenticator is configured -- and refuse a decision per request when the
+      socket a request arrived on disagrees with the declared bind (#105)
+- [ ] An **`Authenticator` seam**, whose default `NullAuthenticator` verifies nothing and
+      is permitted only on loopback (#106)
+- [ ] **A self-asserted approver is recorded as unverified**, on the record, the
+      authorisation and every audit event that names them (#107)
+- [ ] The **Agent Card in the A2A v1 wire shape**: camelCase, `supportedInterfaces`,
+      `signatures`, read-only declared as an extension (#108)
+- [ ] **JWS card signing per A2A v1** (RFC 8785, detached payload, ES256), verified by an
+      independent JOSE implementation in CI; the detached HMAC kept as a labelled,
+      out-of-band fallback (#109)
+- [ ] A **typed task lifecycle with cancellation** for the three read-only skills (#110)
+- [ ] **The twenty-two-verb mutation guard re-asserted** against the fuller surface (#111)
+- [ ] ARCHITECTURE, README, SECURITY updated; CHANGELOG entry for v0.12.0 (#112)
+
+**Exit criteria:** `create_app` refuses the unsafe combination with an actionable error,
+and loopback and display-only deployments still serve; a decision taken without an
+authenticator is recorded as self-asserted and unverified; a card signed here verifies
+under a third-party JWS verifier and any tamper fails; a task can be submitted, polled,
+collected and cancelled in-process, and the surface still advertises and routes no write.
+
+**New dependencies to flag:** `cryptography` (already in the lock through the Azure
+extra; now a default dependency) and `rfc8785` (pure Python, no dependencies) for
+signing; `pyjwt` in the dev group only, as an independent verifier.
+
+---
+
+## Phase 12b — A2A interop
 
 **Goal:** specialists are discoverable and invocable by external agents, without
 routing around governance.
 
-Phase 10 published one read-only card for the report-and-queue capability (D117). This
-is the rest of it.
+Split from Phase 12 (D125). Everything here needs either a real peer to mean anything or
+the Phase 10b authenticator to be safe. Tracked as #113.
 
+- [ ] An **official protocol binding** (HTTP+JSON or JSON-RPC, `SendMessage` with
+      `Message` and `Part`). Phase 12's card declares a CostSentinel-specific binding
+      rather than claim one it does not implement; a strict xfail encodes the target
 - [ ] A2A v1 Agent Cards for **each specialist**
-- [ ] A2A server exposing the specialists, beyond the opt-in single-capability server
-      Phase 10 built
-- [ ] **Consuming other agents**: CostSentinel as an A2A *client*, discovering and
-      invoking an external agent. Deliberately not started in Phase 10, which published
-      a card and nothing that reads anybody else's
-- [ ] **JWS card signing**, replacing the detached HMAC Phase 10 shipped (D121). Needs
-      an asymmetric key and a JSON-canonicalisation library, both of which belong in a
-      phase that can take a dependency
-- [ ] Cards declare capability, input and output schema, and the action class of
-      anything the agent can propose
-- [ ] Authentication and per-caller authorisation
+- [ ] Cards declare the action class of anything the agent can propose
+- [ ] Authentication and per-caller authorisation, on the Phase 10b identity
 - [ ] Interop check against Azure AI Foundry
+- [ ] **Consuming other agents**: CostSentinel as an A2A *client*. Needs a real external
+      peer to test meaningfully -- an in-process fake would only prove we agree with
+      ourselves
 - [ ] Test asserting an external caller cannot obtain execution of a `review` or
       `block` action without a recorded `ApprovalDecision`
 
