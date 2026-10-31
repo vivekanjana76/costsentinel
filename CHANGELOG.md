@@ -8,11 +8,52 @@ CostSentinel is pre-1.0, so the public API may change between minor versions.
 
 ## [Unreleased]
 
-Nothing yet. Next up is Phase 12b, A2A interop: an official protocol binding,
-per-specialist cards, per-caller authorisation on the Phase 10b identity, Foundry
-interop, and CostSentinel as an A2A *client* (#113).
+Nothing yet. The remaining feature phases are open and optional: 9b (calibration against
+real traffic), 10b (approval adapters and the real authenticator) and 12b (A2A interop,
+#113).
 
-## [0.12.0] - 2026-10-25
+## [0.12.1] - 2026-10-31
+
+A documentation and legibility release. No product behaviour changed. The goal was a
+repository a first-time reader can judge in two minutes, with no claim on its front page
+that a test or file does not back.
+
+### Added
+
+- **A rewritten README.** The problem in one sentence, two synthetic-labelled dashboard
+  captures, and seven claims that each link to the test that holds them. Then the graph
+  at a glance, an offline quickstart, scope and safety stated plainly, and known limits.
+- **`docs/guide.md`**, the operator guide: everything the README used to carry, with its
+  stale claims corrected.
+- **Demo transcripts** in `docs/demo/`: a sweep halted by one process and resumed by
+  later ones, and a declined finding demoted with no figure moving. `scripts/demo.sh`
+  regenerates them offline. A test replays each command as its own subprocess and fails
+  if the committed text no longer matches, which also makes the cross-process approval
+  claim a tested one.
+- **Guard tests on the README**: every link resolves, every cited test exists, the
+  blocking gates named match the harness, every reviewable artefact is one click away,
+  and the quoted transcript is verbatim.
+- **An MIT `LICENSE`.**
+- GitHub Releases for v0.8.0, v0.9.0, v0.10.0 and v0.12.0, which had tags but no
+  release, and repository topics.
+
+### Changed
+
+- **The package licence is MIT.** `pyproject.toml` previously declared "Proprietary" for
+  a public repository with no licence file.
+
+### Fixed
+
+- **The ARCHITECTURE graph diagram** put the approval gate before the report author and
+  labelled it Phase 7. It now matches `graph/build.py`: report first, then the gate.
+- **Stale claims**: the Anomaly Scout listed detectors that do not exist (stale dev/test,
+  egress spike). The layer map called pgvector the memory store (SQLite is the default)
+  and said A2A exposes the specialists (it is one card). D40 still called the price
+  snapshot curated. The CLI's `--help` said "Phase 1". The blocking-gate comment said two
+  gates over four. The README called the catalogue "not a real Azure pull" and gave the
+  wrong reason the sample report omits a section.
+
+## [0.12.0] - 2026-10-31
 
 Phase 12: the decision-surface interlock, and the A2A task lifecycle with JWS card
 signing. Phase 11 shipped a decision surface whose safety off loopback rested on one
@@ -997,7 +1038,8 @@ Phase 1: the scaffold and a thin vertical slice.
 - Landed as an honest commit series dated when it was actually committed; it predates
   the issue-driven workflow and has no backing issues.
 
-[Unreleased]: https://github.com/vivekanjana76/costsentinel/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/vivekanjana76/costsentinel/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/vivekanjana76/costsentinel/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.9.0...v0.10.0
