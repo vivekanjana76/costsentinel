@@ -170,3 +170,86 @@ def test_the_licence_file_and_the_package_metadata_agree() -> None:
     assert licence.startswith("MIT License")
     assert pyproject["project"]["license"] == {"text": "MIT"}
     assert re.search(r"^Copyright \(c\) \d{4} \S", licence, re.MULTILINE)
+
+
+# ---------------------------------------------------------------------------
+# The README is a front door, and every door on it opens
+# ---------------------------------------------------------------------------
+
+README = ROOT / "README.md"
+GUIDE = ROOT / "docs" / "guide.md"
+
+_LINK = re.compile(r"\]\(([^)\s]+)\)")
+_CITED_TEST = re.compile(r"\[`(test_\w+)`\]\((tests/[\w/]+\.py)\)")
+
+
+def _relative_links(doc: Path) -> list[str]:
+    return [
+        target
+        for target in _LINK.findall(doc.read_text(encoding="utf-8"))
+        if not target.startswith(("http://", "https://", "#", "mailto:"))
+    ]
+
+
+@pytest.mark.parametrize("doc", [README, GUIDE], ids=lambda p: p.name)
+def test_every_relative_link_resolves_to_a_committed_file(doc: Path) -> None:
+    """A claim whose evidence link 404s is an unbacked claim that still looks backed."""
+    links = _relative_links(doc)
+    assert links, f"{doc.name} has no relative links; the parser is wrong"
+    missing = [
+        target for target in links if not (doc.parent / target.split("#", 1)[0]).resolve().exists()
+    ]
+    assert not missing, f"{doc.name} links to files that do not exist: {missing}"
+
+
+def test_every_test_the_readme_cites_exists_where_it_says() -> None:
+    """A renamed test silently orphans the README claim that cites it as proof."""
+    cited = _CITED_TEST.findall(README.read_text(encoding="utf-8"))
+    assert len(cited) >= 10, "the README cites fewer tests than it should; parser broken?"
+    missing = [
+        f"{path}::{name}"
+        for name, path in cited
+        if not re.search(rf"^def {name}\(", (ROOT / path).read_text(encoding="utf-8"), re.MULTILINE)
+    ]
+    assert not missing, f"the README cites tests that do not exist: {missing}"
+
+
+def test_the_readme_names_exactly_the_gates_that_block_a_build() -> None:
+    """The gate list is the README's strongest claim; it must not drift from the harness."""
+    from evals.harness.scorecard import BLOCKING_GATES
+
+    text = README.read_text(encoding="utf-8")
+    named = set(re.findall(r"\*\*`([a-z_]+\.[a-z_]+)`\*\*", text))
+    assert named == set(BLOCKING_GATES)
+    count = {3: "three", 4: "four", 5: "five", 6: "six"}[len(BLOCKING_GATES)]
+    assert f"{count} build-blocking gates" in text
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "docs/sample-report.md",
+        "evals/REPORT.md",
+        "docs/dashboard/",
+        "ARCHITECTURE.md",
+        "docs/guide.md",
+        "docs/demo/approval-resume.txt",
+        "docs/demo/learning-loop.txt",
+        "SECURITY.md",
+        "LICENSE",
+    ],
+)
+def test_nothing_load_bearing_is_more_than_one_click_from_the_readme(target: str) -> None:
+    """A first-time reader should reach every reviewable artefact from the front door."""
+    assert target in _relative_links(README)
+
+
+def test_the_readme_quotes_the_learning_transcript_verbatim() -> None:
+    """The README's transcript excerpt must be the real output, not a tidied version of it."""
+    readme = README.read_text(encoding="utf-8")
+    excerpt = readme.split("```text\n", 1)[1].split("```", 1)[0]
+    transcript = _normalise((DEMO / "learning-loop.txt").read_text(encoding="utf-8"))
+    lines = [line for line in excerpt.splitlines() if line.strip() and line.strip() != "..."]
+    assert lines
+    for line in lines:
+        assert _normalise(line) in transcript, line
