@@ -40,17 +40,17 @@ machinery while swapping the specialists and the policy pack.
 |---|---|---|
 | Configuration | `config.py` | Env-driven settings; mode flags selecting mock vs real provider, fake vs real LLM. |
 | Domain | `domain/` | All Pydantic v2 types crossing module lines. No untyped dicts. |
-| Providers | `providers/` | `AzureProvider` protocol + `MockAzureProvider`; later a real Azure implementation. |
+| Providers | `providers/` | `AzureProvider` protocol + `MockAzureProvider`, and a read-only real Azure provider behind the `azure` extra. |
 | LLM | `llm/` | Provider-agnostic `LLM` interface, `FakeLLM`, Azure OpenAI / Gemini adapters, task-based routing. |
 | Tools | `tools/` | MCP tool server (FastMCP) wrapping Azure Cost Management, Resource Graph, Advisor, Monitor. |
 | Agents | `agents/` | Specialist node implementations. Pure functions over `ScanState`. |
 | Graph | `graph/` | `ScanState`, graph assembly, conditional routing, checkpointer. |
-| Memory | `memory/` | Semantic (RAG) + episodic (outcomes) memory on PostgreSQL + pgvector. |
+| Memory | `memory/` | Semantic (RAG) + episodic (outcomes) memory: SQLite by default, PostgreSQL + pgvector behind the `memory` extra. |
 | Guardrails | `guardrails/` | Policy store, action classification, approval gate, audit trail. |
 | Reports | `reports/` | Markdown + PDF client-ready report rendering. |
 | Dashboard | `dashboard/` | The operator surface: a view model over the same `ClientReport`, HTML, and the queue page's one decision route. |
 | Observability | `observability/` | Langfuse wiring, structured JSON logging, run-id correlation. |
-| A2A | `a2a/` | Agent2Agent v1 Agent Cards + server exposing specialists to external agents. |
+| A2A | `a2a/` | One read-only, JWS-signed A2A v1 Agent Card with three skills and a task lifecycle. Per-specialist cards are Phase 12b. |
 | API | `api/` | FastAPI application. |
 | CLI | `cli.py` | Operator entry point. |
 | Evals | `evals/` | Labelled synthetic estates + scorecard harness. |
@@ -100,25 +100,25 @@ short-circuit and the approval seam one mechanism instead of four.
     | +---+---+ +---+----+ +---+---+ +---+---+ +---+---+ +---+----+ |
     |     |         |          |         |         |        |       |
     +-----+---------+----------+---------+---------+--------+-------+
-                                                   |
-                              review / block ------+
-                                              |
-                                              v
-                                     +-----------------+
-                                     |  APPROVAL SEAM  |  Phase 7: halt,
-                                     |   (interrupt)   |  persist, resume on
-                                     +--------+--------+  a recorded decision
-                                              |
-                                              v
-                                     +-----------------+
-                                     |  REPORT AUTHOR  |
-                                     |  client-ready   |
-                                     +--------+--------+
-                                              |
-                                              v
-                                          +-------+
-                                          |  END  |
-                                          +-------+
+    |
+    |      then, still routed by the supervisor:
+    |
+    |                              +-----------------+
+    +----------------------------->|  REPORT AUTHOR  |  the client always
+    |                              |  client-ready   |  gets the document
+    |                              +--------+--------+
+    |                                       |
+    |         nothing gated: END            |  review / block gated
+    |                                       v
+    |                              +-----------------+  halt, checkpoint,
+    +----------------------------->|  APPROVAL GATE  |  the process may exit;
+                                   |   (interrupt)   |  resume on a recorded
+                                   +--------+--------+  decision (Phase 10)
+                                            |
+                                            v
+                                        +-------+
+                                        |  END  |   approval hands off to a
+                                        +-------+   person; nothing executes
 
   Cross-cutting (every node): AuditEvent | trace span | checkpoint write
   Cross-cutting (every LLM call): routing decision | tokens | cost | latency
@@ -149,9 +149,10 @@ trail.
 
 **Anomaly Scout.** The only node that talks to the provider for discovery. Pulls
 cost actuals, usage metrics and resource inventory for each in-scope subscription,
-then applies deterministic detectors (orphaned disk, idle VM, oversized VM,
-unattached public IP, stale dev/test resource, unused reservation, egress spike)
-plus statistical spend-anomaly detection. Emits `WasteSignal` and `CostAnomaly`
+then applies eight deterministic detectors (orphaned disk, unattached public IP,
+idle VM, oversized VM, stale snapshot, idle SQL database, oversized App Service plan,
+unused reservation) plus statistical spend-anomaly detection. Egress and
+data-transfer anomalies are not detected yet; they are a Phase 9b item. Emits `WasteSignal` and `CostAnomaly`
 objects, each carrying provenance and an explicit confidence. Detection is
 **deterministic and non-LLM** — this keeps precision and recall measurable, and
 makes hallucinated findings structurally impossible.
@@ -1943,7 +1944,9 @@ for reasons unrelated to the estate. `scripts/refresh_prices.py` pulls the real 
 demand and writes the snapshot, so a price change is a reviewable commit. The shipped
 snapshot carries `is_real_api_pull: false` and its provenance is `UNVERIFIED`, because
 those figures are plausible curated values that have *not* been fetched from Azure --
-a cost tool must not imply otherwise.
+a cost tool must not imply otherwise. *Superseded in Phase 3*: the snapshot was
+replaced by a real pull (v0.3.0), and it now carries `is_real_api_pull: true` with
+each price naming its Azure meter. The rule that a snapshot says which it is stands.
 
 **D41. Catalogue provenance is dated from the snapshot, not from load time.**
 *Context:* dating it to load time broke the mock provider's determinism, which is how
