@@ -335,7 +335,14 @@ def _anomaly_item(anomaly: AnomalyView) -> str:
     return "".join(parts)
 
 
-def _pending_item(item: PendingView, *, decidable: bool) -> str:
+#: Said next to the form, so an approver knows what their name will be worth on the record.
+SELF_ASSERTED_NOTE = (
+    "Your name is recorded as self-asserted and unverified: nothing on this deployment "
+    "checks who you are."
+)
+
+
+def _pending_item(item: PendingView, *, decidable: bool, verifies_identity: bool = False) -> str:
     deferred = f" (deferred {item.deferrals}x)" if item.deferrals else ""
     form = ""
     if decidable:
@@ -355,6 +362,8 @@ def _pending_item(item: PendingView, *, decidable: bool) -> str:
             f'<p class="caveat">Approving records a decision and hands the action to a '
             f"person. CostSentinel will not and cannot perform it.</p>"
         )
+        if not verifies_identity:
+            form += f'<p class="caveat">{esc(SELF_ASSERTED_NOTE)}</p>'
     return (
         f'<div class="item"><h3>{esc(item.resource_name)} — {esc(item.action)}{esc(deferred)}</h3>'
         f'<div class="meta">{esc(item.client)} · sweep <code>{esc(item.run_id)}</code> · '
@@ -376,13 +385,17 @@ def _section(title: str, lede: str, body: str) -> str:
     )
 
 
-def render_report(view: ReportView, *, decidable: bool = False) -> str:
+def render_report(
+    view: ReportView, *, decidable: bool = False, verifies_identity: bool = False
+) -> str:
     """One client's report as a page.
 
     Args:
         view: The arranged report. Every figure on it is a string the report rendered.
         decidable: Whether to offer the decision form on pending items. Off for a
             static render, because a form that posts nowhere is worse than no form.
+        verifies_identity: Whether an authenticator stands behind the approver field.
+            When none does, the form says the name will be recorded as unverified.
     """
     body: list[str] = [_banner(view.banner)]
 
@@ -403,7 +416,10 @@ def render_report(view: ReportView, *, decidable: bool = False) -> str:
             _section(
                 "Awaiting your decision",
                 NO_EXECUTION_NOTE,
-                "".join(_pending_item(one, decidable=decidable) for one in view.pending),
+                "".join(
+                    _pending_item(one, decidable=decidable, verifies_identity=verifies_identity)
+                    for one in view.pending
+                ),
             )
         )
 
@@ -495,7 +511,12 @@ def render_estate(view: EstateView) -> str:
 
 
 def render_queue(
-    items: Sequence[PendingView], *, decidable: bool = False, banner: str = "", generated: str = ""
+    items: Sequence[PendingView],
+    *,
+    decidable: bool = False,
+    verifies_identity: bool = False,
+    banner: str = "",
+    generated: str = "",
 ) -> str:
     """The pending-approval queue across every paused sweep."""
     body = [
@@ -503,7 +524,10 @@ def render_queue(
         _section(
             "Awaiting a decision",
             NO_EXECUTION_NOTE,
-            "".join(_pending_item(one, decidable=decidable) for one in items)
+            "".join(
+                _pending_item(one, decidable=decidable, verifies_identity=verifies_identity)
+                for one in items
+            )
             or "<p>Nothing is awaiting a decision.</p>",
         ),
     ]

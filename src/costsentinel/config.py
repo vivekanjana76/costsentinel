@@ -155,6 +155,19 @@ class Settings(BaseSettings):
         ),
     )
 
+    bind_host: str = Field(
+        default="127.0.0.1",
+        validation_alias=_env("BIND_HOST"),
+        description=(
+            "The address `costsentinel serve` listens on, and the one the decision "
+            "interlock judges. Loopback by default. With DASHBOARD_CAN_DECIDE=true and "
+            "no authenticator, a non-loopback value refuses to start: anybody who could "
+            "reach the page could approve under any name (ARCHITECTURE.md D126). A "
+            "server started some other way is still checked per request, against the "
+            "socket a decision actually arrived on."
+        ),
+    )
+
     # --- A2A surface -----------------------------------------------------
     a2a_enabled: bool = Field(
         default=False,
@@ -162,8 +175,7 @@ class Settings(BaseSettings):
         description=(
             "Whether to serve the A2A endpoint. Off by default: a surface another "
             "agent can reach should be something an operator turned on, not something "
-            "that appeared. The Agent Card is published either way, so a consumer can "
-            "discover what is available rather than probe for it."
+            "that appeared. The Agent Card and its JWKS are served only when this is on."
         ),
     )
     a2a_url: str = Field(
@@ -171,15 +183,26 @@ class Settings(BaseSettings):
         validation_alias=_env("A2A_URL"),
         description="Where the card says the endpoint lives.",
     )
+    a2a_jws_key_file: Path | None = Field(
+        default=None,
+        validation_alias=_env("A2A_JWS_KEY_FILE"),
+        description=(
+            "A PEM P-256 private key the Agent Card is signed with: a JWS per A2A v1 "
+            "section 8.4, ES256 over the RFC 8785 canonical card (D129). Unset in mock "
+            "mode signs with a synthetic key derived from a committed, labelled seed, so "
+            "CI verifies the signature on every run. Unset in real mode serves an "
+            "*unsigned* card, because a signature anybody can forge invites trust."
+        ),
+    )
     a2a_signing_key: SecretStr | None = Field(
         default=None,
         validation_alias=_env("A2A_SIGNING_KEY"),
         description=(
-            "Key the Agent Card is signed with. Unset in mock mode uses the committed "
-            "synthetic key, so the signature is exercised in CI -- one whose signing "
-            "has never been checked is not a feature. Unset in real mode produces an "
-            "*unsigned* card rather than one signed with a published key, because a "
-            "signature anybody can forge invites a consumer to trust it."
+            "Optional fallback: a shared secret for the detached HMAC-SHA256 Phase 10 "
+            "shipped, kept for consumers that already check it. NOT an A2A v1 "
+            "signature. Served out of band in the X-CostSentinel-Card-HMAC header, "
+            "never in the card's `signatures`, and symmetric -- anybody who can verify "
+            "it can forge it. Unset by default."
         ),
     )
 

@@ -24,7 +24,7 @@ import argparse
 import getpass
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -99,6 +99,47 @@ SAMPLE_CLIENT = CLIENT_NORTHWIND
 
 #: Run id baked into the sample, so its report id does not change between renders.
 SAMPLE_RUN_ID = "run-sample"
+
+
+def _add_surfaces(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
+    """The two commands that put the operator surface somewhere: files, or a server."""
+    dashboard = add_parser(
+        "dashboard",
+        help="Write the operator surface to HTML files, or say how to serve it.",
+        description=(
+            "Renders the same ClientReport the Markdown report renders, as HTML pages "
+            "that open over file:// with nothing listening. Every figure on them is a "
+            "string the report already produced; the view layer computes none, "
+            "which the evaluation harness asserts the same way it asserts the "
+            "rendered document. "
+            "To serve it instead, set DASHBOARD_ENABLED=true and run the API. The "
+            "served pages can record an approval decision when DASHBOARD_CAN_DECIDE is "
+            "also set, through the same path `costsentinel approvals decide` uses."
+        ),
+    )
+    dashboard.add_argument(
+        "--out",
+        default=None,
+        metavar="PATH",
+        help=f"Directory to write into. Default: {DEFAULT_DASHBOARD_DIR}, which is gitignored.",
+    )
+
+    serve = add_parser(
+        "serve",
+        help="Serve the API, and the dashboard and A2A surface where enabled, on BIND_HOST.",
+        description=(
+            "Listens on BIND_HOST (loopback by default). With DASHBOARD_CAN_DECIDE=true "
+            "and no authenticator configured, a non-loopback bind refuses to start: "
+            "anybody who could reach the page could approve under any name. Loopback "
+            "binds and display-only dashboards serve unchanged."
+        ),
+    )
+    serve.add_argument(
+        "--host",
+        default=None,
+        help="Override BIND_HOST for this run. Judged by the same interlock.",
+    )
+    serve.add_argument("--port", type=int, default=8000, help="Default: 8000.")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -209,26 +250,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Who decided. Defaults to the operating system user.",
     )
 
-    dashboard = subcommands.add_parser(
-        "dashboard",
-        help="Write the operator surface to HTML files, or say how to serve it.",
-        description=(
-            "Renders the same ClientReport the Markdown report renders, as HTML pages "
-            "that open over file:// with nothing listening. Every figure on them is a "
-            "string the report already produced; the view layer computes none, "
-            "which the evaluation harness asserts the same way it asserts the "
-            "rendered document. "
-            "To serve it instead, set DASHBOARD_ENABLED=true and run the API. The "
-            "served pages can record an approval decision when DASHBOARD_CAN_DECIDE is "
-            "also set, through the same path `costsentinel approvals decide` uses."
-        ),
-    )
-    dashboard.add_argument(
-        "--out",
-        default=None,
-        metavar="PATH",
-        help=f"Directory to write into. Default: {DEFAULT_DASHBOARD_DIR}, which is gitignored.",
-    )
+    _add_surfaces(subcommands.add_parser)
 
     approvals = subcommands.add_parser(
         "approvals",
@@ -1040,6 +1062,33 @@ def run_dashboard(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def run_serve(args: argparse.Namespace, settings: Settings) -> int:
+    """Build the app against the bind it will actually use, then serve it.
+
+    The override is applied to the settings *before* the app is built, so the address
+    the interlock judges is the address uvicorn binds. Two sources for the bind would
+    be a way for the check and the socket to disagree.
+
+    Returns:
+        ``2`` when the interlock refuses the configuration; the server never starts.
+    """
+    from costsentinel.api.app import create_app  # noqa: PLC0415 -- only this command serves
+    from costsentinel.dashboard.auth import UnsafeDecisionSurfaceError  # noqa: PLC0415
+
+    if args.host:
+        settings = settings.model_copy(update={"bind_host": args.host})
+    try:
+        app = create_app(settings)
+    except UnsafeDecisionSurfaceError as exc:
+        print(f"{PROGRAM}: {exc}", file=sys.stderr)
+        return 2
+
+    import uvicorn  # noqa: PLC0415 -- a server dependency, loaded only to serve
+
+    uvicorn.run(app, host=settings.bind_host, port=args.port)
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point.
 
@@ -1071,6 +1120,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "dashboard":
         return run_dashboard(args, settings)
+
+    if args.command == "serve":
+        return run_serve(args, settings)
 
     real = bool(args.real) or settings.mode is RunMode.REAL
     scope: tuple[str, ...] = ()

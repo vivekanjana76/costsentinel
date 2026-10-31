@@ -85,15 +85,15 @@ reaches it.
 | Observability | Structured JSON logs correlated by `run_id`; tracing seam with a no-op default; token, cost and latency per run |
 | Governance | Every action classified `allow` / `review` / `block`. **No execution path exists** |
 | Approval gate | A gated action halts the sweep at a durable checkpoint (Phase 10). The process may exit; a decision recorded later from another process resumes it. Approving hands the action to a person and records the hand-off -- proved four ways that it cannot mutate anything |
-| A2A | One read-only Agent Card (Phase 10): request a review, fetch findings, fetch the pending-approval queue. Signed, off by default, no advertised write |
+| A2A | One read-only Agent Card in the A2A v1 wire shape: request a review, fetch findings, fetch the pending-approval queue. JWS-signed per A2A v1 (ES256, RFC 8785) and verified in CI by an independent implementation; tasks can be submitted, polled, collected as typed artefacts and cancelled. Off by default, no advertised write |
 | Exemption | Deterministic tag reading (Phase 6): a resource that is idle or stale by design is surfaced with its reason and excluded from the actionable savings total |
 | Spend anomalies | Robust z-score with a weekday profile over the daily cost series (Phase 7). Spikes and level shifts distinguished; a gap in the series is unknown, not zero; an anomaly never reaches an action |
 | Ranking | An unquantified saving ranks below every quantified one, as a tier rather than a weight (Phase 7) |
 | Reporting | Markdown renderer with five sections (Phase 8); every number in the document must trace to a figure the pipeline produced, as a blocking gate. PDF behind an optional `reports` extra |
 | Spend attribution | Deterministic arithmetic over a per-meter cost breakdown (Phase 9): the component whose share of the change exceeds its share of the spend. A proportional rise is reported as having no single cause |
 | Model resilience | Optional fallback to a secondary backend and an optional per-sweep token ceiling (Phase 9). Both opt-in; either one degrades the prose and no figure, finding or classification |
-| Operator surface | A read-only dashboard (Phase 11) over the **same** `ClientReport` the report renders, computing no figure. The queue page can record a decision, through the one audited path the CLI uses |
-| Entry points | `costsentinel scan`, `report`, `approvals list|decide`, `dashboard`, `POST /scan`, and the opt-in A2A and dashboard surfaces |
+| Operator surface | A read-only dashboard (Phase 11) over the **same** `ClientReport` the report renders, computing no figure. The queue page can record a decision, through the one audited path the CLI uses; off loopback without an authenticator it refuses to start, and every approver is recorded as self-asserted until one exists |
+| Entry points | `costsentinel scan`, `report`, `approvals list|decide`, `dashboard`, `serve`, `POST /scan`, and the opt-in A2A and dashboard surfaces |
 
 ### What Phase 1 contained
 
@@ -183,8 +183,8 @@ estate](docs/dashboard/) are committed, so you can see the surface without runni
 # Write the pages to files; they open with nothing listening
 uv run costsentinel dashboard
 
-# ... or serve them
-DASHBOARD_ENABLED=true uv run uvicorn costsentinel.api.app:create_app --factory
+# ... or serve them (on BIND_HOST, loopback by default)
+DASHBOARD_ENABLED=true uv run costsentinel serve
 ```
 
 **The view computes no figure.** Every value on a page is a string the report already
@@ -197,6 +197,13 @@ The queue page can record a decision when `DASHBOARD_CAN_DECIDE=true`, and it do
 calling the same three functions `costsentinel approvals decide` calls. There is no
 second decision implementation — asserted in both directions, so removing the shared
 call fails as loudly as adding a local one.
+
+**An unsafe decision surface refuses to start.** With `DASHBOARD_CAN_DECIDE=true`, a
+non-loopback `BIND_HOST` and no authenticator, the server does not start, and the error
+says how to fix it. A decision that arrives on a non-loopback socket is refused even if
+the server was started some other way. Nothing verifies who an approver is yet, which is
+a Phase 10b item, so every decision records its approver as **self-asserted and
+unverified**, and the page says so next to the form.
 
 ### Approving something
 
@@ -235,10 +242,12 @@ and none that changes a resource -- and the test that holds that line matches th
 advertised ids, names, tags and examples against a vocabulary of mutating verbs, so a
 skill added later has to pass it.
 
-The card is published whether or not the endpoint is enabled, so a consumer can
-discover what is available rather than probe for it, and it carries a detached
-HMAC-SHA256 over its canonical JSON. That is not a JWS, which is what A2A v1 describes
-and what a real deployment should use; it is labelled for what it is.
+The card is in the A2A v1 wire shape and is **signed with a JWS per A2A v1** (ES256
+over the RFC 8785 canonical card, detached payload). An independent JOSE implementation
+verifies it in CI, as does the spec's own canonicalisation example. The public key is at
+`/.well-known/agent-card-jwks.json`. A task is submitted, polled, collected as a typed
+artefact, or cancelled before it starts. Nothing on the surface can change a resource or
+record a decision.
 
 ### When the model is unavailable
 

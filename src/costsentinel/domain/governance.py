@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, model_validator
 
 from costsentinel.domain.common import Frozen, Provenance, utc_now
 from costsentinel.domain.recommendations import ActionClass, ActionType
@@ -98,6 +98,54 @@ class Decision(StrEnum):
         return self is not Decision.DEFERRED
 
 
+class ApproverAssurance(StrEnum):
+    """How much the record knows about *who* decided (ARCHITECTURE.md D127).
+
+    Two members, and the default is the weaker one. A name typed into a terminal or a
+    form is a claim; until something checks it, the honest record of it is "this is who
+    they said they were". The audit trail must never read as if an identity was
+    established when it was only asserted -- a client asking "who approved deleting
+    that disk?" deserves to be told which of the two answers they are getting.
+    """
+
+    #: Typed by the person deciding. Nothing checked it.
+    SELF_ASSERTED = "self_asserted"
+
+    #: Established by an authenticator, which the record names.
+    VERIFIED = "verified"
+
+    @property
+    def label(self) -> str:
+        """The words a reader sees next to the name."""
+        match self:
+            case ApproverAssurance.SELF_ASSERTED:
+                return "self-asserted, unverified"
+            case ApproverAssurance.VERIFIED:
+                return "verified"
+
+
+def check_assurance(assurance: ApproverAssurance, verified_by: str | None) -> None:
+    """A verified identity names its verifier; a self-asserted one cannot name any.
+
+    The second half matters as much as the first. A self-asserted record carrying an
+    authenticator's name would read as half-verified, which is a claim nothing made.
+    """
+    if assurance is ApproverAssurance.VERIFIED and not verified_by:
+        msg = "a verified approver must name the authenticator that verified them"
+        raise ValueError(msg)
+    if assurance is ApproverAssurance.SELF_ASSERTED and verified_by:
+        msg = "a self-asserted approver was verified by nothing; verified_by must be empty"
+        raise ValueError(msg)
+
+
+_ASSURANCE_DESCRIPTION = (
+    "Whether the approver's identity was verified or only asserted. Defaults to "
+    "self-asserted, so a record written before identities could be verified -- and "
+    "every record taken without an authenticator -- reads as unverified."
+)
+_VERIFIED_BY_DESCRIPTION = "The authenticator that established the identity, when one did."
+
+
 class ApprovalRequest(Frozen):
     """A request put to a human before a gated action may proceed."""
 
@@ -126,8 +174,17 @@ class ApprovalDecision(Frozen):
     recommendation_id: str
     decision: Decision
     approver: str
+    approver_assurance: ApproverAssurance = Field(
+        default=ApproverAssurance.SELF_ASSERTED, description=_ASSURANCE_DESCRIPTION
+    )
+    verified_by: str | None = Field(default=None, description=_VERIFIED_BY_DESCRIPTION)
     decided_at: datetime = Field(default_factory=utc_now)
     note: str | None = None
+
+    @model_validator(mode="after")
+    def _assurance_is_consistent(self) -> ApprovalDecision:
+        check_assurance(self.approver_assurance, self.verified_by)
+        return self
 
     @property
     def is_approved(self) -> bool:
@@ -268,6 +325,15 @@ class DecisionRequest(Frozen):
             "teaches the episodic memory nothing and cannot be explained to a client."
         ),
     )
+    approver_assurance: ApproverAssurance = Field(
+        default=ApproverAssurance.SELF_ASSERTED, description=_ASSURANCE_DESCRIPTION
+    )
+    verified_by: str | None = Field(default=None, description=_VERIFIED_BY_DESCRIPTION)
+
+    @model_validator(mode="after")
+    def _assurance_is_consistent(self) -> DecisionRequest:
+        check_assurance(self.approver_assurance, self.verified_by)
+        return self
 
 
 class ApprovalRecord(Frozen):
@@ -295,6 +361,10 @@ class ApprovalRecord(Frozen):
     decision: Decision
     state: ApprovalState
     approver: str = Field(min_length=1, description="Who decided. Never a default or a system id.")
+    approver_assurance: ApproverAssurance = Field(
+        default=ApproverAssurance.SELF_ASSERTED, description=_ASSURANCE_DESCRIPTION
+    )
+    verified_by: str | None = Field(default=None, description=_VERIFIED_BY_DESCRIPTION)
     reason: str = Field(
         min_length=1,
         description=(
@@ -306,6 +376,16 @@ class ApprovalRecord(Frozen):
     figures: FrozenFigures
     decided_at: datetime = Field(default_factory=utc_now)
     provenance: Provenance
+
+    @model_validator(mode="after")
+    def _assurance_is_consistent(self) -> ApprovalRecord:
+        check_assurance(self.approver_assurance, self.verified_by)
+        return self
+
+    @property
+    def approver_display(self) -> str:
+        """The name with how much is known about it, so the two are never separated."""
+        return f"{self.approver} ({self.approver_assurance.label})"
 
     @property
     def authorises_a_person(self) -> bool:
@@ -330,7 +410,7 @@ class ApprovalRecord(Frozen):
             else ""
         )
         return (
-            f"{self.approver} {verb} {self.action.value.replace('_', ' ')} on "
+            f"{self.approver_display} {verb} {self.action.value.replace('_', ' ')} on "
             f"{self.target_resource_name} ({self.figures.monthly_saving_display} / month) "
             f"on {self.decided_at.date().isoformat()}: {self.reason}{tail}"
         )

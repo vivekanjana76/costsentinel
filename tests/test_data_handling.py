@@ -643,9 +643,11 @@ def test_the_image_does_not_install_the_azure_or_llm_extras() -> None:
     assert "--extra azure" not in dockerfile
     assert "--extra llm" not in dockerfile
     assert "--extra real" not in dockerfile
-    # Not root, and not running a sweep on start-up.
+    # Not root, and not running a sweep on start-up: the server, through the command
+    # whose bind the decision interlock judges.
     assert "USER costsentinel" in dockerfile
-    assert "uvicorn" in dockerfile
+    assert 'CMD ["costsentinel", "serve"' in dockerfile
+    assert "ENV BIND_HOST=0.0.0.0" in dockerfile
 
 
 def test_every_domain_type_is_exported_so_the_checkpoint_allowlist_is_complete() -> None:

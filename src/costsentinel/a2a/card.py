@@ -2,70 +2,91 @@
 
 One card, one capability set, all of it **read-only**. An external agent can ask for a
 scan, fetch the findings, or fetch the pending-approval queue. It cannot approve
-anything, it cannot execute anything, and the reason is not that those endpoints are
-protected -- it is that they do not exist (ARCHITECTURE.md D118).
+anything and it cannot execute anything. That is not because those endpoints are
+protected. It is because they do not exist (ARCHITECTURE.md D118).
 
-Why one card now rather than six later
---------------------------------------
+The wire shape is A2A v1's
+--------------------------
 
-The roadmap had per-specialist cards in Phase 11. The approval queue is the first thing
-in this system another agent would have a reason to ask about, so the card came forward
-with it (D117). Building it against this one capability means "is this surface
-read-only?" is established once, while the answer is the same as the phase's own
-invariant, rather than re-argued for each of six specialists later.
+Serialised as ``a2a.proto`` defines ``AgentCard`` in its JSON form: camelCase,
+``supportedInterfaces`` instead of a top-level URL and protocol version, and
+``signatures`` as a list of ``AgentCardSignature`` (D128). That is not cosmetic. A
+signature only verifies if the verifier canonicalises the same bytes the signer did,
+and a verifier written against the spec canonicalises the spec's shape.
 
-Why the skill vocabulary is closed
-----------------------------------
+Two places where the card says less than it might, both deliberate:
 
-:data:`READ_ONLY_SKILLS` is the whole advertised set and a test asserts that no skill
-id, name, description or tag contains a mutating verb. That is a weaker-looking check
-than enumerating the allowed list and a stronger one in practice: a skill added later
-has to pass it, and the thing that would go wrong is somebody adding
-``remediation.apply`` and nobody noticing the card now advertises a write.
+- **Read-only is declared as a capability extension**, ``urn:costsentinel:a2a:read-only``,
+  not as a top-level field. A strict proto parser rejects unknown fields, and an
+  extension is the spec's own place for a claim the core schema has no word for.
+- **The interface does not claim an official binding.** The routes are a task API
+  shaped like A2A's, not the HTTP+JSON binding (``SendMessage`` with ``Message`` and
+  ``Part``). Declaring ``HTTP+JSON`` would invite a conformant client to send requests
+  this server does not understand. So the binding is named for what it is, and a
+  strict xfail encodes the target (Phase 12b, #113).
+
+Field presence
+--------------
+
+Spec section 8.4.1 says a field with a default value is omitted unless it is
+``REQUIRED`` or proto ``optional``. :func:`present` implements that for this card by
+dropping ``None`` and empty strings, lists and objects. That is correct here because of
+two facts, and both are enforced rather than assumed. Every ``REQUIRED`` field on the
+card is a non-empty string or list, enforced with ``min_length``. And every boolean on
+the card is a proto ``optional`` one (``streaming``, ``pushNotifications``), so an
+explicit ``false`` is kept.
 
 Signing
 -------
 
-The card carries a **detached HMAC-SHA256** over its canonical JSON, not a JWS. A2A v1
-describes JWS, and a real deployment should use one -- that needs an asymmetric key and
-a JSON-canonicalisation library, neither of which belongs in a phase whose rule is that
-CI installs no optional extra. What this provides is integrity against modification in
-transit by anybody without the key, verifiable offline with the standard library, and it
-is labelled as what it is rather than as what it resembles. JWS is a Phase 11 item.
+See :mod:`costsentinel.a2a.signing`. A JWS per spec section 8.4, ES256 over the RFC 8785
+canonical form, verified in CI by an independent JOSE implementation.
 """
 
 from __future__ import annotations
 
-import hashlib
-import hmac
-import json
+from collections.abc import Mapping
 from enum import StrEnum
 
+import rfc8785
 from pydantic import ConfigDict, Field
+from pydantic.alias_generators import to_camel
 
 from costsentinel.domain.common import Frozen
 
-#: The A2A protocol version this card declares.
+#: The A2A protocol version this card's interface declares.
 PROTOCOL_VERSION = "1.0"
+
+#: Named for what the routes are. Not `HTTP+JSON`: see the module docstring (D128).
+PROTOCOL_BINDING = "COSTSENTINEL-TASKS"
+
+#: The bindings A2A v1 names as core. The card must not claim one until it speaks it.
+OFFICIAL_BINDINGS: frozenset[str] = frozenset({"JSONRPC", "GRPC", "HTTP+JSON"})
 
 #: Named so a reader can tell at a glance that nothing here acts.
 AGENT_NAME = "costsentinel-reporting"
 
-#: The synthetic signing key used in tests and in mock mode. Committed deliberately
-#: and useless deliberately: it signs nothing anybody should trust, and a real
-#: deployment sets its own via configuration. A key that only exists in an operator's
-#: environment cannot be asserted about in CI, and a card nobody verifies in CI is a
-#: card whose signature nobody has ever checked.
-SYNTHETIC_SIGNING_KEY = "costsentinel-synthetic-card-key-not-a-secret"
+#: The capability extension that says this agent only reads.
+READ_ONLY_EXTENSION_URI = "urn:costsentinel:a2a:read-only"
+
+#: A JSON value, as the card is served and canonicalised.
+type Json = bool | int | float | str | list[Json] | dict[str, Json] | None
+
+
+class _Wire(Frozen):
+    """Base for the card's parts. camelCase on the wire, snake_case in Python."""
+
+    model_config = ConfigDict(
+        frozen=True, extra="forbid", alias_generator=to_camel, populate_by_name=True
+    )
 
 
 class SkillId(StrEnum):
     """Every skill this agent advertises. Closed, and read-only by construction.
 
-    There is no member that changes anything, and that is the whole design rather than
-    an omission to be filled in later. An external agent asks what spend looks like and
-    what is waiting on a human; a human decides, through a terminal, and carries the
-    action out by hand.
+    No member changes anything, and that is the design, not an omission waiting to be
+    filled in. An external agent asks what spend looks like and what is waiting on a
+    human. A human decides, through a terminal, and carries the action out by hand.
     """
 
     SCAN = "report.scan"
@@ -73,104 +94,129 @@ class SkillId(StrEnum):
     APPROVAL_QUEUE = "approvals.queue"
 
 
-class AgentSkill(Frozen):
-    """One advertised capability, in the shape A2A v1 expects."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
+class AgentSkill(_Wire):
+    """One advertised capability, as ``a2a.proto`` defines ``AgentSkill``."""
 
     id: SkillId
-    name: str
-    description: str
-    tags: tuple[str, ...]
+    name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    tags: tuple[str, ...] = Field(min_length=1)
     examples: tuple[str, ...] = ()
     input_modes: tuple[str, ...] = ("application/json",)
     output_modes: tuple[str, ...] = ("application/json",)
 
 
-class AgentCapabilities(Frozen):
+class AgentExtension(_Wire):
+    """A capability extension. ``required`` is left at its default and so omitted."""
+
+    uri: str = Field(min_length=1)
+    description: str = ""
+
+
+class AgentCapabilities(_Wire):
     """What the agent supports at the protocol level.
 
-    Streaming and push notifications are both declared ``False`` rather than omitted:
-    a consumer should be told what is unsupported instead of discovering it.
+    Streaming and push notifications are set to ``False`` explicitly rather than
+    omitted. Both are proto ``optional``, so the explicit value survives
+    canonicalisation and a consumer is told instead of left to discover it.
     """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
     streaming: bool = False
     push_notifications: bool = False
-    state_transition_history: bool = True
+    extensions: tuple[AgentExtension, ...] = ()
 
 
-class AgentCard(Frozen):
-    """The published description of this agent.
+class AgentInterface(_Wire):
+    """Where the agent can be reached, and how."""
 
-    Carries no credential, no endpoint secret and no capability that mutates. The
-    ``signature`` is detached: it covers :meth:`canonical`, which excludes the
-    signature itself, so a card can be signed, transmitted and verified without the
-    verifier having to reconstruct what was signed.
+    url: str = Field(min_length=1)
+    protocol_binding: str = Field(min_length=1)
+    protocol_version: str = Field(min_length=1)
+
+
+class AgentCardSignature(_Wire):
+    """One JWS over the card, as spec section 8.4.2 lays it out.
+
+    ``protected`` is the base64url protected header and ``signature`` the base64url
+    signature. The payload is detached: it is the card's own canonical form, which a
+    verifier recomputes from the card it received.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    protected: str = Field(min_length=1)
+    signature: str = Field(min_length=1)
 
-    protocol_version: str = PROTOCOL_VERSION
-    name: str = AGENT_NAME
-    description: str
-    version: str
-    url: str = Field(description="Where the A2A endpoint lives when the server is enabled.")
+
+class AgentCard(_Wire):
+    """The published description of this agent.
+
+    Carries no credential, no endpoint secret and no capability that mutates.
+    """
+
+    name: str = Field(default=AGENT_NAME, min_length=1)
+    description: str = Field(min_length=1)
+    supported_interfaces: tuple[AgentInterface, ...] = Field(min_length=1)
+    version: str = Field(min_length=1)
     capabilities: AgentCapabilities = AgentCapabilities()
-    default_input_modes: tuple[str, ...] = ("application/json",)
-    default_output_modes: tuple[str, ...] = ("application/json",)
+    default_input_modes: tuple[str, ...] = Field(default=("application/json",), min_length=1)
+    default_output_modes: tuple[str, ...] = Field(default=("application/json",), min_length=1)
     skills: tuple[AgentSkill, ...] = Field(min_length=1)
-    read_only: bool = Field(
-        default=True,
-        description=(
-            "Declared on the card so a consumer does not have to infer it from the "
-            "skill list. Asserted by a test that walks every skill's id, name, "
-            "description and tags for mutating verbs."
-        ),
-    )
-    signature: str = Field(
-        default="",
-        description=(
-            "Detached HMAC-SHA256 over `canonical()`, hex-encoded. Empty on an "
-            "unsigned card. Not a JWS -- see the module docstring."
-        ),
-    )
-    signature_algorithm: str = Field(
-        default="HMAC-SHA256",
-        description="Stated so a verifier never has to guess, and so a change is visible.",
-    )
+    signatures: tuple[AgentCardSignature, ...] = ()
+
+    @property
+    def read_only(self) -> bool:
+        """Whether the card declares the read-only extension."""
+        return any(ext.uri == READ_ONLY_EXTENSION_URI for ext in self.capabilities.extensions)
+
+    def wire(self) -> dict[str, Json]:
+        """The card exactly as it is served: camelCase, with absent fields omitted."""
+        return present_object(self.model_dump(mode="json", by_alias=True))
 
     def canonical(self) -> bytes:
-        """The exact bytes a signature covers.
+        """The bytes a JWS covers: the served card without ``signatures``, per RFC 8785.
 
-        Sorted keys, no insignificant whitespace, and the signature fields excluded.
-        Canonicalisation is the part of signing that is easy to get subtly wrong, so it
-        is one method with one caller on each side rather than a convention.
+        One method, with one caller on each side. Canonicalisation is the part of
+        signing that is easy to get subtly wrong, so it is not left to a convention.
         """
-        payload = self.model_dump(mode="json", exclude={"signature"})
-        return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-
-    def sign(self, key: str) -> AgentCard:
-        """Return a copy carrying a signature over :meth:`canonical`."""
-        digest = hmac.new(key.encode(), self.canonical(), hashlib.sha256).hexdigest()
-        return self.model_copy(update={"signature": digest})
-
-    def verify(self, key: str) -> bool:
-        """Whether the signature matches, compared in constant time.
-
-        ``hmac.compare_digest`` rather than ``==``: a card signature is a secret-keyed
-        value, and comparing one with a short-circuiting equality is the textbook way
-        to leak it a byte at a time.
-        """
-        if not self.signature:
-            return False
-        expected = hmac.new(key.encode(), self.canonical(), hashlib.sha256).hexdigest()
-        return hmac.compare_digest(expected, self.signature)
+        return canonical_payload(self.wire())
 
 
-#: The advertised skills. Read-only, and the docstrings say so in the text a consuming
-#: agent actually reads rather than only in ours.
+def present(value: Json) -> Json:
+    """Drop absent values, recursively. Field presence per spec 8.4.1, for this card.
+
+    ``None``, ``""``, ``[]`` and ``{}`` are dropped. ``False`` and ``0`` are kept: on
+    this card every boolean is proto ``optional``, so an explicit one is meaningful.
+    """
+    if isinstance(value, dict):
+        return present_object(value)
+    if isinstance(value, list):
+        items = [present(item) for item in value]
+        return [item for item in items if not _absent(item)]
+    return value
+
+
+def present_object(value: Mapping[str, Json]) -> dict[str, Json]:
+    """:func:`present` for an object, typed as one."""
+    kept = {key: present(item) for key, item in value.items()}
+    return {key: item for key, item in kept.items() if not _absent(item)}
+
+
+def _absent(value: Json) -> bool:
+    return value is None or (isinstance(value, str | list | dict) and len(value) == 0)
+
+
+def canonical_payload(card: Mapping[str, Json]) -> bytes:
+    """RFC 8785 over a served card, with ``signatures`` excluded.
+
+    Takes the *served* mapping rather than a model, so a verifier can apply it to
+    exactly the JSON it received. It does not re-serialise a model it parsed, which
+    would quietly canonicalise our idea of the card instead of the one on the wire.
+    """
+    unsigned = present_object({key: item for key, item in card.items() if key != "signatures"})
+    return rfc8785.dumps(unsigned)
+
+
+#: The advertised skills. Read-only, and the descriptions say so in the text a
+#: consuming agent actually reads, not only in our docstrings.
 READ_ONLY_SKILLS: tuple[AgentSkill, ...] = (
     AgentSkill(
         id=SkillId.SCAN,
@@ -210,28 +256,37 @@ READ_ONLY_SKILLS: tuple[AgentSkill, ...] = (
     ),
 )
 
+#: The declaration a consumer reads, worded as a denial so it passes the guard honestly.
+READ_ONLY_EXTENSION = AgentExtension(
+    uri=READ_ONLY_EXTENSION_URI,
+    description=(
+        "Every skill on this card only reads. A task can be cancelled before it runs; "
+        "nothing on this surface can change a resource or record a decision."
+    ),
+)
 
-def build_card(*, url: str, version: str, key: str | None = None) -> AgentCard:
-    """Build the card, signed when a key is given.
+
+def build_card(*, url: str, version: str) -> AgentCard:
+    """Build the unsigned card. :mod:`costsentinel.a2a.signing` adds signatures.
 
     Args:
-        url: Where the A2A endpoint lives. The card is published whether or not the
-            server is enabled, so a consumer can discover what is *available* rather
-            than having to probe for it.
+        url: Where the A2A endpoint lives. The card is published so a consumer can
+            discover what is *available* without having to probe for it.
         version: The CostSentinel version, so a consumer can tell cards apart.
-        key: The signing key. ``None`` produces an unsigned card, which
-            :meth:`AgentCard.verify` then refuses -- an unsigned card is not a card
-            that passes verification trivially.
     """
-    card = AgentCard(
+    return AgentCard(
         description=(
             "Read-only FinOps reporting for multi-subscription Azure estates. "
             "Detects waste and spend anomalies, costs remediations from provider data, "
             "and reports what is awaiting a human decision. Every skill is read-only: "
             "this agent proposes and reports, and has no path to change a resource."
         ),
+        supported_interfaces=(
+            AgentInterface(
+                url=url, protocol_binding=PROTOCOL_BINDING, protocol_version=PROTOCOL_VERSION
+            ),
+        ),
         version=version,
-        url=url,
+        capabilities=AgentCapabilities(extensions=(READ_ONLY_EXTENSION,)),
         skills=READ_ONLY_SKILLS,
     )
-    return card.sign(key) if key else card

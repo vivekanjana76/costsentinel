@@ -42,6 +42,12 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from costsentinel.config import Settings
+from costsentinel.dashboard.auth import (
+    Authenticator,
+    NullAuthenticator,
+    check_decision_surface,
+    may_decide,
+)
 from costsentinel.dashboard.html import render_estate, render_queue, render_report
 from costsentinel.dashboard.view import (
     EstateView,
@@ -51,7 +57,7 @@ from costsentinel.dashboard.view import (
     pending_view,
     report_view,
 )
-from costsentinel.domain.governance import Decision, DecisionRequest
+from costsentinel.domain.governance import ApproverAssurance, Decision, DecisionRequest
 from costsentinel.domain.state import ScanState
 from costsentinel.graph.approvals import (
     ApprovalsError,
@@ -114,7 +120,14 @@ def estate(settings: Settings, *, generated_at: datetime | None = None) -> Estat
 
 
 def record_decision(
-    settings: Settings, *, recommendation_id: str, decision: Decision, approver: str, reason: str
+    settings: Settings,
+    *,
+    recommendation_id: str,
+    decision: Decision,
+    approver: str,
+    reason: str,
+    approver_assurance: ApproverAssurance = ApproverAssurance.SELF_ASSERTED,
+    verified_by: str | None = None,
 ) -> str:
     """Record one decision through the shared path, and say what happened.
 
@@ -122,6 +135,9 @@ def record_decision(
     resume. Every rule about what a valid decision is lives in the gate, where the
     state is -- a check here as well would be a second place for those rules to drift,
     and the dashboard is not the place that should win such a disagreement.
+
+    The assurance defaults to self-asserted, so a caller that says nothing about the
+    approver's identity gets the weaker claim on the record, not the stronger one.
 
     Returns:
         The statement the gate composed, for the page to show back.
@@ -140,6 +156,8 @@ def record_decision(
                 decision=decision,
                 approver=approver,
                 reason=reason,
+                approver_assurance=approver_assurance,
+                verified_by=verified_by,
             ),
         )
 
@@ -162,6 +180,7 @@ def record_decision(
             "recommendation_id": recommendation_id,
             "decision": decision.value,
             "approver": approver,
+            "approver_assurance": approver_assurance.value,
             # Named so the audit trail distinguishes a decision made on a page from one
             # made in a terminal, even though both take the same path.
             "surface": "dashboard",
@@ -181,10 +200,17 @@ def _one(fields: Mapping[str, Sequence[str]], name: str) -> str:
     return values[0].strip() if values else ""
 
 
-def build_router(settings: Settings) -> APIRouter:
-    """The dashboard routes."""
+def build_router(settings: Settings, authenticator: Authenticator | None = None) -> APIRouter:
+    """The dashboard routes.
+
+    Whether a page offers the decision form is decided *per request*, by
+    :func:`~costsentinel.dashboard.auth.may_decide`. A process can be bound more widely
+    than its settings say, and the socket a request arrived on is the one fact about
+    the bind the app can always see.
+    """
     router = APIRouter(tags=["dashboard"])
-    decidable = settings.dashboard_can_decide
+    auth: Authenticator = authenticator or NullAuthenticator()
+    verifies = auth.verifies
 
     @router.get(BASE_PATH, response_class=HTMLResponse)
     def overview() -> HTMLResponse:
@@ -192,7 +218,7 @@ def build_router(settings: Settings) -> APIRouter:
         return HTMLResponse(render_estate(estate(settings)))
 
     @router.get(f"{BASE_PATH}/client/{{client}}", response_class=HTMLResponse)
-    def client_report(client: str) -> HTMLResponse:
+    def client_report(client: str, request: Request) -> HTMLResponse:
         """One client's most recent report, with every section the document has."""
         view = next((one for one in stored_reports(settings) if one.client == client), None)
         if view is None:
@@ -200,14 +226,25 @@ def build_router(settings: Settings) -> APIRouter:
                 status.HTTP_404_NOT_FOUND,
                 f"no stored report for {client!r}. Run `costsentinel scan` first.",
             )
-        return HTMLResponse(render_report(view, decidable=decidable))
+        return HTMLResponse(
+            render_report(
+                view, decidable=may_decide(settings, auth, request), verifies_identity=verifies
+            )
+        )
 
     @router.get(f"{BASE_PATH}/approvals", response_class=HTMLResponse)
-    def approvals() -> HTMLResponse:
+    def approvals(request: Request) -> HTMLResponse:
         """Everything awaiting a decision."""
         items = pending_queue(settings)
         banner = next((one.banner for one in stored_reports(settings) if one.banner), "")
-        return HTMLResponse(render_queue(items, decidable=decidable, banner=banner))
+        return HTMLResponse(
+            render_queue(
+                items,
+                decidable=may_decide(settings, auth, request),
+                verifies_identity=verifies,
+                banner=banner,
+            )
+        )
 
     @router.post(f"{BASE_PATH}/decide")
     async def decide(request: Request) -> RedirectResponse:
@@ -244,11 +281,21 @@ def build_router(settings: Settings) -> APIRouter:
                 status.HTTP_400_BAD_REQUEST, f"a decision must state {', '.join(missing)}"
             )
 
-        if not decidable:
+        if not settings.dashboard_can_decide:
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN,
                 "this dashboard is display-only; set DASHBOARD_CAN_DECIDE=true or use "
                 "`costsentinel approvals decide`",
+            )
+        if not may_decide(settings, auth, request):
+            # The start-up interlock judged the declared bind. This catches a server
+            # bound more widely than that: the decision arrived from off this machine
+            # and nothing can say who sent it (D126).
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "decisions are accepted only on a loopback address unless an "
+                "authenticator is configured, and this one arrived on another address; "
+                "use `costsentinel approvals decide` on the host",
             )
         try:
             chosen = Decision(decision)
@@ -257,13 +304,16 @@ def build_router(settings: Settings) -> APIRouter:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, f"{decision!r} is not a decision; expected {allowed}"
             ) from exc
+        identity = auth.identify(request, approver)
         try:
             record_decision(
                 settings,
                 recommendation_id=recommendation_id,
                 decision=chosen,
-                approver=approver,
+                approver=identity.name,
                 reason=reason,
+                approver_assurance=identity.assurance,
+                verified_by=identity.verified_by,
             )
         except ApprovalsError as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
@@ -273,18 +323,30 @@ def build_router(settings: Settings) -> APIRouter:
     return router
 
 
-def mount(app: FastAPI, settings: Settings) -> bool:
+def mount(app: FastAPI, settings: Settings, authenticator: Authenticator | None = None) -> bool:
     """Attach the dashboard if this deployment enables it.
 
     Returns:
         Whether it was attached, so the caller can log it rather than infer it.
+
+    Raises:
+        UnsafeDecisionSurfaceError: If the configuration would serve an unauthenticated
+            decision surface off loopback. Raised here, while the app is being built, so
+            the process fails to start instead of serving with a warning.
     """
     if not settings.dashboard_enabled:
         _log.info("dashboard disabled")
         return False
-    app.include_router(build_router(settings))
+    auth: Authenticator = authenticator or NullAuthenticator()
+    check_decision_surface(settings, auth)
+    app.include_router(build_router(settings, auth))
     _log.info(
         "dashboard enabled",
-        extra={"path": BASE_PATH, "can_decide": settings.dashboard_can_decide},
+        extra={
+            "path": BASE_PATH,
+            "can_decide": settings.dashboard_can_decide,
+            "bind_host": settings.bind_host,
+            "authenticator": auth.name,
+        },
     )
     return True

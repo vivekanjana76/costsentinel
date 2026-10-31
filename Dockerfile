@@ -52,6 +52,12 @@ ENV MODE=mock \
     LLM_BACKEND=fake \
     EMBEDDER_BACKEND=fake
 
+# A container is reached through its published port, so it binds every interface --
+# and the decision interlock judges exactly this value. Turning on
+# DASHBOARD_CAN_DECIDE in this image therefore refuses to start until a verified
+# authenticator exists (Phase 10b); the dashboard can still be served display-only.
+ENV BIND_HOST=0.0.0.0
+
 RUN mkdir -p /var/lib/costsentinel && chown costsentinel:costsentinel /var/lib/costsentinel
 VOLUME ["/var/lib/costsentinel"]
 
@@ -60,4 +66,6 @@ EXPOSE 8000
 
 # The API, not a sweep: a container that ran a scan on start-up would be a container
 # that scans every time it restarts.
-CMD ["uvicorn", "costsentinel.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+# `costsentinel serve` runs uvicorn on BIND_HOST, so the address the interlock checks
+# and the address the server binds come from one setting.
+CMD ["costsentinel", "serve", "--port", "8000"]
