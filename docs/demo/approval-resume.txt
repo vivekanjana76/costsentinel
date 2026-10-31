@@ -1,0 +1,151 @@
+# A sweep halts for approval, and a different process resumes it
+# Regenerate with: sh scripts/demo.sh
+# Synthetic mock estate, fake LLM, no credentials, no network.
+# Each $ line runs as `uv run --quiet <command>`, a separate OS process.
+# STATE_DIR=tmp/demo-state, wiped before this transcript.
+
+# Process 1: scan. Every proposed action is gated, so the sweep writes its
+# report, checkpoints, and the process exits with nine actions waiting.
+$ costsentinel scan --client northwind-energy --summary
+CostSentinel sweep: 1 client(s), 9 finding(s), 9 awaiting approval.
+
+northwind-energy  [high]
+  period               2026-09-02 to 2026-10-01 (30 days)
+  subscriptions        2
+  resources examined   20
+  observed spend       5,387.88 USD
+  projected savings    1,421.97 USD/month, 17,063.64 USD/year
+  findings             9 (9 awaiting approval, 0 automatable)
+  spend changes        2 to investigate
+  flagged but exempt   1 (costing 140.16 USD/month, excluded from the savings above)
+
+  1. vm-analytics-01  [idle_virtual_machine]  deallocate_virtual_machine  (review)  saves 560.64 USD/month
+  2. vm-batch-02  [oversized_virtual_machine]  resize_virtual_machine  (review)  saves 367.92 USD/month
+  3. sql-dev-sandbox  [idle_sql_database]  scale_down_sql_database  (review)  saves 222.23 USD/month
+  4. nw-compute-dsv5-3y  [unused_reservation]  exchange_unused_reservation  (review)  saves 145.04 USD/month
+  5. disk-analytics-01-data  [orphaned_managed_disk]  delete_orphaned_managed_disk  (review)  saves 38.01 USD/month
+  6. pip-legacy-api  [unattached_public_ip]  delete_unattached_public_ip  (review)  saves 3.65 USD/month
+  7. snap-analytics-baseline  [stale_snapshot]  delete_stale_snapshot  (review)  saves 16.90 USD/month
+  8. snap-web-01-pre-upgrade  [stale_snapshot]  delete_stale_snapshot  (block)  saves 67.58 USD/month
+  9. vm-core-api-02  [oversized_virtual_machine]  resize_virtual_machine  (review)  saves unknown USD/month
+
+  Spend changes (investigate; no action proposed):
+    - 00000000-0000-4000-8000-00000000a002  [spike]  35.07 USD -> 137.90 USD/day  (99.2 sigma)
+        Daily spend rose from a baseline of 35.07 USD to 137.90 USD on 2026-09-27, a difference of 103.21 USD (294.3% of baseline). That is 99.2 robust standard deviations from the 23-day baseline, against a threshold of 5.0.
+    - 00000000-0000-4000-8000-00000000a001  [level_shift]  120.24 USD -> 209.79 USD/day  (25.3 sigma)
+        Daily spend rose from a baseline of 120.24 USD to 209.79 USD over 2026-09-25 to 2026-10-01, a difference of 90.24 USD (75.0% of baseline). That is 25.3 robust standard deviations from the 23-day baseline, against a threshold of 3.5.
+
+  Flagged but exempt (no action proposed):
+    - vm-core-dr-standby  [idle_virtual_machine]  costs 140.16 USD/month  exempt: disaster_recovery
+        This resource is tagged as a disaster-recovery standby. Being idle is what a standby is for, so its utilisation is not evidence of waste and CostSentinel proposes no action on it. Tag: role=disaster-recovery-standby.
+
+  Awaiting approval:
+    - vm-analytics-01: deallocate_virtual_machine [review] 560.64 USD/month
+    - vm-batch-02: resize_virtual_machine [review] 367.92 USD/month
+    - sql-dev-sandbox: scale_down_sql_database [review] 222.23 USD/month
+    - nw-compute-dsv5-3y: exchange_unused_reservation [review] 145.04 USD/month
+    - disk-analytics-01-data: delete_orphaned_managed_disk [review] 38.01 USD/month
+    - pip-legacy-api: delete_unattached_public_ip [review] 3.65 USD/month
+    - snap-analytics-baseline: delete_stale_snapshot [review] 16.90 USD/month
+    - snap-web-01-pre-upgrade: delete_stale_snapshot [block] 67.58 USD/month
+    - vm-core-api-02: resize_virtual_machine [review] unknown USD/month
+
+  note: CostSentinel has no execution path in this phase, so nothing in this report has been or can be applied automatically.
+  note: Findings are ranked by a weighted composite of savings, safety and detector confidence, not by savings alone. Each finding shows its own breakdown.
+  note: 1 finding(s) could not be priced from provider data. They are excluded from the projected savings rather than assumed to be zero, and they rank below every priced finding -- we will not tell you that something we cannot cost is your bigger opportunity. Each one says why no figure could be derived.
+  note: 2 spend change(s) were detected and are listed separately from the findings. A spend change is something to investigate, not something to act on: its difference is what you are now paying differently, not an amount anyone has identified a way to recover, and none of it appears in the projected savings above.
+  note: 1 finding(s) are flagged but exempt: real waste signals on resources your own tags mark as protected -- a disaster-recovery standby, a retention requirement, or an explicit cost exemption. Each is listed with the tag that caused it and the reason nothing is proposed, and all of them are excluded from the projected savings above. Their current monthly cost is 140.16 USD, which is what you spend on them rather than a saving available to you.
+  note: 1 finding(s) are classified as blocked: they are reported as advice for a person to carry out by hand, and CostSentinel will not perform them however they are approved.
+
+# Process 2: nothing in memory survives from process 1 -- only the file.
+$ costsentinel approvals list
+9 action(s) awaiting a decision across 1 paused sweep(s).
+
+northwind-energy  [sweep run-333ad6d6de6c]
+  rec-idlevm-4d7f269994  `review`
+    deallocate virtual machine on vm-analytics-01 (idle virtual machine), worth 560.64 USD per month
+    costs 560.64 USD / month; saving 560.64 USD / month (6,727.68 USD / year)
+    resource /subscriptions/00000000-0000-4000-8000-00000000a002/resourceGroups/rg-analytics-dev/providers/Microsoft.Compute/virtualMachines/vm-analytics-01
+  rec-bigvm-e7ac670d1a  `review`
+    resize virtual machine on vm-batch-02 (oversized virtual machine), worth 367.92 USD per month
+    costs 735.84 USD / month; saving 367.92 USD / month (4,415.04 USD / year)
+    resource /subscriptions/00000000-0000-4000-8000-00000000a001/resourceGroups/rg-core-prod/providers/Microsoft.Compute/virtualMachines/vm-batch-02
+  rec-idlesql-fc71da27de  `review`
+    scale down sql database on sql-dev-sandbox (idle sql database), worth 222.23 USD per month
+    costs 444.47 USD / month; saving 222.23 USD / month (2,666.76 USD / year)
+    resource /subscriptions/00000000-0000-4000-8000-00000000a002/resourceGroups/rg-analytics-dev/providers/Microsoft.Sql/servers/databases/sql-dev-sandbox
+  rec-deadrsv-b83901e309  `review`
+    exchange unused reservation on nw-compute-dsv5-3y (unused reservation), worth 145.04 USD per month
+    costs 221.44 USD / month; saving 145.04 USD / month (1,740.48 USD / year)
+    resource rsv-00000000-0000-4000-8000-0000000000c1
+  rec-orphdisk-2923594012  `review`
+    delete orphaned managed disk on disk-analytics-01-data (orphaned managed disk), worth 38.01 USD per month
+    costs 38.01 USD / month; saving 38.01 USD / month (456.12 USD / year)
+    resource /subscriptions/00000000-0000-4000-8000-00000000a002/resourceGroups/rg-analytics-dev/providers/Microsoft.Compute/disks/disk-analytics-01-data
+  rec-freepip-8623054659  `review`
+    delete unattached public ip on pip-legacy-api (unattached public ip), worth 3.65 USD per month
+    costs 3.65 USD / month; saving 3.65 USD / month (43.80 USD / year)
+    resource /subscriptions/00000000-0000-4000-8000-00000000a002/resourceGroups/rg-analytics-dev/providers/Microsoft.Network/publicIPAddresses/pip-legacy-api
+  rec-oldsnap-6b254a246c  `review`
+    delete stale snapshot on snap-analytics-baseline (stale snapshot), worth 16.90 USD per month
+    costs 16.90 USD / month; saving 16.90 USD / month (202.80 USD / year)
+    resource /subscriptions/00000000-0000-4000-8000-00000000a002/resourceGroups/rg-analytics-dev/providers/Microsoft.Compute/snapshots/snap-analytics-baseline
+  rec-oldsnap-cbc60b1079  `block`
+    delete stale snapshot on snap-web-01-pre-upgrade (stale snapshot), worth 67.58 USD per month
+    costs 67.58 USD / month; saving 67.58 USD / month (810.96 USD / year)
+    resource /subscriptions/00000000-0000-4000-8000-00000000a001/resourceGroups/rg-core-prod/providers/Microsoft.Compute/snapshots/snap-web-01-pre-upgrade
+  rec-bigvm-dacbd62ab7  `review`
+    resize virtual machine on vm-core-api-02 (oversized virtual machine), worth unknown USD per month
+    costs 280.32 USD / month; saving unknown USD / month (unknown USD / year)
+    resource /subscriptions/00000000-0000-4000-8000-00000000a001/resourceGroups/rg-core-prod/providers/Microsoft.Compute/virtualMachines/vm-core-api-02
+
+Decide with: costsentinel approvals decide <recommendation-id> --approve|--reject|--defer --reason "..."
+An approval hands the action to a person and records the hand-off. CostSentinel has no path to perform it.
+
+# Process 3: approve one item. Approving hands it to a person and records
+# that; CostSentinel has no execution path and changes nothing.
+$ costsentinel approvals decide rec-orphdisk-2923594012 --approve --reason "confirmed orphaned; platform team will delete it" --approver ops@example.com
+ops@example.com (self-asserted, unverified) approved delete orphaned managed disk on disk-analytics-01-data (38.01 USD / month) on 2026-10-31: confirmed orphaned; platform team will delete it It is handed off for a person to carry out; CostSentinel has no path to perform it.
+Sweep run-333ad6d6de6c is still waiting on 8 action(s). Run `approvals list` to see them.
+
+# Process 4: the approved item has left the queue; eight remain.
+$ costsentinel approvals list
+8 action(s) awaiting a decision across 1 paused sweep(s).
+
+northwind-energy  [sweep run-333ad6d6de6c]
+  rec-idlevm-4d7f269994  `review`
+    deallocate virtual machine on vm-analytics-01 (idle virtual machine), worth 560.64 USD per month
+    costs 560.64 USD / month; saving 560.64 USD / month (6,727.68 USD / year)
+    resource /subscriptions/00000000-0000-4000-8000-00000000a002/resourceGroups/rg-analytics-dev/providers/Microsoft.Compute/virtualMachines/vm-analytics-01
+  rec-bigvm-e7ac670d1a  `review`
+    resize virtual machine on vm-batch-02 (oversized virtual machine), worth 367.92 USD per month
+    costs 735.84 USD / month; saving 367.92 USD / month (4,415.04 USD / year)
+    resource /subscriptions/00000000-0000-4000-8000-00000000a001/resourceGroups/rg-core-prod/providers/Microsoft.Compute/virtualMachines/vm-batch-02
+  rec-idlesql-fc71da27de  `review`
+    scale down sql database on sql-dev-sandbox (idle sql database), worth 222.23 USD per month
+    costs 444.47 USD / month; saving 222.23 USD / month (2,666.76 USD / year)
+    resource /subscriptions/00000000-0000-4000-8000-00000000a002/resourceGroups/rg-analytics-dev/providers/Microsoft.Sql/servers/databases/sql-dev-sandbox
+  rec-deadrsv-b83901e309  `review`
+    exchange unused reservation on nw-compute-dsv5-3y (unused reservation), worth 145.04 USD per month
+    costs 221.44 USD / month; saving 145.04 USD / month (1,740.48 USD / year)
+    resource rsv-00000000-0000-4000-8000-0000000000c1
+  rec-freepip-8623054659  `review`
+    delete unattached public ip on pip-legacy-api (unattached public ip), worth 3.65 USD per month
+    costs 3.65 USD / month; saving 3.65 USD / month (43.80 USD / year)
+    resource /subscriptions/00000000-0000-4000-8000-00000000a002/resourceGroups/rg-analytics-dev/providers/Microsoft.Network/publicIPAddresses/pip-legacy-api
+  rec-oldsnap-6b254a246c  `review`
+    delete stale snapshot on snap-analytics-baseline (stale snapshot), worth 16.90 USD per month
+    costs 16.90 USD / month; saving 16.90 USD / month (202.80 USD / year)
+    resource /subscriptions/00000000-0000-4000-8000-00000000a002/resourceGroups/rg-analytics-dev/providers/Microsoft.Compute/snapshots/snap-analytics-baseline
+  rec-oldsnap-cbc60b1079  `block`
+    delete stale snapshot on snap-web-01-pre-upgrade (stale snapshot), worth 67.58 USD per month
+    costs 67.58 USD / month; saving 67.58 USD / month (810.96 USD / year)
+    resource /subscriptions/00000000-0000-4000-8000-00000000a001/resourceGroups/rg-core-prod/providers/Microsoft.Compute/snapshots/snap-web-01-pre-upgrade
+  rec-bigvm-dacbd62ab7  `review`
+    resize virtual machine on vm-core-api-02 (oversized virtual machine), worth unknown USD per month
+    costs 280.32 USD / month; saving unknown USD / month (unknown USD / year)
+    resource /subscriptions/00000000-0000-4000-8000-00000000a001/resourceGroups/rg-core-prod/providers/Microsoft.Compute/virtualMachines/vm-core-api-02
+
+Decide with: costsentinel approvals decide <recommendation-id> --approve|--reject|--defer --reason "..."
+An approval hands the action to a person and records the hand-off. CostSentinel has no path to perform it.
+
