@@ -12,7 +12,7 @@ Nothing yet. Next up is Phase 12b, A2A interop: an official protocol binding,
 per-specialist cards, per-caller authorisation on the Phase 10b identity, Foundry
 interop, and CostSentinel as an A2A *client* (#113).
 
-## [0.12.0] - 2026-10-25
+## [0.12.0] - 2026-10-31
 
 Phase 12: the decision-surface interlock, and the A2A task lifecycle with JWS card
 signing. Phase 11 shipped a decision surface whose safety off loopback rested on one
