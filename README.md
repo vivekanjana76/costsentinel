@@ -190,7 +190,7 @@ command, the approval and learning flows, the API, and a real-Azure run are in t
 Twelve issue-driven phases. Each one was a GitHub milestone with an issue per task,
 built on its own branch in Conventional Commits, merged by pull request with CI green,
 and tagged as a [release](https://github.com/vivekanjana76/costsentinel/releases). The
-suite has about 1,470 tests at 93% coverage, and CI fails under 90%. The phase order
+suite has about 1,480 tests at 93% coverage, and CI fails under 90%. The phase order
 changed nine times, and each change is recorded with its reason in
 [ROADMAP.md](ROADMAP.md). What changed in each release is in
 [CHANGELOG.md](CHANGELOG.md).

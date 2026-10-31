@@ -1,6 +1,10 @@
 # CostSentinel — Roadmap
 
-**Current phase: 12** — the decision-surface interlock, and the A2A task lifecycle with JWS card signing.
+**Current phase: none in progress.** Phase 12 shipped as v0.12.0, and a documentation
+phase followed as v0.12.1 (see "Docs phase" below). The remaining feature phases are
+**open and optional**: 9b (calibration against real traffic), 10b (approval adapters and
+the real authenticator) and 12b (A2A interop). Each needs a real tenant, a real model,
+a real workspace or a real peer. Phase 13 (execution) depends on 10b.
 
 Phases are sequential. Do not start work in a later phase before the current phase
 is complete and its exit criteria are met. If an idea arrives mid-phase, record it
@@ -677,7 +681,7 @@ closed.
 
 ---
 
-## Phase 9b — Calibration against real traffic
+## Phase 9b — Calibration against real traffic (open, optional)
 
 **Goal:** the residue of Phase 9 that no fake can stand in for. Cannot be closed
 without a real estate, a real key and real history, so it is its own phase rather than
@@ -771,7 +775,7 @@ be finished offline.
 
 ---
 
-## Phase 10b — Approval adapters
+## Phase 10b — Approval adapters and the real authenticator (open, optional)
 
 **Goal:** the decision reaches the human where they already are, instead of in a
 terminal.
@@ -905,7 +909,34 @@ signing; `pyjwt` in the dev group only, as an independent verifier.
 
 ---
 
-## Phase 12b — A2A interop
+## Docs phase — the front door (v0.12.1)
+
+**Goal:** make the existing system findable and credible to a first-time reader in under
+two minutes. No new product features. A patch release rather than a numbered phase,
+because it adds no behaviour and Phase 13 is already taken (ARCHITECTURE.md D131).
+
+Milestone: *Docs - The front door*.
+
+- [x] Housekeeping: #114 merged and v0.12.0 tagged; finished milestones closed; GitHub
+      Releases backfilled for every tag; repository description and topics set (#115)
+- [x] The README rewritten as the front door, with each claim linked to the test or file
+      that holds it, and scope and safety stated plainly (#116)
+- [x] The operating detail moved to `docs/guide.md`, with stale claims corrected on the
+      way (#117)
+- [x] An MIT `LICENSE`, and package metadata that agrees with it (#118)
+- [x] Demo transcripts committed with `scripts/demo.sh`, and a test that replays them as
+      real subprocesses (#119)
+- [x] Guard tests on what the README claims (#120)
+- [x] Stale claims corrected across ARCHITECTURE, the CLI help and the harness (#121)
+- [x] ROADMAP, ARCHITECTURE D131 and the CHANGELOG entry for v0.12.1 (#122)
+
+**Exit criteria (met):** every README claim links to a test or file and a guard test
+fails if one stops resolving; the transcripts match what the CLI prints today; CI is
+offline and green.
+
+---
+
+## Phase 12b — A2A interop (open, optional)
 
 **Goal:** specialists are discoverable and invocable by external agents, without
 routing around governance.
