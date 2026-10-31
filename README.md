@@ -1,495 +1,200 @@
 # CostSentinel
 
-Autonomous, multi-agent FinOps governance for multi-subscription Azure estates.
+[![CI](https://github.com/vivekanjana76/costsentinel/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/vivekanjana76/costsentinel/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/vivekanjana76/costsentinel)](https://github.com/vivekanjana76/costsentinel/releases)
+[![License: MIT](https://img.shields.io/github/license/vivekanjana76/costsentinel)](LICENSE)
+[![Python](https://img.shields.io/python/required-version-toml?tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2Fvivekanjana76%2Fcostsentinel%2Fmaster%2Fpyproject.toml)](pyproject.toml)
 
-> **Offline by default; real access is opt-in.** A fresh clone with no `.env` runs
-> the whole pipeline against a deterministic synthetic estate and a deterministic fake
-> LLM, with no cloud calls, no model calls and no credentials of any kind — and that
-> is what CI runs. A real Azure estate and a real model are available behind explicit
-> configuration and are **read-only**: there is no execution path at all. See
-> [SECURITY.md](SECURITY.md) before a first real run, and
-> [ROADMAP.md](ROADMAP.md) for what each later phase adds.
+**Large Azure estates quietly waste money, and a provider running a dozen subscriptions
+for several clients can neither review them by hand nor safely act on what it finds
+without a person signing off.**
 
-## The problem
+CostSentinel is a multi-agent FinOps system for multi-subscription Azure estates. It
+finds waste and spend changes, explains them, proposes ranked and costed remediations,
+halts for a human decision on anything destructive, and writes a client-ready report.
+Three things make it unusual. **No language model can produce a money figure.** **It
+cannot change a cloud resource**, by construction. And **it grades itself**: an eval
+with four build-blocking gates runs on every commit.
 
-Large Azure estates quietly waste money. Orphaned disks keep billing after the VM
-they belonged to is gone, dev and test resources outlive the project that created
-them, VMs are provisioned for a peak that never comes, public IPs sit unattached,
-reservations go unused, and egress charges surprise everyone. A managed-service
-provider running 12-plus subscriptions for several enterprise and government clients
-cannot review this by hand at the cadence it changes — and even when the waste is
-found, acting on it is risky without a human signing off, while the client wants
-savings they can actually point to in a report. CostSentinel closes that loop: it
-continuously ingests cost, usage and inventory signals, detects waste and spend
-anomalies, diagnoses root cause, proposes ranked and costed remediations, routes
-anything destructive through a human-approval gate, produces client-ready savings
-reports, and learns from what each client accepts or rejects.
+> **What this repository is.** Everything runs offline against a **synthetic** Azure
+> estate and a deterministic fake LLM, with no credentials. That is also what CI runs.
+> CostSentinel is **read-only** and **executes nothing**: approving an action hands it
+> to a person. See [Scope and safety](#scope-and-safety).
 
-## How it works
-
-A LangGraph state machine threads one typed state object through a team of
-specialist agents — Anomaly Scout, Root-Cause Analyst, Savings Estimator,
-Optimization Planner, Policy Guard and Report Author — with a supervisor owning every
-retry, escalation and approval route.
-
-Detection is deterministic, so a finding can never be hallucinated. All money
-arithmetic is deterministic, so a savings figure is either provider data or an
-explicit unknown — `MoneyAmount` raises a validation error if handed LLM provenance,
-which makes "never invent numbers" a property of the type system rather than of
-prompt discipline. Ranking is deterministic too: the model is asked to *narrate* an
-order it has already been given, so a compromised model can change a report's wording
-and not what a client is told to do first.
-
-What the model does: explains why waste exists (grounded in evidence the detector
-recorded, with any unsupported claim dropped), selects a remediation from a closed
-candidate set, and writes the prose. Anything destructive is classified `allow`,
-`review` or `block` and cannot reach an execution path without a recorded human
-decision.
-
-Alongside "is this resource wasteful?", CostSentinel asks **"did spend change?"** --
-a different question with a different answer. A spend anomaly is detected by
-transparent arithmetic over the daily cost series (a robust z-score with a weekday
-profile, so a weekly batch window is a schedule rather than an alert), and it routes
-to an investigation rather than to a remediation: it carries no saving, cannot enter
-the approval queue, and cannot become something CostSentinel acts on.
-
-Some resources are idle *by design* -- a disaster-recovery standby, a snapshot under a
-retention requirement -- and CostSentinel reads the client's **tags**,
-deterministically, to tell. Such a finding is still shown, annotated with the tag that
-withheld the advice and with what the resource costs, and kept out of the actionable
-savings total. Exemption can only ever make the system recommend *less*: a tag may
-move a finding toward "leave this alone" and can never downgrade a safety
-classification or make something automatable.
-
-Read [ARCHITECTURE.md](ARCHITECTURE.md) for the full design, the graph diagram, and
-the decision log.
-
-### What ships today
-
-The complete six-specialist graph from CLAUDE.md section 5, with a supervisor owning
-every conditional edge. Phase 2 built the graph; Phases 3 to 6 added read-only real
-access, durable memory, the evaluation harness and context-aware detection; Phase 7
-added spend anomalies, and Phase 8 the client-facing document and the guarantee that
-reaches it.
-
-| Piece | Status |
+| A client's report | The approval queue |
 |---|---|
-| Domain model | Provenance and verification on every derived fact; `MoneyAmount` refuses LLM provenance |
-| Provider seam | `AzureProvider` protocol, deterministic `MockAzureProvider` (21 resources, 3 reservations, 4 subscriptions, 2 clients, one committed cost-series shape each), and a read-only real provider behind the `azure` extra |
-| Pricing | Every figure traces to a committed catalogue snapshot; refreshed by hand with `scripts/refresh_prices.py` |
-| LLM seam | `LLM` protocol + `FakeLLM` by default; Azure OpenAI (keyless or keyed) and Gemini adapters behind the `llm` extra |
-| Detectors | Eight deterministic detectors: orphaned disk, unattached IP, idle VM, oversized VM, stale snapshot, idle SQL, oversized App Service plan, unused reservation |
-| Graph | Supervisor + Anomaly Scout, Root-Cause Analyst, Savings Estimator, Optimization Planner, Policy Guard, Report Author |
-| Routing | Proceed, retry (bounded), escalate, require-approval, short-circuit — each a recorded decision with a reason |
-| Ranking weights | Deterministic weighted composite of savings, safety and confidence. The model narrates the order; it cannot change it |
-| Observability | Structured JSON logs correlated by `run_id`; tracing seam with a no-op default; token, cost and latency per run |
-| Governance | Every action classified `allow` / `review` / `block`. **No execution path exists** |
-| Approval gate | A gated action halts the sweep at a durable checkpoint (Phase 10). The process may exit; a decision recorded later from another process resumes it. Approving hands the action to a person and records the hand-off -- proved four ways that it cannot mutate anything |
-| A2A | One read-only Agent Card in the A2A v1 wire shape: request a review, fetch findings, fetch the pending-approval queue. JWS-signed per A2A v1 (ES256, RFC 8785) and verified in CI by an independent implementation; tasks can be submitted, polled, collected as typed artefacts and cancelled. Off by default, no advertised write |
-| Exemption | Deterministic tag reading (Phase 6): a resource that is idle or stale by design is surfaced with its reason and excluded from the actionable savings total |
-| Spend anomalies | Robust z-score with a weekday profile over the daily cost series (Phase 7). Spikes and level shifts distinguished; a gap in the series is unknown, not zero; an anomaly never reaches an action |
-| Ranking | An unquantified saving ranks below every quantified one, as a tier rather than a weight (Phase 7) |
-| Reporting | Markdown renderer with five sections (Phase 8); every number in the document must trace to a figure the pipeline produced, as a blocking gate. PDF behind an optional `reports` extra |
-| Spend attribution | Deterministic arithmetic over a per-meter cost breakdown (Phase 9): the component whose share of the change exceeds its share of the spend. A proportional rise is reported as having no single cause |
-| Model resilience | Optional fallback to a secondary backend and an optional per-sweep token ceiling (Phase 9). Both opt-in; either one degrades the prose and no figure, finding or classification |
-| Operator surface | A read-only dashboard (Phase 11) over the **same** `ClientReport` the report renders, computing no figure. The queue page can record a decision, through the one audited path the CLI uses; off loopback without an authenticator it refuses to start, and every approver is recorded as self-asserted until one exists |
-| Entry points | `costsentinel scan`, `report`, `approvals list|decide`, `dashboard`, `serve`, `POST /scan`, and the opt-in A2A and dashboard surfaces |
+| [![The operator dashboard showing a client's cost review](docs/dashboard/2-client-report.jpg)](docs/dashboard/2-client-report.jpg) | [![The approval queue, with approve, reject and defer per action](docs/dashboard/3-approval-queue.jpg)](docs/dashboard/3-approval-queue.jpg) |
 
-### What Phase 1 contained
+<sub>Synthetic data: the dashboard running on the invented mock estate. Every
+subscription, resource and figure is made up, and each page carries a banner saying so.
+[All four captures](docs/dashboard/).</sub>
 
-A thin vertical slice that runs end to end:
+**Read without running anything:** [a sample client report](docs/sample-report.md) ·
+[the eval scorecard](evals/REPORT.md) · [a captured demo](docs/demo/approval-resume.txt)
+· [the architecture](ARCHITECTURE.md) · [the operator guide](docs/guide.md)
 
-| Piece | Status in Phase 1 |
-|---|---|
-| Domain model | Complete — provenance and verification on every derived fact |
-| Provider seam | `AzureProvider` protocol + deterministic `MockAzureProvider` |
-| LLM seam | `LLM` protocol + `FakeLLM`; Azure OpenAI and Gemini adapters are configuration-error stubs |
-| Graph | Four nodes: Anomaly Scout, Optimization Planner, Policy Guard, Report Author |
-| Durability | SQLite checkpointer — runs are persisted and resumable |
-| Governance | Policy Guard classifies every action; destructive ones are marked `review` or `block`. No execution path exists yet |
-| Entry points | `costsentinel scan` and `POST /scan` |
+## What makes this different
+
+Each claim links to the code or test that holds it.
+
+**Money is deterministic and cannot be model-invented.** Detection, pricing and ranking
+are arithmetic over provider data and a committed price snapshot, in which every price
+names its Azure meter. The money type itself refuses a figure whose provenance is a
+language model
+([`test_money_amount_refuses_llm_provenance`](tests/test_domain.py)), and the Savings
+Estimator imports no model at all
+([`test_savings_estimator_node_imports_no_language_model`](tests/test_savings_and_policy.py)).
+Every figure in the rendered report must trace to one the pipeline produced
+([`test_the_rendered_gate_fails_when_a_figure_is_corrupted`](tests/test_evals.py)).
+
+**Read-only by construction, and approval hands off.** No Azure SDK that can mutate a
+resource is installed or imported
+([`test_no_mutating_azure_client_is_imported_anywhere_in_src`](tests/test_readonly.py)),
+and the MCP tool surface has exactly one operation, read. Approving a destructive action
+records a decision and hands the action to a person. No combination of decision and
+action class reaches a mutation
+([`test_no_decision_on_any_action_class_reaches_a_mutation`](tests/test_approval_gate.py)),
+one of four independent proofs.
+
+**A self-grading eval with four build-blocking gates.** `costsentinel eval` runs the real
+pipeline against committed labelled estates. Four results are gates rather than scores:
+**`safety.recall`** (every destructive action correctly gated), **`cost.figure_accuracy`**
+(every money figure exactly equals ground truth), **`rendered.figure_accuracy`** (every
+number in the document traces to the pipeline), and **`injection.resistance`** (a hostile
+resource name or tag changes nothing). Any failure exits non-zero
+([`test_the_cli_exits_non_zero_when_a_gate_fails`](tests/test_evals.py)). The eval
+caught three real defects when it landed: a disaster-recovery standby reported as idle, a
+snapshot under a HIPAA retention tag reported as stale, and an oversized VM hiding just
+above a threshold. The next phase closed all three. Adversarial handling went from **0/3
+to 3/3**, and detection precision and recall from 0.86 and 0.92 to **1.00**. See the
+committed scorecard: [`evals/REPORT.md`](evals/REPORT.md).
+
+**It learns, and learning moves no number.** A declined recommendation is demoted on the
+next sweep and annotated with the reason, while every money figure stays identical
+([`test_a_seeded_rejection_changes_the_order_and_not_one_number`](tests/test_memory_graph.py)).
+From the [captured transcript](docs/demo/learning-loop.txt): after the decline, the
+headline is unchanged from the first sweep, and the finding that ranked first is now
+seventh.
+
+```text
+$ costsentinel decide rec-idlevm-4d7f269994 --reject --reason "owner confirmed this is a quarter-end batch host" --by client@example.com
+$ costsentinel scan --client northwind-energy --summary
+  projected savings    1,421.97 USD/month, 17,063.64 USD/year
+  ...
+  7. vm-analytics-01  [idle_virtual_machine]  deallocate_virtual_machine  (review)  saves 560.64 USD/month
+       memory: Previously declined on 2026-10-31, reason: owner confirmed this is a quarter-end batch host (was #1 on merit)
+```
+
+**The money is the same whether the model answers, fails over, or is cut off.** A
+backend outage, a fallback to the secondary model, or a per-sweep token budget costs the
+prose and nothing else. The same estate is reported three ways and every deterministic
+field compared
+([`test_every_figure_survives_a_fallback`](tests/test_degradation.py),
+[`test_every_figure_survives_a_budget_cutoff`](tests/test_degradation.py)).
+
+**Durable human-in-the-loop.** A sweep with gated actions writes its report, halts at a
+LangGraph checkpoint, and the process exits. A later, separate process lists the queue
+and resumes the sweep with a decision. The [committed transcript](docs/demo/approval-resume.txt)
+shows this one OS process per command, and a test replays it as real subprocesses
+([`test_a_committed_transcript_is_what_separate_processes_print_today`](tests/test_docs.py)).
+
+**Honest about the unknown.** A saving that cannot be derived is `unknown`, never `0`. It
+is excluded from totals, ranked below every priced finding, and rendered as "unknown"
+([`test_an_unknown_renders_as_unknown_and_never_as_zero`](tests/test_reports.py),
+[`test_money_amount_unknown_must_be_none_not_zero`](tests/test_domain.py)).
+
+## Architecture at a glance
+
+A LangGraph state machine threads one typed `ScanState` through six specialists. Every
+node returns to a supervisor, which owns every routing decision and records it with a
+reason. State is checkpointed after every node.
+
+```
+             scan request (CLI / API / A2A task)
+                          |
+                          v
+   +--------------->  SUPERVISOR  -- proceed / retry / escalate / short-circuit
+   |                      |
+   |   Anomaly Scout -> Root-Cause Analyst -> Savings Estimator ->
+   |   Optimization Planner -> Policy Guard -> memory consult -> Report Author
+   |                      |
+   +--- each returns -----+
+                          |  any review / block action?
+                          v
+                    APPROVAL GATE  -- durable interrupt; process may exit;
+                          |           resumes on a recorded decision
+                          v
+                         END        (approval hands off; nothing executes)
+```
+
+- **Anomaly Scout:** reads the estate and runs eight deterministic waste detectors, plus
+  a robust z-score spend-anomaly detector.
+- **Root-Cause Analyst:** explains each signal from the evidence already gathered. The
+  model may not introduce a quantity.
+- **Savings Estimator:** prices every candidate action from provider data and the
+  catalogue, with no model involved.
+- **Optimization Planner:** picks from a closed set of priced options and ranks them
+  deterministically. The model only narrates the order.
+- **Policy Guard:** classifies every action `allow`, `review` or `block`, and routes
+  gated ones to approval.
+- **Report Author:** writes the client report. Prose may degrade; figures are copied,
+  never composed.
+
+**Stack:** LangGraph with a SQLite checkpointer · Pydantic v2 at every boundary · a
+FastMCP read-only Azure tool server · an A2A v1 Agent Card, JWS-signed (ES256, RFC 8785)
+· episodic and semantic memory on SQLite or PostgreSQL + pgvector · FastAPI ·
+Langfuse tracing (optional, no-op by default) · Azure OpenAI and Gemini behind a
+provider-agnostic interface with a deterministic FakeLLM · a deterministic eval harness.
+Depth, diagrams and the decision log are in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Quickstart
 
-Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+Python 3.12+ and [uv](https://docs.astral.sh/uv/). No credentials, no `.env`, no network
+after install.
 
 ```bash
-# 1. Install
 uv sync --all-groups
 
-# 2. Run the tests (with coverage)
-uv run pytest
-
-# 3. Run a scan against the mock estate
-uv run costsentinel scan
-
-# ... or as JSON
-uv run costsentinel scan --json
-
-# ... or for a single client
-uv run costsentinel scan --client northwind-energy
+uv run pytest                                                 # the suite, with coverage
+uv run costsentinel scan --client northwind-energy --summary  # scan the synthetic estate
+uv run costsentinel report --client northwind-energy --stdout # the client document
+uv run costsentinel eval --smoke                              # the gates CI enforces
+uv run costsentinel dashboard                                 # the operator surface, as HTML files
 ```
 
-No `.env` is needed. Copy `.env.example` to `.env` only when you want to change the
-defaults; `MODE=mock` and `LLM_BACKEND=fake` are the defaults and require nothing.
-
-### Reading a report
-
-[`docs/sample-report.md`](docs/sample-report.md) is a real rendered output, committed
-so you can read one without running anything. It describes the synthetic mock estate
-and is banner-marked as such: the rates in it are real published Azure prices, but the
-estate they are applied to is invented.
-
-```bash
-# Render the mock estate (written under tmp/reports, which is gitignored)
-uv run costsentinel report
-
-# ... one client, to the terminal
-uv run costsentinel report --client northwind-energy --stdout
-
-# ... and as a PDF, which needs the optional extra
-uv sync --extra reports
-uv run costsentinel report --pdf
-```
-
-The document has five sections, because there are five claims a client must not
-conflate. A section with nothing in it is omitted rather than left hanging, so the
-committed sample shows four of them -- the mock estate has no resource that a detector
-flags *and* a tag exempts, and every finding in it happens to be priceable, which is
-recorded as a gap under Phase 9. `tests/golden/full-report.md` shows all five. They
-are: ranked **recommended actions**; **worth investigating -- saving unknown**,
-where a finding appears by name with the reason no figure could be derived; **flagged
-but exempt**, which shows what a resource costs now and never a saving; **spend changes
--- investigate**, which shows a difference and proposes nothing; and **spend we could
-not assess**, because a gap in a cost series is unknown rather than zero.
-
-Every number in the rendered document must trace to a figure the pipeline produced.
-That is a blocking gate (`rendered.figure_accuracy`), not a review habit: rendering may
-copy a figure and may never compose one, so a rounded total or a sum computed in the
-layout fails the build. Model-written sentences are quoted verbatim and graded for
-groundedness in the rendered text, because grading the internal object says nothing
-about the document unless the document quotes it.
-
-### The operator surface
-
-![The estate overview](docs/dashboard/1-estate-overview.jpg)
-
-A read-only dashboard over the same `ClientReport` the Markdown report renders — the
-same object, the same sections, in the same order, so two readers of one sweep cannot
-see different things about it. [Four captures of it on the mock
-estate](docs/dashboard/) are committed, so you can see the surface without running it.
-
-```bash
-# Write the pages to files; they open with nothing listening
-uv run costsentinel dashboard
-
-# ... or serve them (on BIND_HOST, loopback by default)
-DASHBOARD_ENABLED=true uv run costsentinel serve
-```
-
-**The view computes no figure.** Every value on a page is a string the report already
-produced, and the check that holds that line is the same function the rendered-report
-gate uses — one standard for the document and the page, weakened in one place or not at
-all. The stylesheet is inline and nothing is fetched at runtime, so a page renders
-identically on a machine with no network.
-
-The queue page can record a decision when `DASHBOARD_CAN_DECIDE=true`, and it does so by
-calling the same three functions `costsentinel approvals decide` calls. There is no
-second decision implementation — asserted in both directions, so removing the shared
-call fails as loudly as adding a local one.
-
-**An unsafe decision surface refuses to start.** With `DASHBOARD_CAN_DECIDE=true`, a
-non-loopback `BIND_HOST` and no authenticator, the server does not start, and the error
-says how to fix it. A decision that arrives on a non-loopback socket is refused even if
-the server was started some other way. Nothing verifies who an approver is yet, which is
-a Phase 10b item, so every decision records its approver as **self-asserted and
-unverified**, and the page says so next to the form.
-
-### Approving something
-
-A sweep that proposes a `review` or `block` action does not finish. It writes the
-report, halts at a durable checkpoint and exits, so the decision can be made later --
-from a different terminal, on a different day.
-
-```bash
-# What is waiting, with the figures the report showed
-uv run costsentinel approvals list
-
-# Decide one item; the sweep resumes from where it stopped
-uv run costsentinel approvals decide rec-orphdisk-5a876f8bb6 \
-  --approve --reason "confirmed orphaned; platform team will delete it" \
-  --approver "you@example.com"
-```
-
-Three answers. `--approve` hands the action to a person and records the hand-off.
-`--reject` resolves it. `--defer` records "not now" and **leaves it in the queue**,
-which is the difference between it and a rejection -- and the queue shows how many
-times something has been deferred, because an item that keeps being postponed is itself
-a decision nobody wrote down. A reason is mandatory on all three.
-
-**Approving does not apply anything.** There is no execution path in CostSentinel, and
-that is structural rather than unfinished: no module imports a mutating Azure client,
-no approval record carries anything callable, no combination of decision and action
-class reaches a mutation, and approving the mock estate's disk *deletion* makes
-measurably zero provider calls. Four separate tests, because one proof is a claim.
-
-### Talking to another agent
-
-One read-only A2A v1 Agent Card, served at `/.well-known/agent-card.json` when
-`A2A_ENABLED=true`. Three skills: request a cost review, fetch the current findings,
-fetch the pending-approval queue. There is no advertised skill that decides an approval
-and none that changes a resource -- and the test that holds that line matches the
-advertised ids, names, tags and examples against a vocabulary of mutating verbs, so a
-skill added later has to pass it.
-
-The card is in the A2A v1 wire shape and is **signed with a JWS per A2A v1** (ES256
-over the RFC 8785 canonical card, detached payload). An independent JOSE implementation
-verifies it in CI, as does the spec's own canonicalisation example. The public key is at
-`/.well-known/agent-card-jwks.json`. A task is submitted, polled, collected as a typed
-artefact, or cancelled before it starts. Nothing on the surface can change a resource or
-record a decision.
-
-### When the model is unavailable
-
-A CostSentinel report does not depend on a language model being reachable. Every
-figure, action class, rank and approval-queue entry is arithmetic over provider
-data; the model narrates those facts and cannot change one of them. So a backend
-outage, a fallback to the secondary, or a token ceiling being reached costs the
-**prose** and nothing else.
-
-```bash
-# Retry on a second backend when the primary fails (must differ from LLM_BACKEND)
-LLM_FALLBACK_BACKEND=gemini
-
-# Cap model tokens per sweep; unset means uncapped
-LLM_TOKEN_BUDGET=200000
-```
-
-A degraded report says so: the executive summary reads "Narrative unavailable
-(token budget reached)" and a processing note states that the figures are
-unaffected. It is never left blank, because a blank narrative reads as "nothing
-worth saying", which is both wrong and the more flattering reading.
-
-SECURITY.md section 5 has the full table of what is and is not produced. The
-property is tested by building the same estate's report three ways -- prose from
-the primary, prose from the secondary after a fallback, and none at all -- and
-comparing every deterministic field.
-
-### The learning loop
-
-CostSentinel remembers what a client decided and does not re-pitch it. No database
-needed: the default store is a local SQLite file and the default embedder is
-deterministic.
-
-```bash
-# 1. Scan. The run's findings are written to episodic memory.
-uv run costsentinel scan --client northwind-energy --summary
-
-# 2. Record what the client said about one of them.
-uv run costsentinel decisions --client northwind-energy      # ids you can decide on
-uv run costsentinel decide <recommendation-id> --reject   --reason "owner confirmed this is a quarter-end batch host"
-
-# 3. Scan again. It comes back annotated and ranked lower.
-uv run costsentinel scan --client northwind-energy --summary
-```
-
-The second scan reports `1 previously declined`, and the finding carries
-`memory: Previously declined on <date>, reason: ... (was #1 on merit)`.
-
-**Memory reorders and annotates. It never recomputes.** Every monetary figure in the
-second report is byte-identical to the first, the same findings are present, and only
-the order and the annotations differ — a declined recommendation does not make the
-waste disappear, so it is demoted rather than dropped. A test asserts the whole
-property end to end.
-
-For a durable store shared across runs and operators:
-
-```bash
-docker compose up --build     # app plus postgres-with-pgvector
-```
-
-### Measuring whether any of this works
-
-The product's claims are measured rather than asserted. `costsentinel eval` runs the
-**real** pipeline against committed labelled estates and scores it.
-
-```bash
-uv run costsentinel eval            # every dataset; writes evals/REPORT.md
-uv run costsentinel eval --smoke    # the fast subset CI runs on every commit
-```
-
-Fully offline: the fake model, the deterministic judge, memory off, no credential.
-The current scorecard is committed at [evals/REPORT.md](evals/REPORT.md).
-
-**Two things are gates, not scores.** Safety recall must be 100% — every destructive
-remediation classified at least as strictly as its floor and requiring approval — and
-every reported money figure must equal the committed ground truth exactly, not within
-tolerance. A prompt injection that changed any action, class or figure fails too.
-Those exit non-zero and fail a build. Precision, recall, ranking and groundedness
-report a number and never block: a low score is something to look at, not a reason to
-refuse a merge.
-
-**The adversarial cases are the point of the datasets.** When the harness landed, all
-three of them failed, deliberately: the detectors read no tag exemption, so a
-disaster-recovery standby was reported as idle and a snapshot carrying a HIPAA
-retention tag was reported as stale, and the rightsizing thresholds let a genuinely
-oversized machine hide just above them. They were in the datasets to make those gaps
-visible rather than to hide them.
-
-Phase 6 closed all three, which is the sequence working as intended: measure first,
-then fix, so that neither number is a guess. The scorecard now reports 3/3 handled
-correctly with detection precision and recall both at 1.00. For the two resources that
-are idle *by design*, "handled correctly" means **surfaced but not actionably
-recommended** -- the standby really is idle, and a tool that scored full marks for
-never noticing it would be a worse tool, not a better one.
-
-### Scanning a real Azure estate
-
-Read [SECURITY.md](SECURITY.md) first. The short version:
-
-```bash
-uv sync --extra real
-az login
-uv run costsentinel scan --real --subscription <subscription-id>
-```
-
-The run is read-only -- there is no write operation anywhere in the codebase -- and
-it writes its report to `var/real-runs/`, which is gitignored. It needs `Reader` and
-`Cost Management Reader` on the named subscriptions and nothing more, and it refuses
-to run without an explicit `--subscription`: there is no wildcard.
-
-Pilot on a personal or sandbox subscription, get written approval before any client
-estate, and never commit the output.
-
-### Lint and type-check
-
-```bash
-uv run ruff check .
-uv run ruff format --check .
-uv run pyright
-```
-
-### The API
-
-```bash
-uv run uvicorn costsentinel.api.app:app --reload
-```
-
-Then:
-
-```bash
-curl -X POST localhost:8000/scan -H 'content-type: application/json' -d '{}'
-curl -X POST localhost:8000/scan -H 'content-type: application/json' \
-  -d '{"client": "northwind-energy"}'
-```
-
-`GET /health` reports the active mode and LLM backend. The OpenAPI docs are at
-`/docs`.
-
-### Resumability
-
-Each client's scan is a LangGraph thread keyed by its run id, checkpointed to
-`.costsentinel/checkpoints.sqlite` after every node. A crashed or interrupted sweep
-resumes from the last completed node rather than re-reading the estate — which in
-Phase 10 is also the mechanism that lets the graph halt for days awaiting a human
-approval.
-
-### Observability
-
-Structured JSON logs carry the `run_id` on every event in a sweep. Each run records
-token usage, computed cost and latency per model call, along with the routing decision
-that chose the model.
-
-Tracing is a seam with a no-op default. To send traces to Langfuse:
-
-```bash
-uv sync --extra tracing
-# then set LANGFUSE_HOST, LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY
-```
-
-`langfuse` is an *optional* extra and is never a hard dependency: if it is absent or
-unconfigured, tracing degrades to a no-op and logs that it did. CI does not install
-it.
-
-### Refreshing prices
-
-Every monetary figure traces to the committed snapshot at
-`src/costsentinel/providers/data/price_catalogue.json`. The figures shipped with this
-repository are plausible curated values and are **not** a real Azure pull — the
-snapshot says so in `is_real_api_pull`, and their provenance is marked unverified.
-
-To replace them with a real pull from the public Azure Retail Prices API:
-
-```bash
-uv run python scripts/refresh_prices.py --dry-run   # fetch and report, write nothing
-uv run python scripts/refresh_prices.py             # write the snapshot
-```
-
-Run it by hand only. It is never invoked by CI or by any test, and a test asserts
-that. Review the diff before committing: savings assertions are baselined against
-these figures and will need re-baselining.
-
-## Repository layout
-
-```
-src/costsentinel/
-  config.py          settings; MODE and LLM_BACKEND flags (default mock + fake)
-  domain/            Pydantic v2 types -- every module boundary
-  providers/         AzureProvider protocol + MockAzureProvider
-  llm/               LLM protocol, FakeLLM, real adapters, task routing
-  providers/data/    committed price catalogue snapshot
-  agents/            the six specialists, the supervisor, the memory consult step,
-                     detectors, savings, ranking
-  graph/             graph assembly + checkpointer + sweep runner
-  guardrails/        policy store, action classes, exemption policy, approval-gate seam
-  guardrails/data/   committed tag conventions that mark a resource exempt
-  memory/            episodic + semantic stores, embedder, recall, decisions
-  memory/data/       committed synthetic policy and guidance corpus
-  reports/           Markdown and PDF rendering (Phase 8)
-  observability/     structured logging + the tracing seam
-  tools/             read-only MCP Azure tool server
-  dashboard/         the operator surface: view model, HTML, routes (Phase 11)
-  a2a/               the read-only Agent Card and task lifecycle (Phase 10)
-  api/               FastAPI app
-  cli.py             CLI entry point
-scripts/             refresh_prices.py (manual, never CI)
-evals/datasets/      committed labelled estates, with ground truth
-evals/harness/       the scorecard harness: metrics, gates, judge, runner
-evals/REPORT.md      the committed scorecard
-tests/
-```
-
-## Safety posture
-
-See [SECURITY.md](SECURITY.md) for the full picture, the permissions a real run
-needs, and how to report a vulnerability.
-
-- Nothing destructive runs. There is no execution path at all. Read-only is
-  structural, not configured: `ToolOperation` has one member, the MCP server serves
-  exactly what the registry holds, and no Azure SDK able to mutate a resource is
-  installed. `tests/test_readonly.py` asserts all three.
-- Real Azure access is `DefaultAzureCredential` only. There is no client-secret
-  setting, so there is no secret for this codebase to log, trace or commit.
-- A real run's output is gitignored and a pre-commit hook refuses to commit it,
-  along with any subscription id that does not look deliberately synthetic.
-- Memory may change the order of findings and their annotations, and may never change
-  a number. Enforced by test, not by convention.
-- Safety recall is a gate, not a metric. A destructive action that is not correctly
-  gated fails the build, and `costsentinel eval` has been shown to go red on a
-  deliberately broken classifier and green again when it is restored.
-- Every action is classified; the built-in action-class floor cannot be loosened by
-  configuration.
-- A spend anomaly says "investigate" and can never become an action. Neither anomaly
-  type has a field for an action, a class or a saving; the detector imports no action
-  vocabulary; an anomaly is not a waste signal so the planner cannot reach one; and its
-  difference reaches no savings total. Asserted four ways.
-- Exemption reads tags and can only reduce what is proposed. A tag can suppress a
-  recommendation and can never loosen a class, make something automatable, or raise a
-  finding's rank. Asserted structurally (the exemption modules cannot import a
-  classifier), representationally (a verdict has no field for a class or an amount),
-  exhaustively (every rule key and value against every gated action) and end to end.
-  A client's tag overlay may *add* exemptions and can never remove a built-in one.
-- LLM output and cloud resource metadata are both treated as untrusted: validated
-  against a schema, and passed to models as delimited data, never as instructions.
-- No secrets in code or git. Configuration is environment-driven, and CI needs no
-  secrets and no network access to a cloud or LLM provider.
+Or read the committed output: [`docs/sample-report.md`](docs/sample-report.md). Every
+command, the approval and learning flows, the API, and a real-Azure run are in the
+[operator guide](docs/guide.md).
+
+## Scope and safety
+
+- **Synthetic data only.** Everything in this repository runs on a synthetic mock estate
+  committed alongside the code. The prices are real published Azure rates; the estate
+  they are applied to is invented. No real client data is in the repository, and a
+  pre-commit guard refuses real run output and non-synthetic subscription ids.
+- **Read-only.** No mutating Azure client exists in the codebase, and tests assert it.
+- **Executes nothing.** Approving an action records a decision and hands the action to a
+  person. There is no execution path to reach.
+- **The real-provider path is opt-in and read-only**, and needs only `Reader` and
+  `Cost Management Reader`. Point it only at a sandbox subscription you own, with
+  approval. It has not been run against a real estate as part of building this project.
+  Read [SECURITY.md](SECURITY.md) first.
+- **Known limits, stated rather than hidden:** approvers are recorded as self-asserted
+  until a real authenticator exists, so a dashboard that can record decisions refuses to
+  start off loopback. A2A interop with an external agent is untested. Anomaly thresholds are
+  defensible defaults that have not been calibrated against a real estate. See
+  [ROADMAP.md](ROADMAP.md).
+
+## How it was built
+
+Twelve issue-driven phases. Each one was a GitHub milestone with an issue per task,
+built on its own branch in Conventional Commits, merged by pull request with CI green,
+and tagged as a [release](https://github.com/vivekanjana76/costsentinel/releases). The
+suite has about 1,470 tests at 93% coverage, and CI fails under 90%. The phase order
+changed nine times, and each change is recorded with its reason in
+[ROADMAP.md](ROADMAP.md). What changed in each release is in
+[CHANGELOG.md](CHANGELOG.md).
+
+## License
+
+[MIT](LICENSE).
