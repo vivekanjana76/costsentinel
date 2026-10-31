@@ -2863,3 +2863,21 @@ because it has no safe midpoint. Transitions happen under one lock, because the 
 a cancel can arrive on different threads. Artefacts became one Pydantic type per skill,
 because `Mapping[str, Any]` across the system's most external boundary broke golden
 rule 6.
+
+**D131. A documentation phase is a patch release, not a numbered phase.** *Context:*
+after Phase 12 the system was complete for what CI can check offline, and was hard to
+judge in two minutes: the README was also the operator manual and carried claims that
+had gone stale (a curated price catalogue that is now a real pull, two gates where there
+are four, a sample-report gap closed in Phase 9). *Alternatives:* number it Phase 13,
+which ROADMAP already uses for execution; or fold the work into the next feature phase.
+*Why:* the phase adds no product behaviour, so by semver it is a patch (v0.12.1), and
+taking a phase number would renumber a roadmap whose numbering is referenced from every
+decision since Phase 3. Folding it into a feature phase would put the corrections behind
+work that needs a real peer or a real tenant. Two rules came with it. The README makes a
+claim only with a link to the test or file that holds it, and a guard test fails when a
+link, a cited test name or the gate list drifts. And the demo is a **committed plain-text
+transcript** rather than a recording, because every recorder available would be a new
+dependency CI cannot exercise. A test replays each command as its own subprocess and
+compares the output, so the transcript cannot go stale. The replay also made the
+cross-process approval claim a tested one: the Phase 10 durability test discards the
+graph but stays in one process.
