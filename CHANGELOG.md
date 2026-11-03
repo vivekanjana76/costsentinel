@@ -12,7 +12,7 @@ Nothing yet. The remaining feature phases are open and optional: 9b (calibration
 real traffic), 10b (approval adapters and the real authenticator) and 12b (A2A interop,
 #113).
 
-## [0.12.1] - 2026-10-31
+## [0.12.1] - 2026-11-03
 
 A documentation and legibility release. No product behaviour changed. The goal was a
 repository a first-time reader can judge in two minutes, with no claim on its front page

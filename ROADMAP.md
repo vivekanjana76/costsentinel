@@ -1,10 +1,14 @@
 # CostSentinel — Roadmap
 
-**Current phase: none in progress.** Phase 12 shipped as v0.12.0, and a documentation
-phase followed as v0.12.1 (see "Docs phase" below). The remaining feature phases are
-**open and optional**: 9b (calibration against real traffic), 10b (approval adapters and
-the real authenticator) and 12b (A2A interop). Each needs a real tenant, a real model,
-a real workspace or a real peer. Phase 13 (execution) depends on 10b.
+**Current phase: 10b** — the Slack approval adapter, and the real authenticator the
+dashboard interlock deferred. Both share one identity and authorisation path.
+
+**One reordering, flagged.** 10b runs before the still-open 9b, although 9b is numbered
+first. 10b can be finished offline against synthetic payloads and a test signing
+secret. 9b cannot be finished at all without real traffic. Teams and the
+timeout-and-escalation policy move out of 10b into a new **Phase 10c** that reuses this
+phase's seam. 9b and 12b stay open and optional. Phase 13 (execution) still depends on
+10b.
 
 Phases are sequential. Do not start work in a later phase before the current phase
 is complete and its exit criteria are met. If an idea arrives mid-phase, record it
@@ -775,38 +779,62 @@ be finished offline.
 
 ---
 
-## Phase 10b — Approval adapters and the real authenticator (open, optional)
+## Phase 10b — The Slack approval adapter and the real authenticator
 
-**Goal:** the decision reaches the human where they already are, instead of in a
-terminal.
+**Goal:** a gated decision reaches a human in Slack and comes back through the one
+audited, durable decision path, with an approver who is verified and authorised. The
+dashboard gains the same verified identity.
 
-Split from Phase 10 for the same reason 9b was split from 9: these need recorded
-payloads from real workspaces and two new dependencies, and bundling them with the
-interrupt would mean a phase that could not be closed without a Slack workspace. The
-interrupt, the decision record and the CLI gate are the contract they implement.
+Split from Phase 10 for the same reason 9b was split from 9. Re-scoped in Phase 10b:
+Slack and the authenticator can be finished offline against synthetic payloads, while
+Teams and an escalation policy are now Phase 10c. The interrupt, the decision record
+and the CLI gate are the contract both adapters implement.
 
-- [ ] Teams adapter: adaptive card with the proposal, savings and risk class
-- [ ] Slack adapter: Block Kit message with approve and reject actions
-- [ ] Webhook receiver for decision callbacks, signature-verified
-- [ ] Approver identity and authorisation checks: who may approve what, for which client
-- [ ] **The dashboard authenticator**: a verified approver identity and authorisation on
-      the dashboard decision surface, implementing the `Authenticator` seam Phase 12
-      added. Until it exists the only authenticator is `NullAuthenticator`, which records
-      the approver as self-asserted and is refused off loopback (D125, D126). The same
-      identity check covers the adapters above; one notion of "who approved" rather than
-      one per surface
-- [ ] Decision deduplication and idempotency on replayed callbacks. A replayed approval
-      must not become a second approval
-- [ ] Timeout and escalation policy. **No decision never means approved** -- the
-      `Decision` enum has no such member and the gate has no path to one, so this is
-      about who gets asked next rather than about what happens by default
-- [ ] Adapters tested against recorded payloads, with no live workspace in CI
+Milestone: *Phase 10b - The Slack approval adapter and the real authenticator*.
 
-**Exit criteria:** a destructive recommendation halts; a decision recorded from Teams or
-from Slack resumes the correct sweep; a replayed callback changes nothing.
+- [ ] Roadmap set to this phase; Teams and escalation split into 10c (#124)
+- [ ] **One identity and authorisation path** for every surface: a typed principal, an
+      allowlist (optionally per client), and one `authorise()` check that fails closed
+      (#125)
+- [ ] **A single decision service** that every surface calls, idempotent on a
+      redelivered interaction, returning the existing decision for an already-decided
+      item, and recording a refusal as a refusal (#126)
+- [ ] **Slack request signatures verified**: HMAC over timestamp and body, constant-time,
+      with a replay window. A request that fails verification records nothing (#127)
+- [ ] **Block Kit rendering** of each pending approval from the report's own strings,
+      recomputing no figure, with a committed synthetic sample (#128)
+- [ ] **The interaction webhook**: the verified Slack user is the approver, an
+      unauthorised click is refused and recorded, a duplicate is one decision (#136)
+- [ ] An **outbound client seam** with a fake and a standard-library client, opt-in
+      configuration, and `costsentinel slack render|post` (#129)
+- [ ] **The dashboard authenticator**: a signed approver token on the shared
+      authorisation path. The non-loopback refusal is lifted only when it is configured
+      (#130)
+- [ ] **A Slack approval never executes**, asserted four ways (#131)
+- [ ] Stale references swept (#132); the oldest open item resolved (#133); coverage and
+      slow tests checked (#134); ARCHITECTURE, README, CHANGELOG for v0.13.0 (#135)
 
-**New dependencies to flag:** `slack-sdk`, an HTTP client, and a signature-verification
-library. All behind an optional extra CI does not install.
+**Exit criteria:** a destructive recommendation halts; a signed Slack approval from an
+allowlisted user resumes the correct sweep with a verified approver; a bad, missing or
+stale signature records nothing; a redelivered callback changes nothing; an unauthorised
+click is recorded as refused; and nothing on the path can mutate a resource.
+
+**New dependencies to flag:** none. Signature verification is `hmac` and `hashlib` from
+the standard library, and the outbound client is `urllib.request`. `slack-sdk` was
+expected here and is not needed for two endpoints.
+
+---
+
+## Phase 10c — Teams and escalation (open, optional)
+
+**Goal:** the same seam, a second chat surface, and an answer to "nobody responded".
+
+- [ ] Teams adapter: an adaptive card with the proposal, saving and risk class, through
+      the Phase 10b decision service and `authorise()`
+- [ ] Timeout and escalation policy. **No decision never means approved**: the
+      `Decision` enum has no such member and the gate has no path to one. So this is
+      about who gets asked next, not about what happens by default
+- [ ] Teams tested against synthetic payloads, with no live tenant in CI
 
 ---
 
