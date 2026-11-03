@@ -25,10 +25,12 @@ import getpass
 import json
 import sys
 import tempfile
+import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from costsentinel.approvals import token as approver_token
 from costsentinel.approvals.identity import ApproverIdentity, Surface
 from costsentinel.approvals.ledger import OutcomeKind
 from costsentinel.approvals.service import decide as decide_approval
@@ -128,6 +130,32 @@ def _add_slack(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
     ):
         one = slack_actions.add_parser(name, help=text, description=text)
         one.add_argument("--run-id", default=None, help="One paused sweep. Default: all.")
+
+
+def _add_approvers(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
+    """Minting the approver tokens a verifying dashboard checks."""
+    approvers = add_parser(
+        "approvers",
+        help="Mint a signed, expiring approver token for the dashboard.",
+        description=(
+            "With APPROVER_TOKEN_SECRET set, the dashboard verifies a token with each "
+            "decision instead of taking a typed name. The token says who the approver "
+            "is; APPROVER_ALLOWLIST (token:<name>) still says whether they may decide. "
+            "Rotating the secret revokes every token."
+        ),
+    )
+    actions = approvers.add_subparsers(dest="approvers_command", required=True)
+    mint = actions.add_parser("token", help="Print a token for one approver.")
+    mint.add_argument("name", help="Letters, digits, '_' and '-'. Recorded as token:<name>.")
+    mint.add_argument(
+        "--days", type=int, default=7, help="How long it is valid. Default 7, at most 90."
+    )
+
+
+def _add_approval_surfaces(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
+    """The Slack adapter's commands, and the dashboard's approver tokens."""
+    _add_slack(add_parser)
+    _add_approvers(add_parser)
 
 
 def _add_surfaces(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
@@ -342,7 +370,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Who decided. Defaults to the operating system user.",
     )
 
-    _add_slack(subcommands.add_parser)
+    _add_approval_surfaces(subcommands.add_parser)
 
     decisions = subcommands.add_parser(
         "decisions",
@@ -1101,6 +1129,32 @@ def run_slack(
     return 0
 
 
+def run_approvers(
+    args: argparse.Namespace, settings: Settings, now: Callable[[], float] = time.time
+) -> int:
+    """Print a signed approver token, or say why one cannot be made."""
+    if settings.approver_token_secret is None:
+        print(f"{PROGRAM}: set APPROVER_TOKEN_SECRET to mint approver tokens", file=sys.stderr)
+        return 2
+    try:
+        minted = approver_token.mint(
+            settings.approver_token_secret.get_secret_value(),
+            args.name,
+            now=int(now()),
+            lifetime_seconds=args.days * 86_400,
+        )
+    except approver_token.TokenError as exc:
+        print(f"{PROGRAM}: {exc}", file=sys.stderr)
+        return 2
+    print(minted)
+    print(
+        f"Valid for {args.days} day(s). Identifies the bearer as token:{args.name}; "
+        f"APPROVER_ALLOWLIST decides whether they may approve. Treat it as a password.",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def run_dashboard(args: argparse.Namespace, settings: Settings) -> int:
     """Write the operator surface to files."""
     directory = Path(args.out) if args.out else DEFAULT_DASHBOARD_DIR
@@ -1151,6 +1205,7 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], int]] = {
     "report": run_report,
     "approvals": run_approvals,
     "slack": run_slack,
+    "approvers": run_approvers,
     "dashboard": run_dashboard,
     "serve": run_serve,
 }

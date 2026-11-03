@@ -115,8 +115,8 @@ class _VerifyingAuthenticator:
     name = "test-sso"
     verifies = True
 
-    def identify(self, request: Request, asserted: str) -> ApproverIdentity:
-        _ = asserted
+    def identify(self, request: Request, asserted: str, credential: str = "") -> ApproverIdentity:
+        _ = asserted, credential
         user = request.headers.get("x-test-user", "nobody")
         return ApproverIdentity(
             name=user,
@@ -420,9 +420,18 @@ def test_the_null_authenticator_verifies_nothing_and_says_so() -> None:
     assert identity.verified_by is None
 
 
-def test_the_interlock_reads_only_verifies_off_the_authenticator(tmp_path: Path) -> None:
-    """The restriction lifts for an authenticator that verifies, and for no other reason."""
-    settings = _settings(tmp_path, bind=EVERYWHERE)
+def test_the_interlock_lifts_only_for_verification_plus_an_allowlist(tmp_path: Path) -> None:
+    """Off loopback, decisions need both: who someone is, and a list of who may decide.
+
+    Verification alone would serve a surface on which nobody can decide, which is a
+    misconfiguration, so it refuses too. Neither half lifts it on its own.
+    """
+    bare = _settings(tmp_path, bind=EVERYWHERE)
+    listed = _settings(tmp_path, bind=EVERYWHERE, allowlist="token:alice")
     with pytest.raises(UnsafeDecisionSurfaceError):
-        check_decision_surface(settings, NullAuthenticator())
-    check_decision_surface(settings, _VerifyingAuthenticator())
+        check_decision_surface(bare, NullAuthenticator())
+    with pytest.raises(UnsafeDecisionSurfaceError):
+        check_decision_surface(listed, NullAuthenticator())
+    with pytest.raises(UnsafeDecisionSurfaceError):
+        check_decision_surface(bare, _VerifyingAuthenticator())
+    check_decision_surface(listed, _VerifyingAuthenticator())

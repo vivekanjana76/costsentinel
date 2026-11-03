@@ -182,6 +182,17 @@ class Settings(BaseSettings):
         ),
     )
 
+    approver_token_secret: SecretStr | None = Field(
+        default=None,
+        validation_alias=_env("APPROVER_TOKEN_SECRET"),
+        description=(
+            "The key approver tokens are signed with, at least 32 characters. Set, the "
+            "dashboard verifies a token with each decision instead of taking a typed "
+            "name, and may then decide off loopback if APPROVER_ALLOWLIST names who "
+            "(ARCHITECTURE.md D136). Unset by default. Rotating it revokes every token."
+        ),
+    )
+
     # --- Slack approval adapter -------------------------------------------
     slack_enabled: bool = Field(
         default=False,

@@ -44,9 +44,10 @@ from costsentinel.approvals.ledger import DecisionOutcome, OutcomeKind
 from costsentinel.approvals.service import decide
 from costsentinel.config import Settings
 from costsentinel.dashboard.auth import (
+    AuthenticationError,
     Authenticator,
-    NullAuthenticator,
     arrived_on_loopback,
+    authenticator_from_settings,
     check_decision_surface,
     may_decide,
 )
@@ -180,7 +181,7 @@ def build_router(settings: Settings, authenticator: Authenticator | None = None)
     the bind the app can always see.
     """
     router = APIRouter(tags=["dashboard"])
-    auth: Authenticator = authenticator or NullAuthenticator()
+    auth: Authenticator = authenticator or authenticator_from_settings(settings)
     verifies = auth.verifies
 
     @router.get(BASE_PATH, response_class=HTMLResponse)
@@ -236,14 +237,16 @@ def build_router(settings: Settings, authenticator: Authenticator | None = None)
         decision = _one(fields, "decision")
         reason = _one(fields, "reason")
         approver = _one(fields, "approver")
+        credential = _one(fields, "approver_token")
 
+        # A verifying deployment names the approver from the credential, not a typed name.
         missing = [
             name
             for name, value in (
                 ("recommendation_id", recommendation_id),
                 ("decision", decision),
                 ("reason", reason),
-                ("approver", approver),
+                ("approver", approver or ("token" if verifies else "")),
             )
             if not value
         ]
@@ -275,7 +278,11 @@ def build_router(settings: Settings, authenticator: Authenticator | None = None)
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, f"{decision!r} is not a decision; expected {allowed}"
             ) from exc
-        identity = auth.identify(request, approver)
+        try:
+            identity = auth.identify(request, approver, credential)
+        except AuthenticationError as exc:
+            # No verified author, so nothing to record a refusal against (D134, D136).
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
         try:
             outcome = record_decision(
                 settings,
@@ -310,7 +317,7 @@ def mount(app: FastAPI, settings: Settings, authenticator: Authenticator | None 
     if not settings.dashboard_enabled:
         _log.info("dashboard disabled")
         return False
-    auth: Authenticator = authenticator or NullAuthenticator()
+    auth: Authenticator = authenticator or authenticator_from_settings(settings)
     check_decision_surface(settings, auth)
     app.include_router(build_router(settings, auth))
     _log.info(
