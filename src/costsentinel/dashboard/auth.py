@@ -41,24 +41,20 @@ import ipaddress
 from typing import Protocol
 
 from fastapi import Request
-from pydantic import Field, model_validator
 
+from costsentinel.approvals.identity import ApproverIdentity
 from costsentinel.config import Settings
-from costsentinel.domain.common import Frozen
-from costsentinel.domain.governance import ApproverAssurance, check_assurance
 
-
-class ApproverIdentity(Frozen):
-    """Who an authenticator says is deciding, and how sure it is."""
-
-    name: str = Field(min_length=1)
-    assurance: ApproverAssurance
-    verified_by: str | None = None
-
-    @model_validator(mode="after")
-    def _assurance_is_consistent(self) -> ApproverIdentity:
-        check_assurance(self.assurance, self.verified_by)
-        return self
+__all__ = [
+    "ApproverIdentity",
+    "Authenticator",
+    "NullAuthenticator",
+    "UnsafeDecisionSurfaceError",
+    "arrived_on_loopback",
+    "check_decision_surface",
+    "is_loopback",
+    "may_decide",
+]
 
 
 class Authenticator(Protocol):
@@ -105,7 +101,7 @@ class NullAuthenticator:
     def identify(self, request: Request, asserted: str) -> ApproverIdentity:
         """The typed name, marked self-asserted."""
         _ = request
-        return ApproverIdentity(name=asserted, assurance=ApproverAssurance.SELF_ASSERTED)
+        return ApproverIdentity.self_asserted(asserted)
 
 
 class UnsafeDecisionSurfaceError(RuntimeError):

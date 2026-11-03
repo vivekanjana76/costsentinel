@@ -111,10 +111,12 @@ class _VerifyingAuthenticator:
 
     def identify(self, request: Request, asserted: str) -> ApproverIdentity:
         _ = asserted
+        user = request.headers.get("x-test-user", "nobody")
         return ApproverIdentity(
-            name=request.headers.get("x-test-user", "nobody"),
+            name=user,
             assurance=ApproverAssurance.VERIFIED,
             verified_by=self.name,
+            principal=f"token:{user.split('@', 1)[0]}",
         )
 
 

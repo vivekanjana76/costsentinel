@@ -168,6 +168,20 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- approver identity and authorisation ------------------------------
+    approver_allowlist: str = Field(
+        default="",
+        validation_alias=_env("APPROVER_ALLOWLIST"),
+        description=(
+            "Who may approve from a surface that verifies identity: comma-separated "
+            "principals (slack:<team>/<user>, slack-group:<team>/<group>, token:<name>), "
+            "each optionally scoped to one client with @<client>. Empty by default, and "
+            "empty admits nobody: a verified identity is not on its own a permission "
+            "(ARCHITECTURE.md D132). Self-asserted names on the CLI or a loopback "
+            "dashboard are unaffected."
+        ),
+    )
+
     # --- A2A surface -----------------------------------------------------
     a2a_enabled: bool = Field(
         default=False,
