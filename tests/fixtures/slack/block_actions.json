@@ -1,0 +1,38 @@
+{
+  "type": "block_actions",
+  "api_app_id": "A0SYNTH01",
+  "token": "synthetic-verification-token-unused",
+  "trigger_id": "0000000000.0000000000.synthetic",
+  "team": {"id": "T0SYNTH01", "domain": "synthetic-workspace"},
+  "user": {
+    "id": "{user_id}",
+    "username": "{user_name}",
+    "name": "{user_name}",
+    "team_id": "T0SYNTH01"
+  },
+  "container": {
+    "type": "message",
+    "message_ts": "1730599000.000100",
+    "channel_id": "C0SYNTH01",
+    "is_ephemeral": false
+  },
+  "channel": {"id": "C0SYNTH01", "name": "finops-approvals"},
+  "state": {
+    "values": {
+      "costsentinel_reason": {
+        "reason": {"type": "plain_text_input", "value": "{reason}"}
+      }
+    }
+  },
+  "response_url": "https://hooks.slack.com/actions/T0SYNTH01/0000000000/synthetic-never-issued",
+  "actions": [
+    {
+      "type": "button",
+      "action_id": "{action_id}",
+      "block_id": "costsentinel_decision_{recommendation_id}",
+      "text": {"type": "plain_text", "text": "Approve"},
+      "value": "{recommendation_id}",
+      "action_ts": "{action_ts}"
+    }
+  ]
+}

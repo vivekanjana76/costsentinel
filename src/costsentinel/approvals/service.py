@@ -79,6 +79,14 @@ _log = get_logger("approvals.service")
 _DECIDING = threading.Lock()
 
 
+class MissingReasonError(ValueError):
+    """An authorised approver gave no reason. Nothing is recorded; they can try again.
+
+    Raised after authorisation, so an unauthorised click with an empty reason box is
+    still recorded as the refusal it is, rather than turned away as merely incomplete.
+    """
+
+
 def _resolved_record(
     graph: CompiledStateGraph[ScanState, None, ScanState, ScanState],
     saver: BaseCheckpointSaver[str],
@@ -161,6 +169,8 @@ def decide(
     Raises:
         NothingPendingError: If nothing waits on this item and no sweep resolved it.
             Nothing is recorded, because there is nothing it could be recorded against.
+        MissingReasonError: If an authorised approver gave no reason. Nothing is
+            recorded.
     """
     book = ledger or DecisionLedger(settings.decision_ledger_path)
     allowlist = policy or AuthorisationPolicy.from_settings(settings)
@@ -271,6 +281,10 @@ def _decide(
                     **common,
                 ),
             )
+
+        if not reason.strip():
+            msg = f"a reason is required to decide {recommendation_id}; nothing was recorded"
+            raise MissingReasonError(msg)
 
         assert sweep is not None and pending is not None  # noqa: S101 -- narrowed above
         state = resume(

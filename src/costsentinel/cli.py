@@ -1128,12 +1128,13 @@ def run_serve(args: argparse.Namespace, settings: Settings) -> int:
     """
     from costsentinel.api.app import create_app  # noqa: PLC0415 -- only this command serves
     from costsentinel.dashboard.auth import UnsafeDecisionSurfaceError  # noqa: PLC0415
+    from costsentinel.slack.webhook import UnsafeSlackSurfaceError  # noqa: PLC0415
 
     if args.host:
         settings = settings.model_copy(update={"bind_host": args.host})
     try:
         app = create_app(settings)
-    except UnsafeDecisionSurfaceError as exc:
+    except (UnsafeDecisionSurfaceError, UnsafeSlackSurfaceError) as exc:
         print(f"{PROGRAM}: {exc}", file=sys.stderr)
         return 2
 

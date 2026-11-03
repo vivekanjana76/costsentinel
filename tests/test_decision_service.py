@@ -135,19 +135,22 @@ def test_only_the_service_resumes_a_sweep_or_builds_a_decision_request() -> None
     [
         SRC / "cli.py",
         SRC / "dashboard" / "app.py",
-        pytest.param(
-            SRC / "slack" / "webhook.py",
-            marks=pytest.mark.xfail(
-                reason="the Slack webhook is not built yet; closes #136", strict=True
-            ),
-        ),
+        SRC / "slack" / "webhook.py",
     ],
     ids=lambda p: p.parent.name + "/" + p.name,
 )
 def test_every_surface_decides_through_the_service(surface: Path) -> None:
-    """The positive half: each surface calls the shared function, by name."""
-    text = surface.read_text(encoding="utf-8")
-    assert "from costsentinel.approvals.service import decide" in text, surface
+    """The positive half: each surface imports the shared function, and calls it."""
+    tree = ast.parse(surface.read_text(encoding="utf-8"))
+    imported = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "costsentinel.approvals.service"
+        for alias in node.names
+        if alias.name == "decide"
+    }
+    assert imported, f"{surface} does not import approvals.service.decide"
+    assert imported & _calls(surface), f"{surface} imports decide but never calls it"
 
 
 # ---------------------------------------------------------------------------

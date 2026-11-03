@@ -25,6 +25,7 @@ from costsentinel.llm.base import LLMError
 from costsentinel.observability import tracing_status
 from costsentinel.observability.logging import configure_logging
 from costsentinel.providers.base import ProviderError
+from costsentinel.slack.webhook import mount as mount_slack
 
 API_TITLE = "CostSentinel"
 
@@ -91,6 +92,8 @@ def create_app(
         UnsafeDecisionSurfaceError: When the dashboard would serve an unauthenticated
             decision surface on a non-loopback bind. The app is not built, so the
             server does not start (ARCHITECTURE.md D126).
+        UnsafeSlackSurfaceError: When the Slack webhook is enabled with no signing
+            secret to verify a request with (D134).
     """
     configured = settings or get_settings()
     app = FastAPI(
@@ -103,10 +106,10 @@ def create_app(
         ),
     )
 
-    # Both off unless an operator turned them on. The A2A card is published
-    # either way; the dashboard serves nothing until enabled.
+    # All off unless an operator turned them on.
     mount(app, configured)
     mount_dashboard(app, configured, authenticator)
+    mount_slack(app, configured)
 
     @app.get("/health", response_model=HealthResponse, tags=["meta"])
     def health(settings: SettingsDep) -> HealthResponse:
