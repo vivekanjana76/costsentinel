@@ -436,6 +436,12 @@ class AuditEventType(StrEnum):
     #: An approved action was handed to a human operator. This is as far as an
     #: approval goes: there is no execution event, because there is no execution.
     ACTION_HANDED_OFF = "action_handed_off"
+    #: A surface asked to decide and the approver was not authorised. Nothing was
+    #: decided and the sweep did not move (Phase 10b).
+    APPROVAL_REFUSED = "approval_refused"
+    #: A surface asked to decide an item that was already resolved. The existing
+    #: decision was returned unchanged (Phase 10b).
+    DECISION_ALREADY_RECORDED = "decision_already_recorded"
     REPORT_GENERATED = "report_generated"
     SCAN_COMPLETED = "scan_completed"
     ERROR = "error"

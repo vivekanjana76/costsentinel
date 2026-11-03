@@ -28,6 +28,9 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from costsentinel.approvals.identity import ApproverIdentity, Surface
+from costsentinel.approvals.ledger import OutcomeKind
+from costsentinel.approvals.service import decide as decide_approval
 from costsentinel.config import (
     LLMBackend,
     MemoryBackend,
@@ -36,17 +39,14 @@ from costsentinel.config import (
     get_settings,
 )
 from costsentinel.dashboard.static import write_static
-from costsentinel.domain.governance import Decision, DecisionRequest
+from costsentinel.domain.governance import Decision
 from costsentinel.domain.memory import Outcome
 from costsentinel.domain.report import ClientReport, ScanResult
 from costsentinel.graph.approvals import (
     ApprovalsError,
     PausedSweep,
     approvals_graph,
-    find_pending,
-    paused_sweep,
     paused_sweeps,
-    resume,
 )
 from costsentinel.graph.checkpointer import checkpointer_for
 from costsentinel.graph.runner import run_client_scan, run_scan
@@ -999,52 +999,46 @@ def _decision_from(args: argparse.Namespace) -> Decision:
 
 
 def run_approvals(args: argparse.Namespace, settings: Settings) -> int:
-    """Show the pending-approval queue, or decide one item and resume its sweep."""
-    with checkpointer_for(settings) as saver:
-        graph = approvals_graph(settings, saver)
-        sweeps = paused_sweeps(graph, saver)
+    """Show the pending-approval queue, or decide one item and resume its sweep.
 
-        if args.approvals_command == "list":
-            print(describe_queue(sweeps))
-            return 0
+    A decision goes through :func:`costsentinel.approvals.service.decide`, the function
+    the dashboard and the Slack webhook call too, as a self-asserted name on a local
+    surface -- which is what a name typed into this terminal is (D133).
+    """
+    if args.approvals_command == "list":
+        with checkpointer_for(settings) as saver:
+            graph = approvals_graph(settings, saver)
+            print(describe_queue(paused_sweeps(graph, saver)))
+        return 0
 
-        try:
-            sweep, pending = find_pending(sweeps, args.recommendation_id)
-        except ApprovalsError as exc:
-            print(f"{PROGRAM}: {exc}", file=sys.stderr)
-            return 1
-
-        decision = _decision_from(args)
-        request = DecisionRequest(
-            recommendation_id=pending.recommendation_id,
-            decision=decision,
-            approver=args.approver or _decided_by(args),
+    try:
+        outcome = decide_approval(
+            settings,
+            recommendation_id=args.recommendation_id,
+            decision=_decision_from(args),
             reason=args.reason,
+            identity=ApproverIdentity.self_asserted(args.approver or _decided_by(args)),
+            surface=Surface.CLI,
+            local=True,
         )
-        state = resume(graph, sweep.run_id, request)
+    except ApprovalsError as exc:
+        print(f"{PROGRAM}: {exc}", file=sys.stderr)
+        return 1
 
-        record = next(
-            (
-                one
-                for one in reversed(state.approval_records)
-                if one.recommendation_id == pending.recommendation_id
-            ),
-            None,
-        )
-        if record is None:  # pragma: no cover -- the gate always records
-            print(f"{PROGRAM}: the decision was not recorded", file=sys.stderr)
-            return 1
+    if outcome.kind is OutcomeKind.REFUSED:  # pragma: no cover -- local names are admitted
+        print(f"{PROGRAM}: {outcome.statement}", file=sys.stderr)
+        return 1
 
-        print(record.statement())
-        remaining = paused_sweep(graph, sweep.run_id)
-        if remaining is None:
-            print(f"Sweep {sweep.run_id} is complete; every gated action has a decision.")
+    print(outcome.statement)
+    if outcome.kind is OutcomeKind.DECIDED:
+        if not outcome.remaining:
+            print(f"Sweep {outcome.run_id} is complete; every gated action has a decision.")
         else:
             print(
-                f"Sweep {sweep.run_id} is still waiting on "
-                f"{len(remaining.pending)} action(s). Run `approvals list` to see them."
+                f"Sweep {outcome.run_id} is still waiting on "
+                f"{outcome.remaining} action(s). Run `approvals list` to see them."
             )
-        return 0
+    return 0
 
 
 def run_dashboard(args: argparse.Namespace, settings: Settings) -> int:

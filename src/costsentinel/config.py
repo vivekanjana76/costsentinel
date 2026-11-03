@@ -515,6 +515,11 @@ class Settings(BaseSettings):
         """Path to the LangGraph SQLite checkpoint database."""
         return self.state_dir / "checkpoints.sqlite"
 
+    @property
+    def decision_ledger_path(self) -> Path:
+        """Path to the ledger of decision outcomes, refusals and answered interactions."""
+        return self.state_dir / "decisions.sqlite"
+
     def ensure_state_dir(self) -> Path:
         """Create the state directory if it does not exist, and return it."""
         self.state_dir.mkdir(parents=True, exist_ok=True)

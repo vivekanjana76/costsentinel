@@ -393,19 +393,22 @@ def test_the_dashboard_builds_no_decision_record_of_its_own() -> None:
             assert name not in text, f"{path.name} contains {name!r}"
 
 
-def test_the_dashboard_calls_the_same_functions_the_cli_calls() -> None:
+def test_the_dashboard_calls_the_same_function_the_cli_calls() -> None:
     """The positive half: it is not merely innocent, it uses the shared path.
 
     Pinned by name, so removing the shared call in favour of something local fails
-    here rather than passing because nothing forbidden was added.
+    here rather than passing because nothing forbidden was added. Since Phase 10b the
+    shared path is one function, `approvals.service.decide` (D133);
+    `tests/test_decision_service.py` holds the both-directions check for every surface.
     """
     text = Path("src/costsentinel/dashboard/app.py").read_text(encoding="utf-8")
-    for name in ("find_pending", "DecisionRequest(", "resume("):
-        assert name in text, name
+    assert "from costsentinel.approvals.service import decide" in text
+    assert "decide(" in text
 
     cli = Path("src/costsentinel/cli.py").read_text(encoding="utf-8")
-    for name in ("find_pending", "DecisionRequest(", "resume("):
-        assert name in cli, f"the CLI no longer uses {name!r}; the paths have diverged"
+    assert "from costsentinel.approvals.service import decide" in cli, (
+        "the CLI no longer uses the shared decision path; the paths have diverged"
+    )
 
 
 def test_a_decision_from_the_dashboard_is_identical_to_one_from_the_cli(
@@ -478,7 +481,7 @@ def test_a_decision_from_the_dashboard_hands_off_and_touches_no_provider(
         decision=Decision.APPROVED,
         approver="ops@example.com",
         reason="confirmed orphaned",
-    )
+    ).statement
     assert "handed off for a person to carry out" in statement
     assert "no path to perform it" in statement
 
