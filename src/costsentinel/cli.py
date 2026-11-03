@@ -148,7 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog=PROGRAM,
         description=(
             "Autonomous multi-agent FinOps governance for multi-subscription Azure "
-            "estates. Phase 1 runs read-only against a deterministic mock estate."
+            "estates. Read-only, against a deterministic synthetic estate by default."
         ),
     )
     subcommands = parser.add_subparsers(dest="command", required=True)

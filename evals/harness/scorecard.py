@@ -29,7 +29,7 @@ from evals.harness.gates import GateResult
 from evals.harness.judge import Groundedness
 from evals.harness.metrics import DetectorScore, Mismatch, Score
 
-#: The only two things that can fail a run. Named here rather than inferred from
+#: The only things that can fail a run. Named here rather than inferred from
 #: ``GateResult``, so adding a gate is a deliberate act and a reader can see at a
 #: glance which checks are load-bearing.
 BLOCKING_GATES: tuple[str, ...] = (

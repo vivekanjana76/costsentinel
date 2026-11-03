@@ -8,7 +8,7 @@
       "protocolVersion": "1.0"
     }
   ],
-  "version": "0.12.0",
+  "version": "0.12.1",
   "capabilities": {
     "streaming": false,
     "pushNotifications": false,
@@ -90,7 +90,7 @@
   "signatures": [
     {
       "protected": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpPU0UiLCJraWQiOiJLZFRMQk90Mmk4SF9hdTJwaDRJVmUzMDkyeURLM0NiSXlKb3pWMU9VSF84Iiwiamt1IjoiaHR0cDovL2xvY2FsaG9zdDo4MDAwLy53ZWxsLWtub3duL2FnZW50LWNhcmQtandrcy5qc29uIn0",
-      "signature": "HYVBoLJC6pbCYJsyGhI8ims5TjgSg2umIir6dXQJDbKtnVVkp47t9XLtCaRmS35Cpd11Mlm4JP4qT1Djq6Shyg"
+      "signature": "vKWqkmS9gCioHNViZVBqkun7oPnkWeqUhtL5NFjJlTWWNew-xKTfCWwRJaZrvFV1EHFI-ckww6aLAvfPmfY0UQ"
     }
   ]
 }
