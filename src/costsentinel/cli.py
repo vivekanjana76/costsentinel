@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import json
 import sys
 import tempfile
 from collections.abc import Callable, Sequence
@@ -62,6 +63,8 @@ from costsentinel.reports.markdown import render_markdown
 from costsentinel.reports.pdf import EXTRA as PDF_EXTRA
 from costsentinel.reports.pdf import INSTALL_HINT as PDF_INSTALL_HINT
 from costsentinel.reports.pdf import PdfUnavailableError, pdf_available, render_pdf
+from costsentinel.slack.client import SlackClient, SlackError, client_from_settings
+from costsentinel.slack.queue import post_queue, queued_messages
 from costsentinel.tools import describe_surface
 
 PROGRAM = "costsentinel"
@@ -99,6 +102,32 @@ SAMPLE_CLIENT = CLIENT_NORTHWIND
 
 #: Run id baked into the sample, so its report id does not change between renders.
 SAMPLE_RUN_ID = "run-sample"
+
+
+def _add_slack(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
+    """The Slack approval adapter's two offline-safe commands."""
+    slack = add_parser(
+        "slack",
+        help="Render the pending-approval queue as Slack messages, or post it.",
+        description=(
+            "Each pending approval becomes a Block Kit message with the finding, the "
+            "action, its class, the saving and its basis, a reason box and Approve, "
+            "Reject and Defer buttons. The figures are the report's own strings. A click "
+            "comes back to the /slack/interactions webhook (`costsentinel serve` with "
+            "SLACK_ENABLED=true), is signature-verified, and is decided through the "
+            "same function `approvals decide` calls.\n"
+            "\n"
+            "Approving from Slack hands the action to a person, as it does here. Nothing "
+            "in Slack can change a resource."
+        ),
+    )
+    slack_actions = slack.add_subparsers(dest="slack_command", required=True)
+    for name, text in (
+        ("render", "Print the messages as JSON. Offline: sends nothing, needs no token."),
+        ("post", "Send the messages to SLACK_CHANNEL with SLACK_BOT_TOKEN."),
+    ):
+        one = slack_actions.add_parser(name, help=text, description=text)
+        one.add_argument("--run-id", default=None, help="One paused sweep. Default: all.")
 
 
 def _add_surfaces(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
@@ -312,6 +341,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Who decided. Defaults to the operating system user.",
     )
+
+    _add_slack(subcommands.add_parser)
 
     decisions = subcommands.add_parser(
         "decisions",
@@ -1041,6 +1072,35 @@ def run_approvals(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def run_slack(
+    args: argparse.Namespace, settings: Settings, client: SlackClient | None = None
+) -> int:
+    """Render the pending queue as Slack messages, or post them to the channel.
+
+    Reads the checkpoint, like `approvals list`; neither subcommand runs a sweep.
+    """
+    queued = queued_messages(settings, run_id=args.run_id)
+    if args.slack_command == "render":
+        print(json.dumps([one.message.as_json() for one in queued], indent=2, ensure_ascii=False))
+        return 0
+
+    sender = client or client_from_settings(settings)
+    if sender is None or not settings.slack_channel:
+        print(f"{PROGRAM}: posting needs SLACK_BOT_TOKEN and SLACK_CHANNEL", file=sys.stderr)
+        return 2
+    if not queued:
+        print("Nothing is awaiting a decision; nothing was posted.")
+        return 0
+    try:
+        posted = post_queue(queued, sender, settings.slack_channel)
+    except SlackError as exc:
+        print(f"{PROGRAM}: {exc}", file=sys.stderr)
+        return 1
+    for one, where in zip(queued, posted, strict=True):
+        print(f"Posted {one.recommendation_id} ({one.run_id}) to {where.channel} at {where.ts}")
+    return 0
+
+
 def run_dashboard(args: argparse.Namespace, settings: Settings) -> int:
     """Write the operator surface to files."""
     directory = Path(args.out) if args.out else DEFAULT_DASHBOARD_DIR
@@ -1083,6 +1143,18 @@ def run_serve(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+#: Every subcommand other than `scan`, `config` and `eval`, by name.
+_COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], int]] = {
+    "decide": run_decide,
+    "decisions": run_decisions,
+    "report": run_report,
+    "approvals": run_approvals,
+    "slack": run_slack,
+    "dashboard": run_dashboard,
+    "serve": run_serve,
+}
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point.
 
@@ -1097,26 +1169,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(_config_text(settings))
         return 0
 
-    if args.command == "decide":
-        return run_decide(args, settings)
-
-    if args.command == "decisions":
-        return run_decisions(args, settings)
-
     if args.command == "eval":
         return run_eval(args)
 
-    if args.command == "report":
-        return run_report(args, settings)
-
-    if args.command == "approvals":
-        return run_approvals(args, settings)
-
-    if args.command == "dashboard":
-        return run_dashboard(args, settings)
-
-    if args.command == "serve":
-        return run_serve(args, settings)
+    handler = _COMMANDS.get(args.command)
+    if handler is not None:
+        return handler(args, settings)
 
     real = bool(args.real) or settings.mode is RunMode.REAL
     scope: tuple[str, ...] = ()

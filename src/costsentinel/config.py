@@ -182,6 +182,47 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Slack approval adapter -------------------------------------------
+    slack_enabled: bool = Field(
+        default=False,
+        validation_alias=_env("SLACK_ENABLED"),
+        description=(
+            "Whether to serve the Slack interaction webhook at /slack/interactions. Off "
+            "by default. On without SLACK_SIGNING_SECRET refuses to start: an "
+            "unverifiable webhook would accept a decision from anybody who can reach "
+            "it (ARCHITECTURE.md D134)."
+        ),
+    )
+    slack_signing_secret: SecretStr | None = Field(
+        default=None,
+        validation_alias=_env("SLACK_SIGNING_SECRET"),
+        description="The Slack app's signing secret. Every inbound request is checked with it.",
+    )
+    slack_bot_token: SecretStr | None = Field(
+        default=None,
+        validation_alias=_env("SLACK_BOT_TOKEN"),
+        description=(
+            "A bot token, for posting approval messages and resolving user-group "
+            "membership. Needs chat:write, and usergroups:read only if the allowlist "
+            "names a slack-group. Nothing here reads or writes a resource."
+        ),
+    )
+    slack_channel: str = Field(
+        default="",
+        validation_alias=_env("SLACK_CHANNEL"),
+        description="The channel id `costsentinel slack post` sends approval messages to.",
+    )
+    slack_signature_window_seconds: int = Field(
+        default=300,
+        ge=1,
+        le=300,
+        validation_alias=_env("SLACK_SIGNATURE_WINDOW_SECONDS"),
+        description=(
+            "How old a signed request may be. Five minutes, Slack's own figure, is the "
+            "ceiling: the setting can tighten replay protection and never loosen it."
+        ),
+    )
+
     # --- A2A surface -----------------------------------------------------
     a2a_enabled: bool = Field(
         default=False,
