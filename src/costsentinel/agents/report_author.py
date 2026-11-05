@@ -515,7 +515,7 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
         )
 
         notes: list[str] = [
-            "CostSentinel has no execution path in this phase, so nothing in this "
+            "CostSentinel has no execution path, so nothing in this "
             "report has been or can be applied automatically.",
             "Findings are ranked by a weighted composite of savings, safety and "
             "detector confidence, not by savings alone. Each finding shows its own "
@@ -730,6 +730,7 @@ def _finding(state: ScanState, recommendation: Recommendation, note: str) -> Rep
         root_cause_factors=tuple(f.statement for f in cause.factors) if cause else (),
         ranking_rationale=score.rationale if score else "",
         ranking_breakdown=score.explain() if score else "",
+        ranking_weights=score.weights if score else None,
         ranking_composite=score.composite if score else None,
         evidence=tuple(f"{obs.name}: {obs.value}" for obs in (signal.evidence if signal else ())),
         preconditions=recommendation.preconditions,

@@ -255,6 +255,10 @@ def rendered_figures(report: ClientReport) -> frozenset[str]:
         add(finding.confidence)
         if finding.ranking_composite is not None:
             add(finding.ranking_composite)
+        # The ranking weights applied to this finding: configured policy the pipeline
+        # used, carried on the finding, and quoted in its breakdown (D137).
+        for weight in finding.ranking_weights or ():
+            add(weight)
     for item in report.exempt_findings:
         add(item.confidence)
     for anomaly in report.anomalies:

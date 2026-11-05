@@ -22,12 +22,18 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import json
 import sys
 import tempfile
+import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from costsentinel.approvals import token as approver_token
+from costsentinel.approvals.identity import ApproverIdentity, AuthorisationPolicy, Surface
+from costsentinel.approvals.ledger import OutcomeKind
+from costsentinel.approvals.service import decide as decide_approval
 from costsentinel.config import (
     LLMBackend,
     MemoryBackend,
@@ -36,17 +42,14 @@ from costsentinel.config import (
     get_settings,
 )
 from costsentinel.dashboard.static import write_static
-from costsentinel.domain.governance import Decision, DecisionRequest
+from costsentinel.domain.governance import Decision
 from costsentinel.domain.memory import Outcome
 from costsentinel.domain.report import ClientReport, ScanResult
 from costsentinel.graph.approvals import (
     ApprovalsError,
     PausedSweep,
     approvals_graph,
-    find_pending,
-    paused_sweep,
     paused_sweeps,
-    resume,
 )
 from costsentinel.graph.checkpointer import checkpointer_for
 from costsentinel.graph.runner import run_client_scan, run_scan
@@ -62,6 +65,9 @@ from costsentinel.reports.markdown import render_markdown
 from costsentinel.reports.pdf import EXTRA as PDF_EXTRA
 from costsentinel.reports.pdf import INSTALL_HINT as PDF_INSTALL_HINT
 from costsentinel.reports.pdf import PdfUnavailableError, pdf_available, render_pdf
+from costsentinel.slack.client import SlackClient, SlackError, client_from_settings
+from costsentinel.slack.queue import post_queue, queued_messages
+from costsentinel.slack.webhook import INTERACTIONS_PATH
 from costsentinel.tools import describe_surface
 
 PROGRAM = "costsentinel"
@@ -101,6 +107,58 @@ SAMPLE_CLIENT = CLIENT_NORTHWIND
 SAMPLE_RUN_ID = "run-sample"
 
 
+def _add_slack(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
+    """The Slack approval adapter's two offline-safe commands."""
+    slack = add_parser(
+        "slack",
+        help="Render the pending-approval queue as Slack messages, or post it.",
+        description=(
+            "Each pending approval becomes a Block Kit message with the finding, the "
+            "action, its class, the saving and its basis, a reason box and Approve, "
+            "Reject and Defer buttons. The figures are the report's own strings. A click "
+            "comes back to the /slack/interactions webhook (`costsentinel serve` with "
+            "SLACK_ENABLED=true), is signature-verified, and is decided through the "
+            "same function `approvals decide` calls.\n"
+            "\n"
+            "Approving from Slack hands the action to a person, as it does here. Nothing "
+            "in Slack can change a resource."
+        ),
+    )
+    slack_actions = slack.add_subparsers(dest="slack_command", required=True)
+    for name, text in (
+        ("render", "Print the messages as JSON. Offline: sends nothing, needs no token."),
+        ("post", "Send the messages to SLACK_CHANNEL with SLACK_BOT_TOKEN."),
+    ):
+        one = slack_actions.add_parser(name, help=text, description=text)
+        one.add_argument("--run-id", default=None, help="One paused sweep. Default: all.")
+
+
+def _add_approvers(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
+    """Minting the approver tokens a verifying dashboard checks."""
+    approvers = add_parser(
+        "approvers",
+        help="Mint a signed, expiring approver token for the dashboard.",
+        description=(
+            "With APPROVER_TOKEN_SECRET set, the dashboard verifies a token with each "
+            "decision instead of taking a typed name. The token says who the approver "
+            "is; APPROVER_ALLOWLIST (token:<name>) still says whether they may decide. "
+            "Rotating the secret revokes every token."
+        ),
+    )
+    actions = approvers.add_subparsers(dest="approvers_command", required=True)
+    mint = actions.add_parser("token", help="Print a token for one approver.")
+    mint.add_argument("name", help="Letters, digits, '_' and '-'. Recorded as token:<name>.")
+    mint.add_argument(
+        "--days", type=int, default=7, help="How long it is valid. Default 7, at most 90."
+    )
+
+
+def _add_approval_surfaces(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
+    """The Slack adapter's commands, and the dashboard's approver tokens."""
+    _add_slack(add_parser)
+    _add_approvers(add_parser)
+
+
 def _add_surfaces(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
     """The two commands that put the operator surface somewhere: files, or a server."""
     dashboard = add_parser(
@@ -128,10 +186,12 @@ def _add_surfaces(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
         "serve",
         help="Serve the API, and the dashboard and A2A surface where enabled, on BIND_HOST.",
         description=(
-            "Listens on BIND_HOST (loopback by default). With DASHBOARD_CAN_DECIDE=true "
-            "and no authenticator configured, a non-loopback bind refuses to start: "
-            "anybody who could reach the page could approve under any name. Loopback "
-            "binds and display-only dashboards serve unchanged."
+            "Listens on BIND_HOST (loopback by default). With DASHBOARD_CAN_DECIDE=true, "
+            "a non-loopback bind refuses to start unless APPROVER_TOKEN_SECRET and "
+            "APPROVER_ALLOWLIST are both set: otherwise anybody who could reach the page "
+            "could approve under any name. SLACK_ENABLED=true without "
+            "SLACK_SIGNING_SECRET refuses to start too. Loopback binds and display-only "
+            "dashboards serve unchanged."
         ),
     )
     serve.add_argument(
@@ -312,6 +372,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Who decided. Defaults to the operating system user.",
     )
+
+    _add_approval_surfaces(subcommands.add_parser)
 
     decisions = subcommands.add_parser(
         "decisions",
@@ -560,6 +622,18 @@ def _config_text(settings: Settings) -> str:
         else settings.memory_backend.value
     )
     tracing = "configured" if settings.tracing_enabled else "disabled (no-op)"
+    approvers = (
+        "approver token (verified)"
+        if settings.approver_token_secret is not None
+        else "none (typed names, self-asserted; decisions on loopback only)"
+    )
+    entries = len(AuthorisationPolicy.from_settings(settings).entries)
+    allowlist = (
+        f"{entries} entr{'y' if entries == 1 else 'ies'}"
+        if entries
+        else ("empty (no verified approver is admitted)")
+    )
+    slack = f"enabled ({INTERACTIONS_PATH})" if settings.slack_enabled else "disabled"
     return "\n".join(
         [
             f"mode                 {settings.mode.value}",
@@ -577,6 +651,9 @@ def _config_text(settings: Settings) -> str:
             f"credentials          {credentials}",
             f"subscription_scope   {_scope_text(settings.subscription_scope)}",
             f"client_tag           {settings.azure_client_tag}",
+            f"dashboard_auth       {approvers}",
+            f"approver_allowlist   {allowlist}",
+            f"slack                {slack}",
         ]
     )
 
@@ -999,52 +1076,101 @@ def _decision_from(args: argparse.Namespace) -> Decision:
 
 
 def run_approvals(args: argparse.Namespace, settings: Settings) -> int:
-    """Show the pending-approval queue, or decide one item and resume its sweep."""
-    with checkpointer_for(settings) as saver:
-        graph = approvals_graph(settings, saver)
-        sweeps = paused_sweeps(graph, saver)
+    """Show the pending-approval queue, or decide one item and resume its sweep.
 
-        if args.approvals_command == "list":
-            print(describe_queue(sweeps))
-            return 0
+    A decision goes through :func:`costsentinel.approvals.service.decide`, the function
+    the dashboard and the Slack webhook call too, as a self-asserted name on a local
+    surface -- which is what a name typed into this terminal is (D133).
+    """
+    if args.approvals_command == "list":
+        with checkpointer_for(settings) as saver:
+            graph = approvals_graph(settings, saver)
+            print(describe_queue(paused_sweeps(graph, saver)))
+        return 0
 
-        try:
-            sweep, pending = find_pending(sweeps, args.recommendation_id)
-        except ApprovalsError as exc:
-            print(f"{PROGRAM}: {exc}", file=sys.stderr)
-            return 1
-
-        decision = _decision_from(args)
-        request = DecisionRequest(
-            recommendation_id=pending.recommendation_id,
-            decision=decision,
-            approver=args.approver or _decided_by(args),
+    try:
+        outcome = decide_approval(
+            settings,
+            recommendation_id=args.recommendation_id,
+            decision=_decision_from(args),
             reason=args.reason,
+            identity=ApproverIdentity.self_asserted(args.approver or _decided_by(args)),
+            surface=Surface.CLI,
+            local=True,
         )
-        state = resume(graph, sweep.run_id, request)
+    except ApprovalsError as exc:
+        print(f"{PROGRAM}: {exc}", file=sys.stderr)
+        return 1
 
-        record = next(
-            (
-                one
-                for one in reversed(state.approval_records)
-                if one.recommendation_id == pending.recommendation_id
-            ),
-            None,
-        )
-        if record is None:  # pragma: no cover -- the gate always records
-            print(f"{PROGRAM}: the decision was not recorded", file=sys.stderr)
-            return 1
+    if outcome.kind is OutcomeKind.REFUSED:  # pragma: no cover -- local names are admitted
+        print(f"{PROGRAM}: {outcome.statement}", file=sys.stderr)
+        return 1
 
-        print(record.statement())
-        remaining = paused_sweep(graph, sweep.run_id)
-        if remaining is None:
-            print(f"Sweep {sweep.run_id} is complete; every gated action has a decision.")
+    print(outcome.statement)
+    if outcome.kind is OutcomeKind.DECIDED:
+        if not outcome.remaining:
+            print(f"Sweep {outcome.run_id} is complete; every gated action has a decision.")
         else:
             print(
-                f"Sweep {sweep.run_id} is still waiting on "
-                f"{len(remaining.pending)} action(s). Run `approvals list` to see them."
+                f"Sweep {outcome.run_id} is still waiting on "
+                f"{outcome.remaining} action(s). Run `approvals list` to see them."
             )
+    return 0
+
+
+def run_slack(
+    args: argparse.Namespace, settings: Settings, client: SlackClient | None = None
+) -> int:
+    """Render the pending queue as Slack messages, or post them to the channel.
+
+    Reads the checkpoint, like `approvals list`; neither subcommand runs a sweep.
+    """
+    queued = queued_messages(settings, run_id=args.run_id)
+    if args.slack_command == "render":
+        print(json.dumps([one.message.as_json() for one in queued], indent=2, ensure_ascii=False))
         return 0
+
+    sender = client or client_from_settings(settings)
+    if sender is None or not settings.slack_channel:
+        print(f"{PROGRAM}: posting needs SLACK_BOT_TOKEN and SLACK_CHANNEL", file=sys.stderr)
+        return 2
+    if not queued:
+        print("Nothing is awaiting a decision; nothing was posted.")
+        return 0
+    try:
+        posted = post_queue(queued, sender, settings.slack_channel)
+    except SlackError as exc:
+        print(f"{PROGRAM}: {exc}", file=sys.stderr)
+        return 1
+    for one, where in zip(queued, posted, strict=True):
+        print(f"Posted {one.recommendation_id} ({one.run_id}) to {where.channel} at {where.ts}")
+    return 0
+
+
+def run_approvers(
+    args: argparse.Namespace, settings: Settings, now: Callable[[], float] = time.time
+) -> int:
+    """Print a signed approver token, or say why one cannot be made."""
+    if settings.approver_token_secret is None:
+        print(f"{PROGRAM}: set APPROVER_TOKEN_SECRET to mint approver tokens", file=sys.stderr)
+        return 2
+    try:
+        minted = approver_token.mint(
+            settings.approver_token_secret.get_secret_value(),
+            args.name,
+            now=int(now()),
+            lifetime_seconds=args.days * 86_400,
+        )
+    except approver_token.TokenError as exc:
+        print(f"{PROGRAM}: {exc}", file=sys.stderr)
+        return 2
+    print(minted)
+    print(
+        f"Valid for {args.days} day(s). Identifies the bearer as token:{args.name}; "
+        f"APPROVER_ALLOWLIST decides whether they may approve. Treat it as a password.",
+        file=sys.stderr,
+    )
+    return 0
 
 
 def run_dashboard(args: argparse.Namespace, settings: Settings) -> int:
@@ -1074,12 +1200,13 @@ def run_serve(args: argparse.Namespace, settings: Settings) -> int:
     """
     from costsentinel.api.app import create_app  # noqa: PLC0415 -- only this command serves
     from costsentinel.dashboard.auth import UnsafeDecisionSurfaceError  # noqa: PLC0415
+    from costsentinel.slack.webhook import UnsafeSlackSurfaceError  # noqa: PLC0415
 
     if args.host:
         settings = settings.model_copy(update={"bind_host": args.host})
     try:
         app = create_app(settings)
-    except UnsafeDecisionSurfaceError as exc:
+    except (UnsafeDecisionSurfaceError, UnsafeSlackSurfaceError) as exc:
         print(f"{PROGRAM}: {exc}", file=sys.stderr)
         return 2
 
@@ -1087,6 +1214,19 @@ def run_serve(args: argparse.Namespace, settings: Settings) -> int:
 
     uvicorn.run(app, host=settings.bind_host, port=args.port)
     return 0
+
+
+#: Every subcommand other than `scan`, `config` and `eval`, by name.
+_COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], int]] = {
+    "decide": run_decide,
+    "decisions": run_decisions,
+    "report": run_report,
+    "approvals": run_approvals,
+    "slack": run_slack,
+    "approvers": run_approvers,
+    "dashboard": run_dashboard,
+    "serve": run_serve,
+}
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1103,26 +1243,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(_config_text(settings))
         return 0
 
-    if args.command == "decide":
-        return run_decide(args, settings)
-
-    if args.command == "decisions":
-        return run_decisions(args, settings)
-
     if args.command == "eval":
         return run_eval(args)
 
-    if args.command == "report":
-        return run_report(args, settings)
-
-    if args.command == "approvals":
-        return run_approvals(args, settings)
-
-    if args.command == "dashboard":
-        return run_dashboard(args, settings)
-
-    if args.command == "serve":
-        return run_serve(args, settings)
+    handler = _COMMANDS.get(args.command)
+    if handler is not None:
+        return handler(args, settings)
 
     real = bool(args.real) or settings.mode is RunMode.REAL
     scope: tuple[str, ...] = ()

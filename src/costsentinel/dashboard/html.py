@@ -345,6 +345,12 @@ SELF_ASSERTED_NOTE = (
 def _pending_item(item: PendingView, *, decidable: bool, verifies_identity: bool = False) -> str:
     deferred = f" (deferred {item.deferrals}x)" if item.deferrals else ""
     form = ""
+    who = (
+        '<input type="password" name="approver_token" required autocomplete="off" '
+        'placeholder="Your approver token">'
+        if verifies_identity
+        else '<input type="text" name="approver" required placeholder="Who you are">'
+    )
     if decidable:
         # A plain HTML form. No JavaScript: the page has to work for somebody who
         # blocks it, and a decision this consequential should not depend on a script.
@@ -353,7 +359,7 @@ def _pending_item(item: PendingView, *, decidable: bool, verifies_identity: bool
             f'<input type="hidden" name="recommendation_id" value="{esc(item.recommendation_id)}">'
             '<input type="text" name="reason" required '
             'placeholder="Why — recorded with your decision">'
-            f'<input type="text" name="approver" required placeholder="Who you are">'
+            f"{who}"
             '<button class="primary" type="submit" name="decision" '
             'value="approved">Approve</button>'
             f'<button type="submit" name="decision" value="rejected">Reject</button>'

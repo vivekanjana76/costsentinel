@@ -65,7 +65,7 @@ Ordered by a weighted composite of the saving, how safe the action is and the de
 - cpu avg pct was observed as 1.2
 - network in gb was observed as 4.1
 
-**Why it sits here.** Ranked 1 of 9: quantified; savings 1.000, safety 0.600, confidence 0.900 -> 0.885. Worth 560.64 USD per month at review risk, with detector confidence 0.90.
+**Why it sits here.** Ranked 1 of 9: quantified; savings 1.000, safety 0.600, confidence 0.900 -> 0.885 (weights: savings 0.60, safety 0.25, confidence 0.15). Worth 560.64 USD per month at review risk, with detector confidence 0.90.
 
 **Evidence.**
 
@@ -108,7 +108,7 @@ Ordered by a weighted composite of the saving, how safe the action is and the de
 - sku was observed as Standard_E16s_v5
 - monthly cost was observed as 735.84 USD
 
-**Why it sits here.** Ranked 2 of 9: quantified; savings 0.656, safety 0.600, confidence 0.750 -> 0.656. Worth 367.92 USD per month at review risk, with detector confidence 0.75.
+**Why it sits here.** Ranked 2 of 9: quantified; savings 0.656, safety 0.600, confidence 0.750 -> 0.656 (weights: savings 0.60, safety 0.25, confidence 0.15). Worth 367.92 USD per month at review risk, with detector confidence 0.75.
 
 **Evidence.**
 
@@ -150,7 +150,7 @@ Ordered by a weighted composite of the saving, how safe the action is and the de
 - monthly cost was observed as 444.47 USD
 - cpu avg pct was observed as 0.4
 
-**Why it sits here.** Ranked 3 of 9: quantified; savings 0.396, safety 0.600, confidence 0.800 -> 0.508. Worth 222.23 USD per month at review risk, with detector confidence 0.80.
+**Why it sits here.** Ranked 3 of 9: quantified; savings 0.396, safety 0.600, confidence 0.800 -> 0.508 (weights: savings 0.60, safety 0.25, confidence 0.15). Worth 222.23 USD per month at review risk, with detector confidence 0.80.
 
 **Evidence.**
 
@@ -193,7 +193,7 @@ Ordered by a weighted composite of the saving, how safe the action is and the de
 - monthly amortised cost was observed as 221.44 USD
 - expires on was observed as 2028-02-01
 
-**Why it sits here.** Ranked 4 of 9: quantified; savings 0.259, safety 0.600, confidence 0.920 -> 0.443. Worth 145.04 USD per month at review risk, with detector confidence 0.92.
+**Why it sits here.** Ranked 4 of 9: quantified; savings 0.259, safety 0.600, confidence 0.920 -> 0.443 (weights: savings 0.60, safety 0.25, confidence 0.15). Worth 145.04 USD per month at review risk, with detector confidence 0.92.
 
 **Evidence.**
 
@@ -234,7 +234,7 @@ Ordered by a weighted composite of the saving, how safe the action is and the de
 - monthly cost was observed as 38.01 USD
 - age days was observed as 241
 
-**Why it sits here.** Ranked 5 of 9: quantified; savings 0.068, safety 0.600, confidence 0.950 -> 0.333. Worth 38.01 USD per month at review risk, with detector confidence 0.95.
+**Why it sits here.** Ranked 5 of 9: quantified; savings 0.068, safety 0.600, confidence 0.950 -> 0.333 (weights: savings 0.60, safety 0.25, confidence 0.15). Worth 38.01 USD per month at review risk, with detector confidence 0.95.
 
 **Evidence.**
 
@@ -273,7 +273,7 @@ Ordered by a weighted composite of the saving, how safe the action is and the de
 - monthly cost was observed as 3.65 USD
 - age days was observed as 398
 
-**Why it sits here.** Ranked 6 of 9: quantified; savings 0.007, safety 0.600, confidence 0.950 -> 0.296. Worth 3.65 USD per month at review risk, with detector confidence 0.95.
+**Why it sits here.** Ranked 6 of 9: quantified; savings 0.007, safety 0.600, confidence 0.950 -> 0.296 (weights: savings 0.60, safety 0.25, confidence 0.15). Worth 3.65 USD per month at review risk, with detector confidence 0.95.
 
 **Evidence.**
 
@@ -310,7 +310,7 @@ Ordered by a weighted composite of the saving, how safe the action is and the de
 - sku was observed as Premium_LRS_Snapshot
 - monthly cost was observed as 16.90 USD
 
-**Why it sits here.** Ranked 7 of 9: quantified; savings 0.030, safety 0.600, confidence 0.850 -> 0.296. Worth 16.90 USD per month at review risk, with detector confidence 0.85.
+**Why it sits here.** Ranked 7 of 9: quantified; savings 0.030, safety 0.600, confidence 0.850 -> 0.296 (weights: savings 0.60, safety 0.25, confidence 0.15). Worth 16.90 USD per month at review risk, with detector confidence 0.85.
 
 **Evidence.**
 
@@ -348,7 +348,7 @@ Ordered by a weighted composite of the saving, how safe the action is and the de
 - sku was observed as Premium_LRS_Snapshot
 - monthly cost was observed as 67.58 USD
 
-**Why it sits here.** Ranked 8 of 9: quantified; savings 0.121, safety 0.200, confidence 0.850 -> 0.250. Worth 67.58 USD per month at block risk, with detector confidence 0.85.
+**Why it sits here.** Ranked 8 of 9: quantified; savings 0.121, safety 0.200, confidence 0.850 -> 0.250 (weights: savings 0.60, safety 0.25, confidence 0.15). Worth 67.58 USD per month at block risk, with detector confidence 0.85.
 
 **Evidence.**
 
@@ -385,7 +385,7 @@ These are real findings. CostSentinel could not derive a figure for them, so the
 
 **Why this exists.** vm-core-api-02 in subscription 00000000-0000-4000-8000-00000000a001 shows oversized virtual machine because cpu avg pct is 14.2; cpu max pct is 37.6; peak threshold pct is 50.0; observation days is 30; sku is Standard_D8s_v5; monthly cost is 280.32 USD. Taken together these indicate the resource outlived the workload it was provisioned for, and no change has been made to it since.
 
-**Why it sits here.** Ranked 9 of 9: unquantified (ranks below every priced finding); savings 0.000, safety 0.600, confidence 0.750 -> 0.262. Worth unknown USD per month at review risk, with detector confidence 0.75.
+**Why it sits here.** Ranked 9 of 9: unquantified (ranks below every priced finding); savings 0.000, safety 0.600, confidence 0.750 -> 0.262 (weights: savings 0.60, safety 0.25, confidence 0.15). Worth unknown USD per month at review risk, with detector confidence 0.75.
 
 ---
 
@@ -471,7 +471,7 @@ Spend in 00000000-0000-4000-8000-00000000a001 shows a level shift (increase): 12
 
 ## Notes
 
-- CostSentinel has no execution path in this phase, so nothing in this report has been or can be applied automatically.
+- CostSentinel has no execution path, so nothing in this report has been or can be applied automatically.
 - Findings are ranked by a weighted composite of savings, safety and detector confidence, not by savings alone. Each finding shows its own breakdown.
 - 1 finding(s) could not be priced from provider data. They are excluded from the projected savings rather than assumed to be zero, and they rank below every priced finding -- we will not tell you that something we cannot cost is your bigger opportunity. Each one says why no figure could be derived.
 - 2 spend change(s) were detected and are listed separately from the findings. A spend change is something to investigate, not something to act on: its difference is what you are now paying differently, not an amount anyone has identified a way to recover, and none of it appears in the projected savings above.

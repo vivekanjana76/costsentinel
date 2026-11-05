@@ -1,0 +1,122 @@
+{
+  "text": "Approval needed: deallocate virtual machine on vm-analytics-01, 560.64 USD / month",
+  "blocks": [
+    {
+      "type": "header",
+      "text": {
+        "type": "plain_text",
+        "text": "Approval needed: deallocate virtual machine on vm-analytics-01"
+      }
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "deallocate virtual machine on vm-analytics-01 (idle virtual machine), worth 560.64 USD per month"
+      },
+      "fields": [
+        {
+          "type": "mrkdwn",
+          "text": "*Finding*\nidle virtual machine"
+        },
+        {
+          "type": "mrkdwn",
+          "text": "*Action*\ndeallocate virtual machine"
+        },
+        {
+          "type": "mrkdwn",
+          "text": "*Class*\n`review`"
+        },
+        {
+          "type": "mrkdwn",
+          "text": "*Saving*\n560.64 USD / month (6,727.68 USD / year)"
+        },
+        {
+          "type": "mrkdwn",
+          "text": "*Costs now*\n560.64 USD / month"
+        },
+        {
+          "type": "mrkdwn",
+          "text": "*Resource*\n`vm-analytics-01`"
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "*Basis*\nDeallocating the virtual machine, whose compute charge then ceases (attached disks bill separately and are unaffected) removes the whole 560.64 USD monthly charge for vm-analytics-01. Taken from the provider's reported cost for this virtual_machine, not modelled."
+      }
+    },
+    {
+      "type": "context",
+      "elements": [
+        {
+          "type": "mrkdwn",
+          "text": "*Synthetic demonstration estate: every subscription, resource and figure here is invented.*"
+        },
+        {
+          "type": "mrkdwn",
+          "text": "northwind-energy · sweep `run-slack-sample` · `rec-idlevm-4d7f269994`"
+        },
+        {
+          "type": "mrkdwn",
+          "text": "Approving records a decision and hands the action to a person. CostSentinel will not and cannot perform it."
+        }
+      ]
+    },
+    {
+      "type": "input",
+      "block_id": "costsentinel_reason",
+      "label": {
+        "type": "plain_text",
+        "text": "Reason (required, recorded with your decision)"
+      },
+      "element": {
+        "type": "plain_text_input",
+        "action_id": "reason",
+        "multiline": true,
+        "placeholder": {
+          "type": "plain_text",
+          "text": "Why: e.g. agreed with the workload owner"
+        }
+      },
+      "optional": false
+    },
+    {
+      "type": "actions",
+      "block_id": "costsentinel_decision_rec-idlevm-4d7f269994",
+      "elements": [
+        {
+          "type": "button",
+          "action_id": "costsentinel_approve",
+          "text": {
+            "type": "plain_text",
+            "text": "Approve"
+          },
+          "value": "rec-idlevm-4d7f269994",
+          "style": "primary"
+        },
+        {
+          "type": "button",
+          "action_id": "costsentinel_reject",
+          "text": {
+            "type": "plain_text",
+            "text": "Reject"
+          },
+          "value": "rec-idlevm-4d7f269994",
+          "style": "danger"
+        },
+        {
+          "type": "button",
+          "action_id": "costsentinel_defer",
+          "text": {
+            "type": "plain_text",
+            "text": "Defer"
+          },
+          "value": "rec-idlevm-4d7f269994"
+        }
+      ]
+    }
+  ]
+}

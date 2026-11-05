@@ -305,25 +305,31 @@ report renders. The view layer computes no figure: every value is a string the r
 already produced, enforced by the same check that gates the rendered document.
 
 The queue page can record a decision only when `DASHBOARD_CAN_DECIDE` is also set, and
-it does so through the **same path** `costsentinel approvals decide` uses --
-`find_pending`, `DecisionRequest`, `resume`. There is no second decision
-implementation; a test asserts both the absence of one and the presence of the shared
-calls. The POST is refused outright when the flag is off, because a hidden form field
+it does so through the **same function** `costsentinel approvals decide` and the
+Slack webhook call, `approvals.service.decide`. There is no second decision
+implementation; a test asserts both that no other module resumes a sweep and that
+every surface calls the shared function. The POST is refused outright when the flag is off, because a hidden form field
 is not a permission check.
 
 **An unauthenticated decision surface off loopback refuses to start.** With
-`DASHBOARD_CAN_DECIDE=true`, a non-loopback `BIND_HOST` and no authenticator configured,
-the app is not built and the server exits with an error naming the fix. A decision that
+`DASHBOARD_CAN_DECIDE=true` and a non-loopback `BIND_HOST`, the app is not built and the
+server exits with an error naming the fix -- unless an authenticator verifies approvers
+(`APPROVER_TOKEN_SECRET`) **and** `APPROVER_ALLOWLIST` names who may decide. Neither on
+its own lifts it, and nothing lifts it by default. A decision that
 arrives on a non-loopback socket is also refused per request, which covers a server
 started with a wider `--host` than `BIND_HOST` says. **One thing the process cannot
 see:** a reverse proxy on the same machine forwards over loopback, and looks like a local
-operator. Do not front a decision surface with a proxy until Phase 10b's authenticator
-exists; serve it display-only instead.
+operator. Do not front a self-asserting decision surface with a proxy; configure the
+token authenticator, or serve it display-only.
 
-**Every approver is recorded as self-asserted and unverified** until that authenticator
-exists. The name on a decision is what the approver typed, and the record, the
+**Without the token authenticator, every approver is recorded as self-asserted and
+unverified.** The name on a decision is what the approver typed, and the record, the
 authorisation and the audit events all say so, so the trail never claims an identity
-was established when it was only asserted.
+was established when it was only asserted. With it, a decision must present a signed,
+expiring token (`costsentinel approvers token <name>`); the record says
+`verified_by: approver-token`, and the allowlist still decides whether that person may
+approve. A token that fails verification is refused having recorded nothing. Tokens
+cannot be revoked one at a time: rotating the secret revokes all of them.
 
 **Approving from a page does what approving from a terminal does**: it records a
 decision and hands the action to a person. The four-way no-mutation proof of section 5
@@ -334,6 +340,39 @@ terminal state with the same audit events.
 The pages fetch nothing at runtime: the stylesheet is inline and there is no script,
 no font and no CDN. Every provider-supplied value -- resource names and tags in
 particular -- is HTML-escaped with quotes included.
+
+### Optional: the Slack approval webhook
+
+```bash
+SLACK_ENABLED=true SLACK_SIGNING_SECRET=... APPROVER_ALLOWLIST=slack:T0123/U0456   uv run costsentinel serve
+```
+
+Off by default. It is the one surface meant to be reachable from the internet, so it
+trusts nothing it receives:
+
+- **Every request is signature-verified on the raw body before anything parses it**:
+  Slack's `v0` HMAC-SHA256 over `v0:<timestamp>:<body>`, compared in constant time.
+  A timestamp more than five minutes from now in either direction is refused, and the
+  window can be configured tighter and never wider. A missing, malformed, stale or
+  forged request is a 401 that **records nothing**. Enabled without a signing secret,
+  the server refuses to start.
+- **The approver is the Slack user in the signed payload**, recorded as verified.
+  **Verified is not permitted**: only a user or user group on `APPROVER_ALLOWLIST` may
+  decide, and the allowlist is empty, admitting nobody, by default. An unauthorised
+  click is recorded as a refusal, never as a decision.
+- **A replayed or redelivered click is one decision**: inside the window it carries the
+  same interaction key and returns the stored outcome.
+- **The payload's `response_url` is accepted only on `https://hooks.slack.com/`**, with
+  no credentials or port, so a payload cannot make this process post somewhere else.
+- **Resource names are data.** Every value placed in a Slack message is escaped, so a
+  resource named `<!channel>` cannot ping a channel or disguise a link.
+- **It executes nothing.** A Slack approval hands the action to a person, through the
+  same function the CLI calls. Four tests prove it the Phase 5 ways, including a signed
+  approval of a disk deletion that makes zero provider calls.
+
+The bot token needs `chat:write`, plus `usergroups:read` only if the allowlist names a
+group. Nothing in the adapter can read or change an Azure resource. Every test uses
+synthetic payloads and a labelled fake secret; no real workspace was used.
 
 ### Optional: the A2A surface
 

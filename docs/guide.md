@@ -37,7 +37,7 @@ Everything below runs offline with no credentials unless a section says otherwis
 | Detectors | Eight deterministic detectors: orphaned disk, unattached IP, idle VM, oversized VM, stale snapshot, idle SQL, oversized App Service plan, unused reservation |
 | Graph | Supervisor + Anomaly Scout, Root-Cause Analyst, Savings Estimator, Optimization Planner, Policy Guard, Report Author, plus the memory consult step and the approval gate |
 | Routing | Proceed, retry (bounded), escalate, require-approval, short-circuit — each a recorded decision with a reason |
-| Ranking | A deterministic weighted composite of savings, safety and confidence. The model narrates the order; it cannot change it. An unquantified saving ranks below every quantified one, as a tier rather than a weight |
+| Ranking | A deterministic weighted composite of savings, safety and confidence, with optional per-client weights (`RANKING_WEIGHTS_PATH`) stated on every finding. The model narrates the order; it cannot change it. An unquantified saving ranks below every quantified one, as a tier rather than a weight |
 | Exemption | Deterministic tag reading: a resource that is idle or stale by design is surfaced with its reason and excluded from the actionable savings total |
 | Spend anomalies | Robust z-score with a weekday profile over the daily cost series. Spikes and level shifts distinguished; a gap in the series is unknown, not zero; an anomaly never reaches an action |
 | Spend attribution | Deterministic arithmetic over a per-meter cost breakdown: the component whose share of the change exceeds its share of the spend. A proportional rise is reported as having no single cause |
@@ -45,10 +45,11 @@ Everything below runs offline with no credentials unless a section says otherwis
 | Model resilience | Optional fallback to a secondary backend and an optional per-sweep token ceiling. Either one degrades the prose and no figure, finding or classification |
 | Governance | Every action classified `allow` / `review` / `block`. **No execution path exists** |
 | Approval gate | A gated action halts the sweep at a durable checkpoint. The process may exit; a decision recorded later from another process resumes it. Approving hands the action to a person and records the hand-off |
-| Operator surface | A read-only dashboard over the **same** `ClientReport` the report renders, computing no figure. The queue page can record a decision through the one audited path the CLI uses; off loopback without an authenticator it refuses to start |
+| Operator surface | A read-only dashboard over the **same** `ClientReport` the report renders, computing no figure. The queue page can record a decision through the one audited path the CLI uses. Off loopback it refuses to start unless a signed approver token and an allowlist are configured |
+| Slack approvals | Off by default. Pending approvals as Block Kit messages built from the report's strings; a signature-verified webhook decides through the same path, with a verified, allowlisted approver. Tested against synthetic payloads only |
 | A2A | One read-only Agent Card in the A2A v1 wire shape, JWS-signed and verified in CI by an independent implementation; tasks can be submitted, polled, collected and cancelled. Off by default, no advertised write |
 | Observability | Structured JSON logs correlated by `run_id`; a tracing seam with a no-op default; token, cost and latency per run |
-| Entry points | `costsentinel scan`, `report`, `approvals list\|decide`, `decide`, `decisions`, `eval`, `dashboard`, `serve`, `config`, `POST /scan`, and the opt-in A2A and dashboard surfaces |
+| Entry points | `costsentinel scan`, `report`, `approvals list\|decide`, `slack render\|post`, `approvers token`, `decide`, `decisions`, `eval`, `dashboard`, `serve`, `config`, `POST /scan`, and the opt-in A2A, dashboard and Slack surfaces |
 
 ## Install and test
 
@@ -116,14 +117,28 @@ produced, checked by the same function the rendered-report gate uses. The styles
 inline and nothing is fetched at runtime.
 
 The queue page can record a decision when `DASHBOARD_CAN_DECIDE=true`, by calling the
-same three functions `costsentinel approvals decide` calls. There is no second decision
-implementation, asserted in both directions.
+same function `costsentinel approvals decide` and the Slack webhook call,
+`approvals.service.decide`. There is no second decision implementation, asserted in both
+directions.
 
-**An unsafe decision surface refuses to start.** With `DASHBOARD_CAN_DECIDE=true`, a
-non-loopback `BIND_HOST` and no authenticator, the server does not start, and the error
-says how to fix it. A decision that arrives on a non-loopback socket is refused even if
-the server was started some other way. Nothing verifies who an approver is yet (a Phase
-10b item), so every decision records its approver as **self-asserted and unverified**.
+**An unsafe decision surface refuses to start.** With `DASHBOARD_CAN_DECIDE=true` and a
+non-loopback `BIND_HOST`, the server does not start, and the error says how to fix it. A
+decision that arrives on a non-loopback socket is refused even if the server was
+started some other way. By default nothing verifies who an approver is, so every
+decision records its approver as **self-asserted and unverified**.
+
+**Verified approvers.** Set `APPROVER_TOKEN_SECRET` (32+ characters) and the page asks
+for a signed, expiring approver token instead of a typed name:
+
+```bash
+uv run costsentinel approvers token alice --days 7    # prints the token; treat it as a password
+APPROVER_ALLOWLIST=token:alice                        # who may decide, optionally @client
+```
+
+The record then says `verified_by: approver-token`. A token that fails verification is
+refused and records nothing; a genuine token off the allowlist is recorded as a refusal.
+Only with both the secret and an allowlist may the dashboard decide off loopback.
+Rotating the secret revokes every token; there is no per-token revocation.
 
 ## Approving something
 
@@ -148,6 +163,43 @@ structural: no module imports a mutating Azure client, no approval record carrie
 anything callable, no combination of decision and action class reaches a mutation, and
 approving the mock estate's disk deletion makes zero provider calls. Four separate tests
 in [`tests/test_approval_gate.py`](../tests/test_approval_gate.py).
+
+## Approving from Slack
+
+Off by default, and CI never talks to Slack. Each pending approval becomes a Block Kit
+message with the finding, the action, its class, the saving and its basis, a reason box,
+and Approve, Reject and Defer buttons. [`slack/approval-message.json`](slack/approval-message.json)
+is a committed sample, rendered from the synthetic estate and guarded against the
+renderer.
+
+```bash
+uv run costsentinel slack render                 # the queue as JSON; offline, no token
+SLACK_BOT_TOKEN=... SLACK_CHANNEL=C0123 \
+  uv run costsentinel slack post                 # send it (scope: chat:write)
+
+SLACK_ENABLED=true SLACK_SIGNING_SECRET=... \
+APPROVER_ALLOWLIST=slack:T0123/U0456,slack-group:T0123/S0789@ministry-of-transport \
+  uv run costsentinel serve                      # point Interactivity at /slack/interactions
+```
+
+What happens to a click, in order:
+
+1. **The signature is checked on the raw body**: Slack's `v0` HMAC-SHA256 over the
+   timestamp and body, compared in constant time, within five minutes. A bad, missing
+   or stale signature is a 401 and **records nothing**.
+2. **The approver is the signed Slack user**, `slack:<team>/<user>`, recorded as
+   verified. Group membership is asked of Slack (`usergroups:read`) and fails closed.
+3. **The decision goes through `approvals.service.decide`**, as the CLI's does. Only an
+   allowlisted user or group may decide; anyone else's click is **recorded as a
+   refusal** and answered to them alone, so the buttons stay for everybody else. A
+   redelivered click returns the stored outcome. A click on an already-decided item
+   returns that decision unchanged. A missing reason is refused, recording nothing.
+4. **A resolving decision replaces the buttons** with the outcome, through Slack's
+   `response_url`, which is accepted only on `https://hooks.slack.com/`.
+
+**Approving from Slack applies nothing**, proved the same four ways as the CLI, in
+[`tests/test_slack_never_mutates.py`](../tests/test_slack_never_mutates.py). With
+`SLACK_ENABLED=true` and no signing secret, the server refuses to start.
 
 ## The learning loop
 
@@ -264,7 +316,7 @@ curl -X POST localhost:8000/scan -H 'content-type: application/json' \
   -d '{"client": "northwind-energy"}'
 ```
 
-`GET /health` reports the active mode and LLM backend. The OpenAPI docs are at `/docs`.
+`GET /health` reports the version, the active mode and the LLM backend. The OpenAPI docs are at `/docs`.
 
 ## Resumability
 

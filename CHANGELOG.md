@@ -9,10 +9,72 @@ CostSentinel is pre-1.0, so the public API may change between minor versions.
 ## [Unreleased]
 
 Nothing yet. The remaining feature phases are open and optional: 9b (calibration against
-real traffic), 10b (approval adapters and the real authenticator) and 12b (A2A interop,
-#113).
+real traffic), 10c (Teams and escalation) and 12b (A2A interop, #113).
 
-## [0.12.1] - 2026-10-31
+## [0.13.0] - 2026-11-05
+
+Phase 10b: the Slack approval adapter and the real authenticator. A gated decision can
+reach a human in Slack and come back through the one audited, durable decision path,
+with an approver who is verified and authorised. The dashboard gains the same verified
+identity. No new dependency. A Slack approval, like every other approval, hands the
+action to a person and executes nothing.
+
+### Added
+
+- **One identity and authorisation path** (`approvals.identity`). Approvers are
+  self-asserted names or verified principals (`slack:<team>/<user>`,
+  `slack-group:<team>/<group>`, `token:<name>`). `authorise` is the only check.
+  `APPROVER_ALLOWLIST`, optionally scoped per client, is empty by default and admits
+  nobody when empty (D132).
+- **A single decision service** (`approvals.service.decide`), which the CLI, the
+  dashboard and the Slack webhook all call, and the only caller of `resume`. It
+  authorises, answers a redelivered interaction from an outcome ledger
+  (`decisions.sqlite`), returns the existing decision for an already-decided item, and
+  records a refusal as a refusal, with an `approval_refused` audit event (D133).
+- **Slack request signatures**: `v0` HMAC-SHA256 over timestamp and body, constant-time,
+  with a five-minute replay window that can only be tightened. A request that fails
+  records nothing (D134).
+- **Block Kit approval messages** built from the report's own strings, with every
+  untrusted value escaped. A synthetic sample is committed at
+  `docs/slack/approval-message.json` and guarded against the renderer (D135).
+- **`POST /slack/interactions`**, off unless `SLACK_ENABLED=true`, refusing to start
+  without `SLACK_SIGNING_SECRET`. A refused click is answered to the clicker alone; a
+  resolving decision replaces the buttons through a `response_url` restricted to
+  `hooks.slack.com`.
+- **`costsentinel slack render|post`**, and an outbound client seam: a recording fake,
+  and a standard-library `urllib` client with an injectable opener.
+- **The dashboard's real authenticator**: signed, expiring approver tokens
+  (`APPROVER_TOKEN_SECRET`, `costsentinel approvers token <name>`), on the shared
+  authorisation path (D136).
+- **Per-client ranking weights** (`RANKING_WEIGHTS_PATH`), validated, changing the
+  order only, and stated on every finding. This was the oldest open ROADMAP item (D137).
+- `costsentinel config` shows dashboard authentication, the allowlist and Slack status.
+- Four-way never-executes proofs for the Slack path, in
+  `tests/test_slack_never_mutates.py`.
+
+### Changed
+
+- The dashboard's non-loopback interlock now lifts only when the authenticator verifies
+  **and** an allowlist is configured, never by default. It previously lifted on
+  verification alone, when no verifying authenticator existed.
+- A verifying dashboard asks for an approver token in a password field instead of a
+  typed name. An invalid token is a 401 that records nothing.
+- Every finding's ranking breakdown now states the weights it was ranked with. The
+  sample report, the demo transcripts and `evals/REPORT.md` are regenerated.
+- The report note now reads "CostSentinel has no execution path". It previously said
+  "in this phase", which implied an execution phase was coming.
+
+### Removed
+
+- **`phase` from `GET /health`.** It was hard-coded to `1` for eleven phases, and a test
+  pinned it. The version is the release truth (D138).
+
+### Fixed
+
+- Stale phase references in the API description, the `ApprovalGate` docstring,
+  SECURITY.md, the guide and `serve --help`.
+
+## [0.12.1] - 2026-11-03
 
 A documentation and legibility release. No product behaviour changed. The goal was a
 repository a first-time reader can judge in two minutes, with no claim on its front page
@@ -1038,7 +1100,8 @@ Phase 1: the scaffold and a thin vertical slice.
 - Landed as an honest commit series dated when it was actually committed; it predates
   the issue-driven workflow and has no backing issues.
 
-[Unreleased]: https://github.com/vivekanjana76/costsentinel/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/vivekanjana76/costsentinel/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/vivekanjana76/costsentinel/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/vivekanjana76/costsentinel/compare/v0.10.0...v0.11.0

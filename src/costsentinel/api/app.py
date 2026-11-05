@@ -1,10 +1,10 @@
 """FastAPI application.
 
-Phase 1 exposes the sweep and a health check. The scan runs synchronously: a mock
-sweep takes milliseconds, and introducing a job queue before there is a real
-provider to make it slow would be scope the current phase has not earned. Phase 2
-makes the scan a background job once real Azure calls make it long-running -- the
-durable checkpointer that makes that safe is already wired.
+The sweep and a health check, plus three surfaces that are each off until an operator
+turns them on: the A2A endpoint, the operator dashboard and the Slack interaction
+webhook. The scan runs synchronously; a mock sweep takes milliseconds, and a job queue
+for long real-estate sweeps is still an open ROADMAP item. The durable checkpointer
+that would make one safe is already wired.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from costsentinel.llm.base import LLMError
 from costsentinel.observability import tracing_status
 from costsentinel.observability.logging import configure_logging
 from costsentinel.providers.base import ProviderError
+from costsentinel.slack.webhook import mount as mount_slack
 
 API_TITLE = "CostSentinel"
 
@@ -59,7 +60,6 @@ class HealthResponse(BaseModel):
 
     status: str
     version: str
-    phase: int
     mode: str
     llm_backend: str
     requires_no_credentials: bool
@@ -91,6 +91,8 @@ def create_app(
         UnsafeDecisionSurfaceError: When the dashboard would serve an unauthenticated
             decision surface on a non-loopback bind. The app is not built, so the
             server does not start (ARCHITECTURE.md D126).
+        UnsafeSlackSurfaceError: When the Slack webhook is enabled with no signing
+            secret to verify a request with (D134).
     """
     configured = settings or get_settings()
     app = FastAPI(
@@ -98,15 +100,15 @@ def create_app(
         version=API_VERSION,
         summary="Autonomous multi-agent FinOps governance for Azure estates.",
         description=(
-            "Phase 1 is read-only and mock-only: there is no execution path, so "
-            "nothing this API returns can have changed a resource."
+            "Read-only: there is no execution path, so nothing this API returns, and "
+            "no decision recorded through it, can have changed a resource."
         ),
     )
 
-    # Both off unless an operator turned them on. The A2A card is published
-    # either way; the dashboard serves nothing until enabled.
+    # All off unless an operator turned them on.
     mount(app, configured)
     mount_dashboard(app, configured, authenticator)
+    mount_slack(app, configured)
 
     @app.get("/health", response_model=HealthResponse, tags=["meta"])
     def health(settings: SettingsDep) -> HealthResponse:
@@ -115,11 +117,10 @@ def create_app(
         return HealthResponse(
             status="ok",
             version=API_VERSION,
-            phase=1,
             mode=settings.mode.value,
             llm_backend=settings.llm_backend.value,
             requires_no_credentials=settings.requires_no_credentials,
-            memory="configured" if settings.memory_enabled else "disabled (Phase 4)",
+            memory="configured" if settings.memory_enabled else "disabled",
             tracing=tracing_status(settings),
         )
 

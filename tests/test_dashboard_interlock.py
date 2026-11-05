@@ -57,7 +57,12 @@ LOOPBACK = ("127.0.0.1", "127.0.0.2", "localhost", "::1", "[::1]")
 
 
 def _settings(
-    scratch: Path, *, bind: str = "127.0.0.1", decide: bool = True, enabled: bool = True
+    scratch: Path,
+    *,
+    bind: str = "127.0.0.1",
+    decide: bool = True,
+    enabled: bool = True,
+    allowlist: str = "",
 ) -> Settings:
     return Settings(
         mode=RunMode.MOCK,
@@ -67,6 +72,7 @@ def _settings(
         dashboard_enabled=enabled,
         dashboard_can_decide=decide,
         bind_host=bind,
+        approver_allowlist=allowlist,
     )
 
 
@@ -109,12 +115,14 @@ class _VerifyingAuthenticator:
     name = "test-sso"
     verifies = True
 
-    def identify(self, request: Request, asserted: str) -> ApproverIdentity:
-        _ = asserted
+    def identify(self, request: Request, asserted: str, credential: str = "") -> ApproverIdentity:
+        _ = asserted, credential
+        user = request.headers.get("x-test-user", "nobody")
         return ApproverIdentity(
-            name=request.headers.get("x-test-user", "nobody"),
+            name=user,
             assurance=ApproverAssurance.VERIFIED,
             verified_by=self.name,
+            principal=f"token:{user.split('@', 1)[0]}",
         )
 
 
@@ -302,9 +310,9 @@ def test_a_verifying_authenticator_lifts_the_restriction_and_owns_the_identity(
 
     And the name on the record is the one it established, not the one typed into the
     form -- a verifying authenticator that simply echoed the typed name would verify
-    nothing.
+    nothing. Since Phase 10b the identity must also be on the allowlist (D132).
     """
-    settings = _scanned(_settings(tmp_path, bind=EVERYWHERE))
+    settings = _scanned(_settings(tmp_path, bind=EVERYWHERE, allowlist="token:alice"))
     client = TestClient(create_app(settings, _VerifyingAuthenticator()), base_url="http://10.0.0.5")
 
     page = client.get(f"{BASE_PATH}/approvals")
@@ -324,6 +332,37 @@ def test_a_verifying_authenticator_lifts_the_restriction_and_owns_the_identity(
     assert record.approver == "alice@example.com"
     assert record.approver_assurance is ApproverAssurance.VERIFIED
     assert record.verified_by == "test-sso"
+
+
+def test_a_verified_identity_off_the_allowlist_is_refused_and_recorded(
+    tmp_path: Path,
+) -> None:
+    """Verification says who someone is; the allowlist says whether they may approve.
+
+    The refusal is a 403, the sweep does not move, and the ledger keeps the refusal --
+    never a decision (D132, D133).
+    """
+    from costsentinel.approvals.ledger import DecisionLedger, OutcomeKind
+
+    settings = _scanned(_settings(tmp_path, bind=EVERYWHERE, allowlist="token:bob"))
+    client = TestClient(create_app(settings, _VerifyingAuthenticator()), base_url="http://10.0.0.5")
+    before = {one.recommendation_id for one in pending_queue(settings)}
+    target = sorted(before)[0]
+
+    response = client.post(
+        f"{BASE_PATH}/decide",
+        content=_decide_body(target),
+        headers={**FORM, "x-test-user": "alice@example.com"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 403
+    assert "not on the approver allowlist" in response.json()["detail"]
+    assert {one.recommendation_id for one in pending_queue(settings)} == before
+    assert not _latest_record_state(settings).approval_records
+    (refusal,) = DecisionLedger(settings.decision_ledger_path).all()
+    assert refusal.kind is OutcomeKind.REFUSED
+    assert refusal.record is None
 
 
 # ---------------------------------------------------------------------------
@@ -381,9 +420,18 @@ def test_the_null_authenticator_verifies_nothing_and_says_so() -> None:
     assert identity.verified_by is None
 
 
-def test_the_interlock_reads_only_verifies_off_the_authenticator(tmp_path: Path) -> None:
-    """The restriction lifts for an authenticator that verifies, and for no other reason."""
-    settings = _settings(tmp_path, bind=EVERYWHERE)
+def test_the_interlock_lifts_only_for_verification_plus_an_allowlist(tmp_path: Path) -> None:
+    """Off loopback, decisions need both: who someone is, and a list of who may decide.
+
+    Verification alone would serve a surface on which nobody can decide, which is a
+    misconfiguration, so it refuses too. Neither half lifts it on its own.
+    """
+    bare = _settings(tmp_path, bind=EVERYWHERE)
+    listed = _settings(tmp_path, bind=EVERYWHERE, allowlist="token:alice")
     with pytest.raises(UnsafeDecisionSurfaceError):
-        check_decision_surface(settings, NullAuthenticator())
-    check_decision_surface(settings, _VerifyingAuthenticator())
+        check_decision_surface(bare, NullAuthenticator())
+    with pytest.raises(UnsafeDecisionSurfaceError):
+        check_decision_surface(listed, NullAuthenticator())
+    with pytest.raises(UnsafeDecisionSurfaceError):
+        check_decision_surface(bare, _VerifyingAuthenticator())
+    check_decision_surface(listed, _VerifyingAuthenticator())

@@ -168,6 +168,72 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- approver identity and authorisation ------------------------------
+    approver_allowlist: str = Field(
+        default="",
+        validation_alias=_env("APPROVER_ALLOWLIST"),
+        description=(
+            "Who may approve from a surface that verifies identity: comma-separated "
+            "principals (slack:<team>/<user>, slack-group:<team>/<group>, token:<name>), "
+            "each optionally scoped to one client with @<client>. Empty by default, and "
+            "empty admits nobody: a verified identity is not on its own a permission "
+            "(ARCHITECTURE.md D132). Self-asserted names on the CLI or a loopback "
+            "dashboard are unaffected."
+        ),
+    )
+
+    approver_token_secret: SecretStr | None = Field(
+        default=None,
+        validation_alias=_env("APPROVER_TOKEN_SECRET"),
+        description=(
+            "The key approver tokens are signed with, at least 32 characters. Set, the "
+            "dashboard verifies a token with each decision instead of taking a typed "
+            "name, and may then decide off loopback if APPROVER_ALLOWLIST names who "
+            "(ARCHITECTURE.md D136). Unset by default. Rotating it revokes every token."
+        ),
+    )
+
+    # --- Slack approval adapter -------------------------------------------
+    slack_enabled: bool = Field(
+        default=False,
+        validation_alias=_env("SLACK_ENABLED"),
+        description=(
+            "Whether to serve the Slack interaction webhook at /slack/interactions. Off "
+            "by default. On without SLACK_SIGNING_SECRET refuses to start: an "
+            "unverifiable webhook would accept a decision from anybody who can reach "
+            "it (ARCHITECTURE.md D134)."
+        ),
+    )
+    slack_signing_secret: SecretStr | None = Field(
+        default=None,
+        validation_alias=_env("SLACK_SIGNING_SECRET"),
+        description="The Slack app's signing secret. Every inbound request is checked with it.",
+    )
+    slack_bot_token: SecretStr | None = Field(
+        default=None,
+        validation_alias=_env("SLACK_BOT_TOKEN"),
+        description=(
+            "A bot token, for posting approval messages and resolving user-group "
+            "membership. Needs chat:write, and usergroups:read only if the allowlist "
+            "names a slack-group. Nothing here reads or writes a resource."
+        ),
+    )
+    slack_channel: str = Field(
+        default="",
+        validation_alias=_env("SLACK_CHANNEL"),
+        description="The channel id `costsentinel slack post` sends approval messages to.",
+    )
+    slack_signature_window_seconds: int = Field(
+        default=300,
+        ge=1,
+        le=300,
+        validation_alias=_env("SLACK_SIGNATURE_WINDOW_SECONDS"),
+        description=(
+            "How old a signed request may be. Five minutes, Slack's own figure, is the "
+            "ceiling: the setting can tighten replay protection and never loosen it."
+        ),
+    )
+
     # --- A2A surface -----------------------------------------------------
     a2a_enabled: bool = Field(
         default=False,
@@ -225,6 +291,17 @@ class Settings(BaseSettings):
     )
 
     # --- exemption policy -------------------------------------------------
+    ranking_weights_path: Path | None = Field(
+        default=None,
+        validation_alias=_env("RANKING_WEIGHTS_PATH"),
+        description=(
+            "A JSON file of per-client ranking weights: "
+            '{"clients": {"<client>": {"savings": "0.40", "safety": "0.45", '
+            '"confidence": "0.15"}}}. Each weight in [0, 1], summing to exactly 1. '
+            "Unset, or a client not named, uses the built-in 0.60 / 0.25 / 0.15. "
+            "Changes the order of findings only; no figure or class (ARCHITECTURE.md D137)."
+        ),
+    )
     exemption_rules_path: Path | None = Field(
         default=None,
         validation_alias=_env("EXEMPTION_RULES_PATH"),
@@ -500,6 +577,11 @@ class Settings(BaseSettings):
     def checkpoint_path(self) -> Path:
         """Path to the LangGraph SQLite checkpoint database."""
         return self.state_dir / "checkpoints.sqlite"
+
+    @property
+    def decision_ledger_path(self) -> Path:
+        """Path to the ledger of decision outcomes, refusals and answered interactions."""
+        return self.state_dir / "decisions.sqlite"
 
     def ensure_state_dir(self) -> Path:
         """Create the state directory if it does not exist, and return it."""

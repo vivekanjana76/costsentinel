@@ -1460,6 +1460,90 @@ form is omitted, because a button that posts nowhere is worse than no button.
 
 ---
 
+### Verified approvers, and the Slack adapter (Phase 10b)
+
+Phase 11 put a decision form on a page and confined it to loopback, because nothing
+could say who was behind it. Phase 10b adds the two things that were missing -- a
+verified identity and a second, internet-reachable surface -- and adds them so that
+neither gets a decision path of its own.
+
+**One decision path** (D133). The CLI, the dashboard and the Slack webhook all call
+`approvals.service.decide`, and nothing else in `src` calls `resume`, builds a
+`DecisionRequest` or calls `find_pending`; a test walks every module's AST to hold that
+in both directions. The service does what every surface needs and none should
+re-implement: it authorises, it answers a repeated interaction from a ledger
+(`decisions.sqlite`, keyed by an interaction key with a unique constraint), it returns
+the existing record for an item that is already decided, and it records a refusal as a
+refusal. Only then does it resume the sweep, and the gate writes the record and the
+audit events exactly as before.
+
+**One identity and authorisation path** (D132). A surface turns a request into an
+`ApproverIdentity` -- self-asserted (a typed name) or verified (a principal such as
+`slack:<team>/<user>` or `token:<name>`, plus what verified it). `authorise` is the
+only function that decides whether that identity may decide for that client. A
+self-asserted name may decide only on this machine. A verified identity may decide
+only if `APPROVER_ALLOWLIST` names it, or a Slack user group it is in, optionally
+scoped to one client. The allowlist is empty by default, and empty admits nobody:
+being verified is not a permission.
+
+**Signatures first** (D134). The webhook reads the raw body and verifies Slack's
+`v0` HMAC-SHA256 over `v0:<timestamp>:<body>` before it parses a field, compares in
+constant time, and refuses a timestamp more than five minutes from now in either
+direction. The window can be configured tighter and never wider. A missing,
+malformed, stale or forged request is a 401 that records nothing: there is no verified
+author to record a refusal against. Inside the window, a replayed request carries the
+same interaction key and is answered from the ledger rather than decided twice.
+
+```
+Slack click ─► POST /slack/interactions
+                 │ raw bytes
+                 ▼
+             signature.verify ──fail──► 401, nothing recorded
+                 │
+                 ▼
+             parse_interaction ──not ours──► 400, nothing recorded
+                 │ SlackClick (no address, no handle)
+                 ▼
+             click.identity() = slack:<team>/<user>, verified
+                 │ (+ allowlisted groups, asked of Slack, fail closed)
+                 ▼
+             approvals.service.decide ◄── CLI, dashboard
+                 │ authorise ─► refused: recorded, buttons kept
+                 │ replay    ─► stored outcome
+                 │ decided   ─► existing record, unchanged
+                 ▼
+             resume ─► approval gate ─► record: handed_off / declined / deferred
+```
+
+**The messages copy, they do not compose** (D135). A pending approval becomes a Block
+Kit message built from the `PendingApproval` the gate read from the report: its
+`FrozenFigures` strings, unchanged. The adapter imports no money type and does no
+arithmetic, and a test runs the rendered-report gate's own `unrendered_figures` over
+every message. Every value placed in `mrkdwn` is escaped, so a resource named
+`<!channel>` cannot ping a channel. The committed sample, `docs/slack/approval-message.json`,
+is guarded against the renderer's output.
+
+**A Slack approval never executes** (D135), proved the four Phase 5 ways against the
+new modules: the adapter and service import no provider, cloud SDK or model client and
+can call only Slack; a click carries no executable handle; every button on every gated
+class lands in a recorded state; and a signed, authorised approval of the block-class
+disk deletion makes zero provider calls. The one URL the adapter handles, Slack's
+`response_url`, lives on a `ReplyTarget` that accepts only `https://hooks.slack.com/`
+and is kept out of the type the decision path receives.
+
+**The dashboard's real authenticator** (D136). `TokenAuthenticator` verifies a signed,
+expiring approver token minted with `costsentinel approvers token <name>`. The
+non-loopback interlock now lifts only when the authenticator verifies **and** an
+allowlist is configured, and never by default.
+
+**Limits, recorded rather than hidden.** The webhook decides before it acknowledges,
+which on the mock estate is milliseconds but is not guaranteed to fit Slack's
+three-second acknowledgement window on a large checkpoint store; a deferred
+acknowledgement is an open ROADMAP item. The ledger's uniqueness holds across processes
+on one SQLite file; several hosts would need a shared store. A token cannot be revoked
+on its own, only by rotating the secret. And `slack post` posts the current queue each
+time it is run, so running it twice posts twice.
+
 ## 15. Evaluation approach
 
 Implemented in Phase 5. Evals are a deliverable, not an afterthought, because "did we
@@ -2881,3 +2965,79 @@ dependency CI cannot exercise. A test replays each command as its own subprocess
 compares the output, so the transcript cannot go stale. The replay also made the
 cross-process approval claim a tested one: the Phase 10 durability test discards the
 graph but stays in one process.
+
+**D132. One identity and authorisation path, failing closed.** *Context:* the dashboard
+had an `Authenticator` seam with one implementation that verified nothing, and Slack
+was about to add a second surface with an identity of its own. *Alternatives:* let
+each surface decide who may approve; or treat any verified identity as permitted.
+*Why:* two authorisation checks drift, and the drift is a way in. So `ApproverIdentity`
+moved to `approvals.identity`, and `authorise` became the only function that answers
+"may this identity decide for this client". Verified and permitted are separate
+questions: Slack proves who clicked, and says nothing about whether they should
+approve deleting a client's disk. Hence an allowlist that is empty by default and
+admits nobody when empty. A self-asserted name stays allowed on this machine only,
+which keeps the CLI exactly as it was.
+
+**D133. A single decision service, and the only caller of `resume`.** *Alternatives:*
+keep D124's three shared calls and add the new checks at each surface. *Why:* the new
+checks -- authorisation, idempotency on a redelivered click, an answer for an item
+already decided, a recorded refusal -- are needed by every surface, and three copies
+of them is three chances to get one wrong. Moving the calls behind one function means
+a test can assert, by AST, that no other module resumes a sweep, and that every
+surface imports and calls the function. An outcome ledger (`decisions.sqlite`) keyed
+by an interaction key with a unique constraint makes a repeated click return its
+stored outcome. A refusal is an outcome in that ledger and an `approval_refused` audit
+event, never an `ApprovalRecord`. A deferral does not count as already decided,
+because it resolves nothing. An empty reason is refused **after** authorisation, so an
+unauthorised click with an empty box is still recorded as the refusal it is.
+
+**D134. A Slack signature is verified on the raw bytes, and a failure records
+nothing.** *Alternatives:* parse first and verify after; or record failed requests as
+refusals. *Why:* a check made after parsing is a check on what the parser understood,
+not on what Slack sent. A failure records nothing because a refusal record needs an
+author, and an unsigned request has none: recording one would let anybody write to the
+audit trail by posting garbage. Five minutes is Slack's own window. The setting may
+tighten it and never widen it (`le=300`), the same one-directional shape as an
+exemption (D99). Inside the window, the interaction key turns a replay into the stored
+outcome. Standard library only: `hmac` and `hashlib`.
+
+**D135. The Slack adapter copies, never composes, and never executes.**
+*Alternatives:* the Slack SDK; computing the message from the recommendation; one
+interaction type carrying the reply URL. *Why:* the SDK is a dependency, and three Web
+API calls over `urllib` behind an injectable opener are testable offline. The message
+is built from `PendingApproval.figures`, which are already the report's strings, so a
+client, an operator and an approver read the same figures. The rendered-report gate's
+own function asserts that. The `response_url` is a URL by nature, so rather than rename
+it to get past the representational proof, it lives on a separate, host-checked
+`ReplyTarget`. The type the decision path receives, `SlackClick`, has no address. A
+refused click is answered to the clicker alone, so it cannot clear the buttons for the
+approvers who may still use them. A resolving decision replaces them for everyone.
+
+**D136. The dashboard's real authenticator is a signed, expiring approver token.**
+*Alternatives:* SSO (OIDC), which needs an identity provider CI cannot reach; or a
+static shared password. *Why:* it is the smallest authenticator that is real, testable
+offline and dependency-free. An HMAC-SHA256 token names one approver and expires (at
+most 90 days); the key must be 32+ characters; comparison is constant-time; every
+failure gives one message. The identity is `token:<name>` and goes through the same
+`authorise` as Slack. The interlock lifts off loopback only with verification **and**
+an allowlist, because verification alone would serve a surface on which nobody can
+decide. Limits stated: no per-token revocation (rotate the secret), and not SSO. The
+seam is unchanged, so SSO can replace it.
+
+**D137. Ranking weights are per-client data that change the order and nothing else.**
+*Context:* the longest-standing offline-closable ROADMAP item, open since the Phase 2
+weights. *Alternatives:* weights in the policy store with the action-class overlays,
+which do not exist yet; or tunable through the model. *Why:* the weights are a product
+judgement that differs by client, and a file of validated weights (each in [0, 1], at
+most four places, summing to exactly 1, unknown keys refused) is the smallest honest
+version. They enter the composite only, so no figure, class or finding moves, and the
+unknown-ranks-low tier (D104) sits outside the sum, so not even savings weighted to
+zero can lift an unpriced finding. The effective weights are carried **typed** on the
+score and the report finding and stated in every breakdown. Typed rather than text
+because the groundedness judges admit a decimal only if the pipeline carried it: a
+string-only version dropped rendered groundedness from 0.97 to 0.66 until the weights
+became data both judges could see.
+
+**D138. `/health` no longer reports a phase.** A hard-coded `phase: 1` survived eleven
+phases and a test pinned it. The version is the release truth, so the field is
+removed rather than kept current by hand.

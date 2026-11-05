@@ -16,15 +16,13 @@ review find" is a different question from "what would a review find now".
 Writing, through the one path
 -----------------------------
 
-`POST /dashboard/decide` records a decision, and it does so by calling the same three
-things ``costsentinel approvals decide`` calls:
-:func:`~costsentinel.graph.approvals.find_pending`,
-:class:`~costsentinel.domain.governance.DecisionRequest` and
-:func:`~costsentinel.graph.approvals.resume`. It constructs no
+`POST /dashboard/decide` records a decision by calling
+:func:`costsentinel.approvals.service.decide`, the one function ``costsentinel approvals
+decide`` and the Slack webhook call too. It constructs no
 :class:`~costsentinel.domain.governance.ApprovalRecord`, validates nothing itself, and
 has no path that bypasses the gate -- the gate validates the request against the queue
 that actually exists, writes the record, and emits the audit events. A test asserts the
-absence of a second implementation rather than trusting this paragraph (D124).
+absence of a second implementation rather than trusting this paragraph (D124, D133).
 
 The four-way no-mutation invariant of Phase 10 is untouched: this module imports no
 provider for the purpose of acting, no cloud client and nothing executable, and a
@@ -41,10 +39,15 @@ from urllib.parse import parse_qs
 from fastapi import APIRouter, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from costsentinel.approvals.identity import ApproverIdentity, Surface
+from costsentinel.approvals.ledger import DecisionOutcome, OutcomeKind
+from costsentinel.approvals.service import decide
 from costsentinel.config import Settings
 from costsentinel.dashboard.auth import (
+    AuthenticationError,
     Authenticator,
-    NullAuthenticator,
+    arrived_on_loopback,
+    authenticator_from_settings,
     check_decision_surface,
     may_decide,
 )
@@ -57,14 +60,12 @@ from costsentinel.dashboard.view import (
     pending_view,
     report_view,
 )
-from costsentinel.domain.governance import ApproverAssurance, Decision, DecisionRequest
+from costsentinel.domain.governance import Decision
 from costsentinel.domain.state import ScanState
 from costsentinel.graph.approvals import (
     ApprovalsError,
     approvals_graph,
-    find_pending,
     paused_sweeps,
-    resume,
     thread_ids,
 )
 from costsentinel.graph.checkpointer import checkpointer_for
@@ -124,69 +125,40 @@ def record_decision(
     *,
     recommendation_id: str,
     decision: Decision,
-    approver: str,
     reason: str,
-    approver_assurance: ApproverAssurance = ApproverAssurance.SELF_ASSERTED,
-    verified_by: str | None = None,
-) -> str:
+    approver: str | None = None,
+    identity: ApproverIdentity | None = None,
+    local: bool = True,
+) -> DecisionOutcome:
     """Record one decision through the shared path, and say what happened.
 
-    Deliberately a thin call sequence rather than logic: locate, build the request,
-    resume. Every rule about what a valid decision is lives in the gate, where the
-    state is -- a check here as well would be a second place for those rules to drift,
-    and the dashboard is not the place that should win such a disagreement.
+    A thin call into :func:`costsentinel.approvals.service.decide`, the function the CLI
+    and the Slack webhook call too. Every rule about who may decide and what a valid
+    decision is lives there and in the gate. A check here as well would be a second
+    place for those rules to drift, and the dashboard is not the place that should win
+    such a disagreement (D124, D133).
 
-    The assurance defaults to self-asserted, so a caller that says nothing about the
-    approver's identity gets the weaker claim on the record, not the stronger one.
-
-    Returns:
-        The statement the gate composed, for the page to show back.
+    With no ``identity``, the typed ``approver`` is recorded as self-asserted. A caller
+    that says nothing about the approver's identity gets the weaker claim on the
+    record, not the stronger one.
 
     Raises:
-        ApprovalsError: If nothing is awaiting a decision on that recommendation.
+        ApprovalsError: If nothing is awaiting, or has resolved, that recommendation.
     """
-    with checkpointer_for(settings) as saver:
-        graph = approvals_graph(settings, saver)
-        sweep, pending = find_pending(paused_sweeps(graph, saver), recommendation_id)
-        state = resume(
-            graph,
-            sweep.run_id,
-            DecisionRequest(
-                recommendation_id=pending.recommendation_id,
-                decision=decision,
-                approver=approver,
-                reason=reason,
-                approver_assurance=approver_assurance,
-                verified_by=verified_by,
-            ),
-        )
-
-    record = next(
-        (
-            one
-            for one in reversed(state.approval_records)
-            if one.recommendation_id == recommendation_id
-        ),
-        None,
+    if identity is None:
+        if not approver:
+            msg = "a decision needs an approver: a typed name or a verified identity"
+            raise ValueError(msg)
+        identity = ApproverIdentity.self_asserted(approver)
+    return decide(
+        settings,
+        recommendation_id=recommendation_id,
+        decision=decision,
+        reason=reason,
+        identity=identity,
+        surface=Surface.DASHBOARD,
+        local=local,
     )
-    if record is None:  # pragma: no cover -- the gate always records
-        msg = f"the decision on {recommendation_id!r} was not recorded"
-        raise ApprovalsError(msg)
-
-    _log.info(
-        "decision recorded from the dashboard",
-        extra={
-            "run_id": sweep.run_id,
-            "recommendation_id": recommendation_id,
-            "decision": decision.value,
-            "approver": approver,
-            "approver_assurance": approver_assurance.value,
-            # Named so the audit trail distinguishes a decision made on a page from one
-            # made in a terminal, even though both take the same path.
-            "surface": "dashboard",
-        },
-    )
-    return record.statement()
 
 
 def _one(fields: Mapping[str, Sequence[str]], name: str) -> str:
@@ -209,7 +181,7 @@ def build_router(settings: Settings, authenticator: Authenticator | None = None)
     the bind the app can always see.
     """
     router = APIRouter(tags=["dashboard"])
-    auth: Authenticator = authenticator or NullAuthenticator()
+    auth: Authenticator = authenticator or authenticator_from_settings(settings)
     verifies = auth.verifies
 
     @router.get(BASE_PATH, response_class=HTMLResponse)
@@ -265,14 +237,16 @@ def build_router(settings: Settings, authenticator: Authenticator | None = None)
         decision = _one(fields, "decision")
         reason = _one(fields, "reason")
         approver = _one(fields, "approver")
+        credential = _one(fields, "approver_token")
 
+        # A verifying deployment names the approver from the credential, not a typed name.
         missing = [
             name
             for name, value in (
                 ("recommendation_id", recommendation_id),
                 ("decision", decision),
                 ("reason", reason),
-                ("approver", approver),
+                ("approver", approver or ("token" if verifies else "")),
             )
             if not value
         ]
@@ -304,19 +278,25 @@ def build_router(settings: Settings, authenticator: Authenticator | None = None)
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, f"{decision!r} is not a decision; expected {allowed}"
             ) from exc
-        identity = auth.identify(request, approver)
         try:
-            record_decision(
+            identity = auth.identify(request, approver, credential)
+        except AuthenticationError as exc:
+            # No verified author, so nothing to record a refusal against (D134, D136).
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
+        try:
+            outcome = record_decision(
                 settings,
                 recommendation_id=recommendation_id,
                 decision=chosen,
-                approver=identity.name,
                 reason=reason,
-                approver_assurance=identity.assurance,
-                verified_by=identity.verified_by,
+                identity=identity,
+                local=arrived_on_loopback(request),
             )
         except ApprovalsError as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        if outcome.kind is OutcomeKind.REFUSED:
+            # Recorded as refused in the ledger by the service; the sweep did not move.
+            raise HTTPException(status.HTTP_403_FORBIDDEN, outcome.statement)
 
         return RedirectResponse(f"{BASE_PATH}/approvals", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -337,7 +317,7 @@ def mount(app: FastAPI, settings: Settings, authenticator: Authenticator | None 
     if not settings.dashboard_enabled:
         _log.info("dashboard disabled")
         return False
-    auth: Authenticator = authenticator or NullAuthenticator()
+    auth: Authenticator = authenticator or authenticator_from_settings(settings)
     check_decision_surface(settings, auth)
     app.include_router(build_router(settings, auth))
     _log.info(

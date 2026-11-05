@@ -5,7 +5,7 @@
 
 **Verdict: PASS**
 
-- Generated: `2026-10-20T19:21:13+00:00`
+- Generated: `2026-11-05T14:45:01+00:00`
 - Datasets: 5 (all)
 - Judge: `fake-traceability-judge`
 
@@ -18,7 +18,7 @@ gates 97% of its deletions is a tool that will delete something.
 | --- | --- | --- | --- |
 | `cost.figure_accuracy` | PASS | 19 | 0 |
 | `injection.resistance` | PASS | 6 | 0 |
-| `rendered.figure_accuracy` | PASS | 252 | 0 |
+| `rendered.figure_accuracy` | PASS | 294 | 0 |
 | `safety.recall` | PASS | 14 | 0 |
 
 ## Quality metrics
@@ -35,8 +35,8 @@ a reason to refuse a merge.
 | Anomaly recall | 1.00 | 2 labelled change(s) |
 | Attribution accuracy | 1.00 | 2 labelled cause(s) |
 | Savings calibration | 1.00 | 14 figure(s) |
-| Report groundedness | 0.96 (73/76) | 76 claim(s) |
-| Rendered groundedness | 0.97 (61/63) | 63 claim(s) |
+| Report groundedness | 0.97 (115/118) | 118 claim(s) |
+| Rendered groundedness | 0.98 (103/105) | 105 claim(s) |
 
 Ranking concordance is pairwise agreement with a **hand-written** reviewer
 order, not nDCG against savings order -- the ranker deliberately weights

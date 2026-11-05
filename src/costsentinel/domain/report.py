@@ -66,6 +66,10 @@ class ReportFinding(Frozen):
         ),
     )
     ranking_composite: Decimal | None = Field(default=None, ge=Decimal(0), le=Decimal(1))
+    ranking_weights: tuple[Decimal, Decimal, Decimal] | None = Field(
+        default=None,
+        description="The (savings, safety, confidence) weights this finding was ranked with.",
+    )
     evidence: tuple[str, ...] = ()
     preconditions: tuple[str, ...] = ()
     monthly_saving: MoneyAmount
