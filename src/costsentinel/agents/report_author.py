@@ -515,7 +515,7 @@ def make_report_author(*, llm: LLM, settings: Settings) -> Node:
         )
 
         notes: list[str] = [
-            "CostSentinel has no execution path in this phase, so nothing in this "
+            "CostSentinel has no execution path, so nothing in this "
             "report has been or can be applied automatically.",
             "Findings are ranked by a weighted composite of savings, safety and "
             "detector confidence, not by savings alone. Each finding shows its own "

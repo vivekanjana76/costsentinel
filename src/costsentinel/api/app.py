@@ -1,10 +1,10 @@
 """FastAPI application.
 
-Phase 1 exposes the sweep and a health check. The scan runs synchronously: a mock
-sweep takes milliseconds, and introducing a job queue before there is a real
-provider to make it slow would be scope the current phase has not earned. Phase 2
-makes the scan a background job once real Azure calls make it long-running -- the
-durable checkpointer that makes that safe is already wired.
+The sweep and a health check, plus three surfaces that are each off until an operator
+turns them on: the A2A endpoint, the operator dashboard and the Slack interaction
+webhook. The scan runs synchronously; a mock sweep takes milliseconds, and a job queue
+for long real-estate sweeps is still an open ROADMAP item. The durable checkpointer
+that would make one safe is already wired.
 """
 
 from __future__ import annotations
@@ -60,7 +60,6 @@ class HealthResponse(BaseModel):
 
     status: str
     version: str
-    phase: int
     mode: str
     llm_backend: str
     requires_no_credentials: bool
@@ -101,8 +100,8 @@ def create_app(
         version=API_VERSION,
         summary="Autonomous multi-agent FinOps governance for Azure estates.",
         description=(
-            "Phase 1 is read-only and mock-only: there is no execution path, so "
-            "nothing this API returns can have changed a resource."
+            "Read-only: there is no execution path, so nothing this API returns, and "
+            "no decision recorded through it, can have changed a resource."
         ),
     )
 
@@ -118,11 +117,10 @@ def create_app(
         return HealthResponse(
             status="ok",
             version=API_VERSION,
-            phase=1,
             mode=settings.mode.value,
             llm_backend=settings.llm_backend.value,
             requires_no_credentials=settings.requires_no_credentials,
-            memory="configured" if settings.memory_enabled else "disabled (Phase 4)",
+            memory="configured" if settings.memory_enabled else "disabled",
             tracing=tracing_status(settings),
         )
 

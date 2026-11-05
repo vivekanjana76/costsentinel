@@ -471,7 +471,7 @@ Spend in 00000000-0000-4000-8000-00000000a001 shows a level shift (increase): 12
 
 ## Notes
 
-- CostSentinel has no execution path in this phase, so nothing in this report has been or can be applied automatically.
+- CostSentinel has no execution path, so nothing in this report has been or can be applied automatically.
 - Findings are ranked by a weighted composite of savings, safety and detector confidence, not by savings alone. Each finding shows its own breakdown.
 - 1 finding(s) could not be priced from provider data. They are excluded from the projected savings rather than assumed to be zero, and they rank below every priced finding -- we will not tell you that something we cannot cost is your bigger opportunity. Each one says why no figure could be derived.
 - 2 spend change(s) were detected and are listed separately from the findings. A spend change is something to investigate, not something to act on: its difference is what you are now paying differently, not an amount anyone has identified a way to recover, and none of it appears in the projected savings above.

@@ -1,14 +1,15 @@
-"""The approval-gate seam.
+"""The approval-gate seam, and its safe default.
 
-Phase 1 ships the interface and the safe default only. The Policy Guard node
-classifies every action and builds an :class:`ApprovalRequest` for anything gated,
-but does not yet halt the graph -- and because Phase 1 has no execution path at all,
-classifying without halting cannot cause a mutation.
+The Policy Guard node classifies every action and builds an :class:`ApprovalRequest`
+for anything gated. Since Phase 5 the graph halts at a durable LangGraph interrupt
+(:mod:`costsentinel.agents.approval_gate`, ARCHITECTURE.md D7), and every human
+decision -- from the CLI, the dashboard or the Slack webhook -- is recorded by one
+function, :func:`costsentinel.approvals.service.decide` (D133). None of those surfaces
+implements this protocol; they resume the interrupt instead.
 
-Phase 10 turns this into a durable LangGraph interrupt with a local CLI gate
-(ARCHITECTURE.md D7); Phase 10 adds the Teams and Slack adapters. All of them satisfy
-this same protocol and produce the same
-:class:`~costsentinel.domain.governance.ApprovalDecision`.
+What remains here is the in-process seam and :class:`NoDecisionGate`, which never
+decides. Returning no decision keeps a run halted, so the default can never be the
+reason something proceeded.
 """
 
 from __future__ import annotations

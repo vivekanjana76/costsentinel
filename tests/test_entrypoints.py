@@ -394,7 +394,8 @@ def test_health_reports_the_active_backends(client: TestClient) -> None:
     body: dict[str, Any] = client.get("/health").json()
     assert body["status"] == "ok"
     assert body["version"] == __version__
-    assert body["phase"] == 1
+    # The version is the release truth. A hard-coded phase said 1 for eleven phases.
+    assert "phase" not in body
     assert body["mode"] == "mock"
     assert body["llm_backend"] == "fake"
     assert body["requires_no_credentials"] is True

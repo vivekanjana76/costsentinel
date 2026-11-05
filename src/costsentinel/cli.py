@@ -31,7 +31,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from costsentinel.approvals import token as approver_token
-from costsentinel.approvals.identity import ApproverIdentity, Surface
+from costsentinel.approvals.identity import ApproverIdentity, AuthorisationPolicy, Surface
 from costsentinel.approvals.ledger import OutcomeKind
 from costsentinel.approvals.service import decide as decide_approval
 from costsentinel.config import (
@@ -67,6 +67,7 @@ from costsentinel.reports.pdf import INSTALL_HINT as PDF_INSTALL_HINT
 from costsentinel.reports.pdf import PdfUnavailableError, pdf_available, render_pdf
 from costsentinel.slack.client import SlackClient, SlackError, client_from_settings
 from costsentinel.slack.queue import post_queue, queued_messages
+from costsentinel.slack.webhook import INTERACTIONS_PATH
 from costsentinel.tools import describe_surface
 
 PROGRAM = "costsentinel"
@@ -185,10 +186,12 @@ def _add_surfaces(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
         "serve",
         help="Serve the API, and the dashboard and A2A surface where enabled, on BIND_HOST.",
         description=(
-            "Listens on BIND_HOST (loopback by default). With DASHBOARD_CAN_DECIDE=true "
-            "and no authenticator configured, a non-loopback bind refuses to start: "
-            "anybody who could reach the page could approve under any name. Loopback "
-            "binds and display-only dashboards serve unchanged."
+            "Listens on BIND_HOST (loopback by default). With DASHBOARD_CAN_DECIDE=true, "
+            "a non-loopback bind refuses to start unless APPROVER_TOKEN_SECRET and "
+            "APPROVER_ALLOWLIST are both set: otherwise anybody who could reach the page "
+            "could approve under any name. SLACK_ENABLED=true without "
+            "SLACK_SIGNING_SECRET refuses to start too. Loopback binds and display-only "
+            "dashboards serve unchanged."
         ),
     )
     serve.add_argument(
@@ -619,6 +622,18 @@ def _config_text(settings: Settings) -> str:
         else settings.memory_backend.value
     )
     tracing = "configured" if settings.tracing_enabled else "disabled (no-op)"
+    approvers = (
+        "approver token (verified)"
+        if settings.approver_token_secret is not None
+        else "none (typed names, self-asserted; decisions on loopback only)"
+    )
+    entries = len(AuthorisationPolicy.from_settings(settings).entries)
+    allowlist = (
+        f"{entries} entr{'y' if entries == 1 else 'ies'}"
+        if entries
+        else ("empty (no verified approver is admitted)")
+    )
+    slack = f"enabled ({INTERACTIONS_PATH})" if settings.slack_enabled else "disabled"
     return "\n".join(
         [
             f"mode                 {settings.mode.value}",
@@ -636,6 +651,9 @@ def _config_text(settings: Settings) -> str:
             f"credentials          {credentials}",
             f"subscription_scope   {_scope_text(settings.subscription_scope)}",
             f"client_tag           {settings.azure_client_tag}",
+            f"dashboard_auth       {approvers}",
+            f"approver_allowlist   {allowlist}",
+            f"slack                {slack}",
         ]
     )
 

@@ -305,25 +305,31 @@ report renders. The view layer computes no figure: every value is a string the r
 already produced, enforced by the same check that gates the rendered document.
 
 The queue page can record a decision only when `DASHBOARD_CAN_DECIDE` is also set, and
-it does so through the **same path** `costsentinel approvals decide` uses --
-`find_pending`, `DecisionRequest`, `resume`. There is no second decision
-implementation; a test asserts both the absence of one and the presence of the shared
-calls. The POST is refused outright when the flag is off, because a hidden form field
+it does so through the **same function** `costsentinel approvals decide` and the
+Slack webhook call, `approvals.service.decide`. There is no second decision
+implementation; a test asserts both that no other module resumes a sweep and that
+every surface calls the shared function. The POST is refused outright when the flag is off, because a hidden form field
 is not a permission check.
 
 **An unauthenticated decision surface off loopback refuses to start.** With
-`DASHBOARD_CAN_DECIDE=true`, a non-loopback `BIND_HOST` and no authenticator configured,
-the app is not built and the server exits with an error naming the fix. A decision that
+`DASHBOARD_CAN_DECIDE=true` and a non-loopback `BIND_HOST`, the app is not built and the
+server exits with an error naming the fix -- unless an authenticator verifies approvers
+(`APPROVER_TOKEN_SECRET`) **and** `APPROVER_ALLOWLIST` names who may decide. Neither on
+its own lifts it, and nothing lifts it by default. A decision that
 arrives on a non-loopback socket is also refused per request, which covers a server
 started with a wider `--host` than `BIND_HOST` says. **One thing the process cannot
 see:** a reverse proxy on the same machine forwards over loopback, and looks like a local
-operator. Do not front a decision surface with a proxy until Phase 10b's authenticator
-exists; serve it display-only instead.
+operator. Do not front a self-asserting decision surface with a proxy; configure the
+token authenticator, or serve it display-only.
 
-**Every approver is recorded as self-asserted and unverified** until that authenticator
-exists. The name on a decision is what the approver typed, and the record, the
+**Without the token authenticator, every approver is recorded as self-asserted and
+unverified.** The name on a decision is what the approver typed, and the record, the
 authorisation and the audit events all say so, so the trail never claims an identity
-was established when it was only asserted.
+was established when it was only asserted. With it, a decision must present a signed,
+expiring token (`costsentinel approvers token <name>`); the record says
+`verified_by: approver-token`, and the allowlist still decides whether that person may
+approve. A token that fails verification is refused having recorded nothing. Tokens
+cannot be revoked one at a time: rotating the secret revokes all of them.
 
 **Approving from a page does what approving from a terminal does**: it records a
 decision and hands the action to a person. The four-way no-mutation proof of section 5
