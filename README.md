@@ -31,7 +31,8 @@ subscription, resource and figure is made up, and each page carries a banner say
 
 **Read without running anything:** [a sample client report](docs/sample-report.md) ·
 [the eval scorecard](evals/REPORT.md) · [a captured demo](docs/demo/approval-resume.txt)
-· [the architecture](ARCHITECTURE.md) · [the operator guide](docs/guide.md)
+· [a Slack approval message](docs/slack/approval-message.json) ·
+[the architecture](ARCHITECTURE.md) · [the operator guide](docs/guide.md)
 
 ## What makes this different
 
@@ -98,6 +99,25 @@ and resumes the sweep with a decision. The [committed transcript](docs/demo/appr
 shows this one OS process per command, and a test replays it as real subprocesses
 ([`test_a_committed_transcript_is_what_separate_processes_print_today`](tests/test_docs.py)).
 
+**Approve from Slack, as a verified approver, through the one path.** Each pending
+approval can be posted as a Block Kit message built from the report's own strings
+([sample](docs/slack/approval-message.json)), and no figure in it is computed by the
+adapter ([`test_no_message_introduces_a_figure`](tests/test_slack_blocks.py)). A click
+is signature-verified on the raw bytes before anything parses it. A bad, missing or
+stale signature records nothing
+([`test_a_stale_signature_is_refused_and_records_nothing`](tests/test_slack_webhook.py)).
+The approver is the signed Slack user, and only an allowlisted user or group may
+decide. An unauthorised click is recorded as a refusal, never a decision
+([`test_an_unauthorised_click_is_refused_and_recorded_as_refused`](tests/test_slack_webhook.py)).
+A redelivered click is one decision
+([`test_the_same_click_delivered_twice_is_one_decision`](tests/test_slack_webhook.py)).
+The CLI, the dashboard and Slack all decide through one function, and no other module
+can resume a sweep
+([`test_only_the_service_resumes_a_sweep_or_builds_a_decision_request`](tests/test_decision_service.py)).
+A signed Slack approval of a disk deletion makes zero provider calls
+([`test_a_slack_approval_of_a_deletion_makes_zero_provider_calls`](tests/test_slack_never_mutates.py)).
+The Slack adapter is off by default, and CI never talks to Slack.
+
 **Honest about the unknown.** A saving that cannot be derived is `unknown`, never `0`. It
 is excluded from totals, ranked below every priced finding, and rendered as "unknown"
 ([`test_an_unknown_renders_as_unknown_and_never_as_zero`](tests/test_reports.py),
@@ -123,6 +143,10 @@ reason. State is checkpointed after every node.
                           v
                     APPROVAL GATE  -- durable interrupt; process may exit;
                           |           resumes on a recorded decision
+                          |
+     CLI  ----+           |
+     dashboard (token) ---+--> approvals.service.decide --> authorise --> resume
+     Slack (signed) ------+    (one path: allowlist, idempotency, refusals recorded)
                           v
                          END        (approval hands off; nothing executes)
 ```
@@ -179,18 +203,20 @@ command, the approval and learning flows, the API, and a real-Azure run are in t
   `Cost Management Reader`. Point it only at a sandbox subscription you own, with
   approval. It has not been run against a real estate as part of building this project.
   Read [SECURITY.md](SECURITY.md) first.
-- **Known limits, stated rather than hidden:** approvers are recorded as self-asserted
-  until a real authenticator exists, so a dashboard that can record decisions refuses to
-  start off loopback. A2A interop with an external agent is untested. Anomaly thresholds are
+- **Known limits, stated rather than hidden:** without `APPROVER_TOKEN_SECRET`,
+  dashboard approvers are recorded as self-asserted, so a dashboard that can record
+  decisions refuses to start off loopback. The Slack adapter is tested only against
+  synthetic, hand-written payloads, never a real workspace. A2A interop with an external
+  agent is untested. Anomaly thresholds are
   defensible defaults that have not been calibrated against a real estate. See
   [ROADMAP.md](ROADMAP.md).
 
 ## How it was built
 
-Twelve issue-driven phases. Each one was a GitHub milestone with an issue per task,
+Thirteen issue-driven phases (1 to 12, and 10b). Each one was a GitHub milestone with an issue per task,
 built on its own branch in Conventional Commits, merged by pull request with CI green,
 and tagged as a [release](https://github.com/vivekanjana76/costsentinel/releases). The
-suite has about 1,480 tests at 93% coverage, and CI fails under 90%. The phase order
+suite has about 1,680 tests at 93% coverage, and CI fails under 90%. The phase order
 changed nine times, and each change is recorded with its reason in
 [ROADMAP.md](ROADMAP.md). What changed in each release is in
 [CHANGELOG.md](CHANGELOG.md).

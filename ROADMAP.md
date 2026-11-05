@@ -1,7 +1,8 @@
 # CostSentinel — Roadmap
 
-**Current phase: 10b** — the Slack approval adapter, and the real authenticator the
-dashboard interlock deferred. Both share one identity and authorisation path.
+**Current phase: 10b, complete** (v0.13.0) — the Slack approval adapter, and the real
+authenticator the dashboard interlock deferred. Both share one identity and
+authorisation path. Next: the open, optional 9b, 10c and 12b, then Phase 13.
 
 **One reordering, flagged.** 10b runs before the still-open 9b, although 9b is numbered
 first. 10b can be finished offline against synthetic payloads and a test signing
@@ -792,26 +793,26 @@ and the CLI gate are the contract both adapters implement.
 
 Milestone: *Phase 10b - The Slack approval adapter and the real authenticator*.
 
-- [ ] Roadmap set to this phase; Teams and escalation split into 10c (#124)
-- [ ] **One identity and authorisation path** for every surface: a typed principal, an
+- [x] Roadmap set to this phase; Teams and escalation split into 10c (#124)
+- [x] **One identity and authorisation path** for every surface: a typed principal, an
       allowlist (optionally per client), and one `authorise()` check that fails closed
       (#125)
-- [ ] **A single decision service** that every surface calls, idempotent on a
+- [x] **A single decision service** that every surface calls, idempotent on a
       redelivered interaction, returning the existing decision for an already-decided
       item, and recording a refusal as a refusal (#126)
-- [ ] **Slack request signatures verified**: HMAC over timestamp and body, constant-time,
+- [x] **Slack request signatures verified**: HMAC over timestamp and body, constant-time,
       with a replay window. A request that fails verification records nothing (#127)
-- [ ] **Block Kit rendering** of each pending approval from the report's own strings,
+- [x] **Block Kit rendering** of each pending approval from the report's own strings,
       recomputing no figure, with a committed synthetic sample (#128)
-- [ ] **The interaction webhook**: the verified Slack user is the approver, an
+- [x] **The interaction webhook**: the verified Slack user is the approver, an
       unauthorised click is refused and recorded, a duplicate is one decision (#136)
-- [ ] An **outbound client seam** with a fake and a standard-library client, opt-in
+- [x] An **outbound client seam** with a fake and a standard-library client, opt-in
       configuration, and `costsentinel slack render|post` (#129)
-- [ ] **The dashboard authenticator**: a signed approver token on the shared
+- [x] **The dashboard authenticator**: a signed approver token on the shared
       authorisation path. The non-loopback refusal is lifted only when it is configured
       (#130)
-- [ ] **A Slack approval never executes**, asserted four ways (#131)
-- [ ] Stale references swept (#132); the oldest open item resolved (#133); coverage and
+- [x] **A Slack approval never executes**, asserted four ways (#131)
+- [x] Stale references swept (#132); the oldest open item resolved (#133); coverage and
       slow tests checked (#134); ARCHITECTURE, README, CHANGELOG for v0.13.0 (#135)
 
 **Exit criteria:** a destructive recommendation halts; a signed Slack approval from an
@@ -822,6 +823,28 @@ click is recorded as refused; and nothing on the path can mutate a resource.
 **New dependencies to flag:** none. Signature verification is `hmac` and `hashlib` from
 the standard library, and the outbound client is `urllib.request`. `slack-sdk` was
 expected here and is not needed for two endpoints.
+
+**Outcome.** Every exit criterion is a test: the signature cases in
+`tests/test_slack_signature.py` and `tests/test_slack_webhook.py`, the duplicate and
+already-decided cases in both of those and `tests/test_decision_service.py`, the four
+never-executes proofs in `tests/test_slack_never_mutates.py`, and the token
+authenticator in `tests/test_approver_token.py`. Decisions D132 to D138.
+
+#134 found nothing to fix. Coverage rose from 92.66% to 93.71%. The slowest tests are
+the two transcript replays (about 13 s and 8 s), which are slow because they start
+separate processes, which is their point. No test is flaky. Two very large durations in
+one run came from the machine sleeping mid-suite, not from a test.
+
+**Open, recorded rather than hidden** (ARCHITECTURE.md section 14):
+
+- [ ] Acknowledge a Slack interaction before deciding it. The webhook decides inline,
+      which is milliseconds on the mock estate but is not guaranteed inside Slack's
+      three-second window on a large checkpoint store.
+- [ ] A shared outcome ledger for more than one host. Uniqueness holds across processes
+      on one SQLite file.
+- [ ] Per-token revocation for approver tokens. Today only rotating the secret revokes.
+- [ ] `slack post` posts the current queue each time it runs. Remembering what was
+      posted would stop a second run posting twice.
 
 ---
 
@@ -1036,16 +1059,11 @@ a complete audit chain from signal to execution, and the outcome recorded.
       and the server-rendered pages exist precisely so the content can be judged before
       a frontend build is added to the repository.
 
-- **Config-tunable ranking weights per client** (Phase 10, with the client policy
-  overlays the approval gate needs anyway).
-  The Phase 2 weights -- 0.60 savings, 0.25 safety, 0.15 confidence -- are a product
-  judgement baked into a module constant. Different clients have genuinely different
-  appetites: a government production estate may want safety weighted far higher than a
-  development sandbox. The weights should move into the client policy overlay
-  alongside the action-class tightening, with the built-in values as the default and
-  the effective weights reported on every finding so a client can see what was applied
-  to them. The ranking must stay deterministic and the weights must stay data, never
-  model output.
+- [x] **Config-tunable ranking weights per client.** Done in Phase 10b (#133, D137) as
+  a validated `RANKING_WEIGHTS_PATH` file rather than inside the client policy overlay,
+  which does not exist yet. The weights change the order and nothing else, and the
+  effective weights are stated on every finding. Moving them into the overlay when the
+  overlay arrives is a relocation, not new behaviour.
 
 - **Per-client report branding and formatting** (after the reporting phase, whenever
   a second client's deliverable is actually required). A logo, a colour and a footer are

@@ -235,6 +235,7 @@ def test_the_readme_names_exactly_the_gates_that_block_a_build() -> None:
         "docs/guide.md",
         "docs/demo/approval-resume.txt",
         "docs/demo/learning-loop.txt",
+        "docs/slack/approval-message.json",
         "SECURITY.md",
         "LICENSE",
     ],

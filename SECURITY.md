@@ -341,6 +341,39 @@ The pages fetch nothing at runtime: the stylesheet is inline and there is no scr
 no font and no CDN. Every provider-supplied value -- resource names and tags in
 particular -- is HTML-escaped with quotes included.
 
+### Optional: the Slack approval webhook
+
+```bash
+SLACK_ENABLED=true SLACK_SIGNING_SECRET=... APPROVER_ALLOWLIST=slack:T0123/U0456   uv run costsentinel serve
+```
+
+Off by default. It is the one surface meant to be reachable from the internet, so it
+trusts nothing it receives:
+
+- **Every request is signature-verified on the raw body before anything parses it**:
+  Slack's `v0` HMAC-SHA256 over `v0:<timestamp>:<body>`, compared in constant time.
+  A timestamp more than five minutes from now in either direction is refused, and the
+  window can be configured tighter and never wider. A missing, malformed, stale or
+  forged request is a 401 that **records nothing**. Enabled without a signing secret,
+  the server refuses to start.
+- **The approver is the Slack user in the signed payload**, recorded as verified.
+  **Verified is not permitted**: only a user or user group on `APPROVER_ALLOWLIST` may
+  decide, and the allowlist is empty, admitting nobody, by default. An unauthorised
+  click is recorded as a refusal, never as a decision.
+- **A replayed or redelivered click is one decision**: inside the window it carries the
+  same interaction key and returns the stored outcome.
+- **The payload's `response_url` is accepted only on `https://hooks.slack.com/`**, with
+  no credentials or port, so a payload cannot make this process post somewhere else.
+- **Resource names are data.** Every value placed in a Slack message is escaped, so a
+  resource named `<!channel>` cannot ping a channel or disguise a link.
+- **It executes nothing.** A Slack approval hands the action to a person, through the
+  same function the CLI calls. Four tests prove it the Phase 5 ways, including a signed
+  approval of a disk deletion that makes zero provider calls.
+
+The bot token needs `chat:write`, plus `usergroups:read` only if the allowlist names a
+group. Nothing in the adapter can read or change an Azure resource. Every test uses
+synthetic payloads and a labelled fake secret; no real workspace was used.
+
 ### Optional: the A2A surface
 
 ```bash
