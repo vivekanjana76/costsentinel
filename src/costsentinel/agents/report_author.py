@@ -730,6 +730,7 @@ def _finding(state: ScanState, recommendation: Recommendation, note: str) -> Rep
         root_cause_factors=tuple(f.statement for f in cause.factors) if cause else (),
         ranking_rationale=score.rationale if score else "",
         ranking_breakdown=score.explain() if score else "",
+        ranking_weights=score.weights if score else None,
         ranking_composite=score.composite if score else None,
         evidence=tuple(f"{obs.name}: {obs.value}" for obs in (signal.evidence if signal else ())),
         preconditions=recommendation.preconditions,

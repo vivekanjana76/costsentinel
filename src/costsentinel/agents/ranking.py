@@ -6,9 +6,18 @@ reversible is often a better first move than a 400-dollar saving that is risky a
 inferred from a thin observation window.
 
 So the ordering is a weighted composite of three normalised components, computed
-here with no model involvement. The weights are explicit policy constants, stated
-below and reported on every finding, so a client can see the trade-off being made
-rather than having to trust an opaque ordering.
+here with no model involvement. The weights are explicit policy, stated below and
+reported on every finding, so a client can see the trade-off being made rather than
+having to trust an opaque ordering.
+
+**Per-client weights** (D137). The constants below are the default. An operator may
+give one client different weights in a ``RANKING_WEIGHTS_PATH`` file -- a government
+production estate may want safety weighted far higher than a sandbox. They are data,
+validated as :class:`RankingWeights` (each in [0, 1], summing to exactly 1), never
+model output, and the effective weights are written into every finding's basis. They
+change the *order* only: no figure, class or finding is touched, and the
+unknown-ranks-low tier sits outside the weighted sum, so no weighting can lift an
+unpriced finding above a priced one.
 
 **An unknown saving ranks low until quantified.** A finding with a quantified saving
 outranks one without, whatever their composites say. This is a *tier* applied in
@@ -36,11 +45,16 @@ property the tests assert directly.
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Sequence
 from decimal import ROUND_HALF_UP, Decimal
+from pathlib import Path
 
+from pydantic import Field, model_validator
+
+from costsentinel.config import Settings
 from costsentinel.domain.analysis import TIER_UNQUANTIFIED, RankingScore
-from costsentinel.domain.common import Provenance
+from costsentinel.domain.common import Frozen, Provenance
 from costsentinel.domain.recommendations import ActionClass, Recommendation
 
 #: Weight on the saving, as a share of the largest saving in the run.
@@ -56,6 +70,62 @@ WEIGHT_RISK = Decimal("0.25")
 
 #: Weight on the detector's confidence.
 WEIGHT_CONFIDENCE = Decimal("0.15")
+
+
+class RankingWeights(Frozen):
+    """The three weights of the composite. Data, validated, never model output."""
+
+    savings: Decimal = Field(ge=0, le=1, decimal_places=4)
+    safety: Decimal = Field(ge=0, le=1, decimal_places=4)
+    confidence: Decimal = Field(ge=0, le=1, decimal_places=4)
+
+    @property
+    def triple(self) -> tuple[Decimal, Decimal, Decimal]:
+        """(savings, safety, confidence), as a score carries them."""
+        return (self.savings, self.safety, self.confidence)
+
+    @model_validator(mode="after")
+    def _sum_to_one(self) -> RankingWeights:
+        total = self.savings + self.safety + self.confidence
+        if total != 1:
+            msg = f"ranking weights must sum to exactly 1, not {total}"
+            raise ValueError(msg)
+        return self
+
+
+#: The built-in weights, used for every client without an override.
+DEFAULT_WEIGHTS = RankingWeights(
+    savings=WEIGHT_SAVINGS, safety=WEIGHT_RISK, confidence=WEIGHT_CONFIDENCE
+)
+
+
+class RankingWeightsFile(Frozen):
+    """A ``RANKING_WEIGHTS_PATH`` file: weights for named clients, nothing else."""
+
+    clients: dict[str, RankingWeights] = Field(default_factory=dict[str, RankingWeights])
+
+    def for_client(self, client: str) -> RankingWeights:
+        """This client's weights, or the default."""
+        return self.clients.get(client, DEFAULT_WEIGHTS)
+
+
+@functools.cache
+def _load(path: Path) -> RankingWeightsFile:
+    return RankingWeightsFile.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def weights_for(settings: Settings, client: str) -> RankingWeights:
+    """The weights a client's sweep ranks with.
+
+    Raises:
+        ValidationError: If the configured file is malformed, names an unknown key, or
+            holds weights that do not sum to 1. Loud, so a typo cannot silently fall
+            back to the default.
+    """
+    if settings.ranking_weights_path is None:
+        return DEFAULT_WEIGHTS
+    return _load(settings.ranking_weights_path).for_client(client)
+
 
 #: How safe each class is, where 1.0 is "apply it without asking".
 #: `review` scores well above `block`: it needs a human, but it is something
@@ -88,14 +158,21 @@ def savings_component(monthly: Decimal | None, *, largest_monthly: Decimal | Non
     return min(Decimal(1), monthly / largest_monthly)
 
 
-def composite_score(*, savings: Decimal, safety: Decimal, confidence: Decimal) -> Decimal:
+def composite_score(
+    *,
+    savings: Decimal,
+    safety: Decimal,
+    confidence: Decimal,
+    weights: RankingWeights = DEFAULT_WEIGHTS,
+) -> Decimal:
     """Weighted composite of the three components."""
-    total = WEIGHT_SAVINGS * savings + WEIGHT_RISK * safety + WEIGHT_CONFIDENCE * confidence
+    total = weights.savings * savings + weights.safety * safety + weights.confidence * confidence
     return total.quantize(_SCORE_PLACES, rounding=ROUND_HALF_UP)
 
 
 def score_recommendations(
     recommendations: Sequence[Recommendation],
+    weights: RankingWeights = DEFAULT_WEIGHTS,
 ) -> tuple[RankingScore, ...]:
     """Score every recommendation, in the order given.
 
@@ -122,11 +199,14 @@ def score_recommendations(
                 savings_component=savings,
                 risk_component=safety,
                 confidence_component=confidence,
-                composite=composite_score(savings=savings, safety=safety, confidence=confidence),
+                composite=composite_score(
+                    savings=savings, safety=safety, confidence=confidence, weights=weights
+                ),
+                weights=weights.triple,
                 provenance=Provenance.calculated(
-                    f"{WEIGHT_SAVINGS} x savings({savings}) + "
-                    f"{WEIGHT_RISK} x safety({safety}) + "
-                    f"{WEIGHT_CONFIDENCE} x confidence({confidence})"
+                    f"{weights.savings} x savings({savings}) + "
+                    f"{weights.safety} x safety({safety}) + "
+                    f"{weights.confidence} x confidence({confidence})"
                 ),
             )
         )

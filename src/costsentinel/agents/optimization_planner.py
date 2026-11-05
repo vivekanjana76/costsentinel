@@ -25,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from costsentinel.agents.base import Node, NodeUpdate, audit, with_audit
-from costsentinel.agents.ranking import rank_order, score_recommendations
+from costsentinel.agents.ranking import rank_order, score_recommendations, weights_for
 from costsentinel.config import Settings
 from costsentinel.domain.analysis import RankingScore
 from costsentinel.domain.common import Provenance, ProvenanceSource, Verification
@@ -223,7 +223,6 @@ def make_optimization_planner(
     policy: PolicyStore | None = None,
 ) -> Node:
     """Build the Optimization Planner node."""
-    _ = settings
     store = policy or PolicyStore()
 
     def optimization_planner(state: ScanState) -> NodeUpdate:
@@ -335,7 +334,7 @@ def make_optimization_planner(
             )
 
         # --- deterministic ranking ---------------------------------------
-        scores = score_recommendations(proposed)
+        scores = score_recommendations(proposed, weights_for(settings, state.client))
         order = rank_order(proposed, scores)
         rank_by_id = {rec_id: position for position, rec_id in enumerate(order, start=1)}
         ranked = tuple(

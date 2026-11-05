@@ -125,6 +125,15 @@ class RankingScore(Frozen):
         ge=Decimal(0), le=Decimal(1), description="The detector's own confidence."
     )
     composite: Decimal = Field(ge=Decimal(0), le=Decimal(1))
+    weights: tuple[Decimal, Decimal, Decimal] | None = Field(
+        default=None,
+        description=(
+            "The (savings, safety, confidence) weights the composite was computed with, "
+            "so a client sees what was applied to them (D137). Typed rather than text, "
+            "so the groundedness checks can admit exactly the weights that were used. "
+            "None on a score stored before weights were configurable."
+        ),
+    )
     rationale: str = Field(default="", max_length=800)
     rationale_provenance: Provenance | None = None
     provenance: Provenance
@@ -184,6 +193,14 @@ class RankingScore(Frozen):
             self.recommendation_id,
         )
 
+    @property
+    def weighting(self) -> str:
+        """The weights in words, or empty for a score that predates them."""
+        if self.weights is None:
+            return ""
+        savings, safety, confidence = self.weights
+        return f"savings {savings}, safety {safety}, confidence {confidence}"
+
     def explain(self) -> str:
         """A compact, human-readable breakdown of the computed components.
 
@@ -191,9 +208,10 @@ class RankingScore(Frozen):
         showed only the weighted score would leave a client unable to explain why a
         finding with a higher-looking composite sits lower.
         """
+        weighted = f" (weights: {self.weighting})" if self.weighting else ""
         return (
             f"{self.tier_label}; savings {self.savings_component:.3f}, "
             f"safety {self.risk_component:.3f}, "
             f"confidence {self.confidence_component:.3f} "
-            f"-> {self.composite:.3f}"
+            f"-> {self.composite:.3f}{weighted}"
         )

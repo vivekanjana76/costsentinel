@@ -149,6 +149,12 @@ def _state_figures(state: ScanState, report: ClientReport) -> frozenset[str]:
         ]
     for cause in state.root_causes:
         amounts.append(cause.confidence)
+    # The ranking weights each score was computed with (D137). Configured policy the
+    # pipeline applied and carries on the score, so a rationale quoting them is
+    # copying, not composing. Read from the score itself, never from settings, so a
+    # weight the pipeline did not actually use is still ungrounded.
+    for score in state.ranking:
+        amounts += list(score.weights or ())
 
     figures: set[str] = set()
     for amount in amounts:

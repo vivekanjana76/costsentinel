@@ -61,7 +61,7 @@ northwind-energy  [high]
 $ costsentinel approvals list
 9 action(s) awaiting a decision across 1 paused sweep(s).
 
-northwind-energy  [sweep run-918f7e9c8a20]
+northwind-energy  [sweep run-73bd61cbc1c9]
   rec-idlevm-4d7f269994  `review`
     deallocate virtual machine on vm-analytics-01 (idle virtual machine), worth 560.64 USD per month
     costs 560.64 USD / month; saving 560.64 USD / month (6,727.68 USD / year)
@@ -106,13 +106,13 @@ An approval hands the action to a person and records the hand-off. CostSentinel 
 # that; CostSentinel has no execution path and changes nothing.
 $ costsentinel approvals decide rec-orphdisk-2923594012 --approve --reason "confirmed orphaned; platform team will delete it" --approver ops@example.com
 ops@example.com (self-asserted, unverified) approved delete orphaned managed disk on disk-analytics-01-data (38.01 USD / month) on 2026-11-05: confirmed orphaned; platform team will delete it It is handed off for a person to carry out; CostSentinel has no path to perform it.
-Sweep run-918f7e9c8a20 is still waiting on 8 action(s). Run `approvals list` to see them.
+Sweep run-73bd61cbc1c9 is still waiting on 8 action(s). Run `approvals list` to see them.
 
 # Process 4: the approved item has left the queue; eight remain.
 $ costsentinel approvals list
 8 action(s) awaiting a decision across 1 paused sweep(s).
 
-northwind-energy  [sweep run-918f7e9c8a20]
+northwind-energy  [sweep run-73bd61cbc1c9]
   rec-idlevm-4d7f269994  `review`
     deallocate virtual machine on vm-analytics-01 (idle virtual machine), worth 560.64 USD per month
     costs 560.64 USD / month; saving 560.64 USD / month (6,727.68 USD / year)

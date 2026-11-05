@@ -291,6 +291,17 @@ class Settings(BaseSettings):
     )
 
     # --- exemption policy -------------------------------------------------
+    ranking_weights_path: Path | None = Field(
+        default=None,
+        validation_alias=_env("RANKING_WEIGHTS_PATH"),
+        description=(
+            "A JSON file of per-client ranking weights: "
+            '{"clients": {"<client>": {"savings": "0.40", "safety": "0.45", '
+            '"confidence": "0.15"}}}. Each weight in [0, 1], summing to exactly 1. '
+            "Unset, or a client not named, uses the built-in 0.60 / 0.25 / 0.15. "
+            "Changes the order of findings only; no figure or class (ARCHITECTURE.md D137)."
+        ),
+    )
     exemption_rules_path: Path | None = Field(
         default=None,
         validation_alias=_env("EXEMPTION_RULES_PATH"),

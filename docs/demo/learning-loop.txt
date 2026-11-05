@@ -64,7 +64,7 @@ Recorded: rec-idlevm-4d7f269994 rejected by client@example.com on 2026-11-05.
   action            deallocate_virtual_machine
   monthly saving    560.64 USD
   reason            owner confirmed this is a quarter-end batch host
-  audit event       outcome-15bba4069eb2739a-audit
+  audit event       outcome-ac4cfbe6551a01a9-audit
 
 The next scan for this client will annotate this finding with the date and reason, and rank it below advice they have not already seen. It is not removed: the waste has not gone away.
 
